@@ -798,5 +798,4 @@ task.spawn(function()
     end
 end)
 
-Log("✅ AKAIL HUB CARREGADO COM SUCESSO!", "SUCCESS")
-ShowNotification("🔥 UPDATE 30", "Hub ativado! Tudo pronto para farmar!", 5, Color3.fromRGB(255, 100, 200))
+
