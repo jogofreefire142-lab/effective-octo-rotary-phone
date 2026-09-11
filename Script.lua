@@ -1,61 +1,35 @@
 repeat task.wait() until game:IsLoaded()
 
 -- =================================================================
--- ⭐ AKAIL HUB VIP PREMIUM — BLOX FRUITS (OTIMIZADO PARA DELTA)
+-- ⭐ AKAIL HUB - OTIMIZADO PARA DELTA
 -- =================================================================
-if getgenv().AkailHubUltimateLoaded then return end
-getgenv().AkailHubUltimateLoaded = true
+if getgenv().AkailHubLoaded then return end
+getgenv().AkailHubLoaded = true
 
 local Players = game:GetService("Players")
-local CoreGui = game:GetService("CoreGui")
-local TweenService = game:GetService("TweenService")
 local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 if not LocalPlayer then return end
 
+-- CONFIGURAÇÕES LEVES
 getgenv().Config = {
-    AutoFarm = false,
-    FastAttack = true,
-    FastAttackSpeed = 0.001,
-    BringMob = true,
-    AutoHaki = true,
-    AntiLag = true,
-    InfiniteStamina = true,
-    SpeedBoost = false,
-    SpeedMultiplier = 1.2,
-    ShowNotifications = true,
-    ShowStats = true
+    FastAttack = false,
+    InfiniteStamina = false
 }
 
--- Notificação leve
-local function ShowNotification(title, message)
-    if not getgenv().Config.ShowNotifications then return end
-    pcall(function()
-        game:GetService("StarterGui"):SetCore("SendNotification", {
-            Title = title,
-            Text = message,
-            Duration = 3
-        })
-    end)
+-- REMOVER UI ANTIGA SE HOUVER
+if PlayerGui:FindFirstChild("AkailHub_Delta") then
+    PlayerGui.AkailHub_Delta:Destroy()
 end
 
-task.wait(1) -- Pequeno atraso para estabilizar no Delta
-
 -- =================================================================
--- UI MOBILE OTIMIZADA
+-- INTERFACE (UI) DIRETA NA PLAYERGUI
 -- =================================================================
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "AkailHub_Delta"
 ScreenGui.ResetOnSpawn = false
-
-pcall(function()
-    if syn and syn.protect_gui then
-        syn.protect_gui(ScreenGui)
-        ScreenGui.Parent = CoreGui
-    else
-        ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-    end
-end)
+ScreenGui.Parent = PlayerGui
 
 -- BOTÃO FLUTUANTE (☰)
 local ToggleBtn = Instance.new("TextButton")
@@ -64,7 +38,7 @@ ToggleBtn.Position = UDim2.new(0.02, 0, 0.15, 0)
 ToggleBtn.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
 ToggleBtn.Text = "☰"
 ToggleBtn.TextColor3 = Color3.fromRGB(255, 100, 200)
-ToggleBtn.TextSize = FONT_SIZE_OR_VAL or 24
+ToggleBtn.TextSize = 24
 ToggleBtn.Parent = ScreenGui
 
 local btnCorner = Instance.new("UICorner")
@@ -78,8 +52,8 @@ btnStroke.Parent = ToggleBtn
 
 -- PAINEL PRINCIPAL
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 420, 0, 350)
-MainFrame.Position = UDim2.new(0.5, -210, 0.5, -175)
+MainFrame.Size = UDim2.new(0, 380, 0, 250)
+MainFrame.Position = UDim2.new(0.5, -190, 0.5, -125)
 MainFrame.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
 MainFrame.Visible = false
 MainFrame.Active = true
@@ -98,7 +72,7 @@ mainStroke.Parent = MainFrame
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, 0, 0, 40)
 Title.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
-Title.Text = " 🔥 AKAIL HUB - BLOX FRUITS"
+Title.Text = " 🔥 AKAIL HUB - LEVE"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.TextSize = 14
 Title.TextXAlignment = Enum.TextXAlignment.Left
@@ -113,13 +87,13 @@ ToggleBtn.MouseButton1Click:Connect(function()
     MainFrame.Visible = not MainFrame.Visible
 end)
 
--- FUNÇÃO DE CRIAR BOTÕES DE TOGGLE NO MENU
+-- FUNÇÃO PARA CRIAR BOTÕES
 local function AddToggle(name, callback, posY)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(0.9, 0, 0, 35)
     btn.Position = UDim2.new(0.05, 0, 0, posY)
     btn.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
-    btn.Text = "  " .. name .. ": [ OFF ]"
+    btn.Text = "  " + name + ": [ OFF ]"
     btn.TextColor3 = Color3.fromRGB(200, 200, 200)
     btn.TextSize = 12
     btn.TextXAlignment = Enum.TextXAlignment.Left
@@ -132,41 +106,35 @@ local function AddToggle(name, callback, posY)
     local state = false
     btn.MouseButton1Click:Connect(function()
         state = not state
-        btn.Text = "  " .. name .. (state and ": [ ON ✅ ]" : ": [ OFF ❌ ]")
-        btn.TextColor3 = state and Color3.fromRGB(255, 100, 200) or Color3.fromRGB(200, 200, 200)
+        if state then
+            btn.Text = "  " + name + ": [ ON ✅ ]"
+            btn.TextColor3 = Color3.fromRGB(255, 100, 200)
+        else
+            btn.Text = "  " + name + ": [ OFF ❌ ]"
+            btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+        end
         pcall(function() callback(state) end)
-        ShowNotification("Akail Hub", name .. (state and " Ativado" else " Desativado"))
     end)
 end
 
--- ADICIONANDO OPÇÕES BÁSICAS NO PAINEL
+-- ADICIONANDO RECURSOS
 AddToggle("Fast Attack", function(v) getgenv().Config.FastAttack = v end, 55)
-AddToggle("Infinite Stamina", function(v) getgenv().Config.InfiniteStamina = v end, 95)
-AddToggle("Anti-Lag", function(v) 
-    if v then
-        pcall(function()
-            game:GetService("Lighting").GlobalShadows = false
-            settings().Rendering.QualityLevel = 1
-        end)
-    end
-end, 135)
+AddToggle("Infinite Stamina", function(v) getgenv().Config.InfiniteStamina = v end, 100)
 
--- LOOP DE STAMINA
+-- LOOPS LEVES E SEGUROS
 task.spawn(function()
     while task.wait(0.2) do
         if getgenv().Config.InfiniteStamina and LocalPlayer.Character then
             pcall(function()
-                if LocalPlayer.Character:FindFirstChild("Stamina") then
-                    LocalPlayer.Character.Stamina.Value = 100
-                end
+                local stamina = LocalPlayer.Character:FindFirstChild("Stamina")
+                if stamina then stamina.Value = 100 end
             end)
         end
     end
 end)
 
--- FAST ATTACK LOOP
 task.spawn(function()
-    while task.wait(0.01) do
+    while task.wait(0.02) do
         if getgenv().Config.FastAttack then
             pcall(function()
                 game:GetService("VirtualInputManager"):SendMouseButtonEvent(0, 0, 0, true, game, 1)
@@ -176,4 +144,4 @@ task.spawn(function()
     end
 end)
 
-ShowNotification("Akail Hub", "Carregado com sucesso no Delta!")
+print("✅ Akail Hub Leve Carregado com Sucesso!")
