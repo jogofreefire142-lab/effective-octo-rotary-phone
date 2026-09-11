@@ -307,7 +307,7 @@ MainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
-MainFrame.Visible = falsed
+MainFrame.Visible = false
 
 Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
 local UIBorderMain = Instance.new("UIStroke", MainFrame)
