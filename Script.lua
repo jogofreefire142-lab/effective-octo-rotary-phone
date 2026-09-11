@@ -1,23 +1,29 @@
-local OrionLib = loadstring(game:HttpGet('https://raw.githubusercontent.com/jensonhirst/Orion/main/source'))()
+repeat task.wait() until game:IsLoaded()
 
-local Window = OrionLib:MakeWindow({
-    Name = "🔥 Akail Hub | Blox Fruits VIP (Update 30)", 
-    HidePremium = false, 
-    SaveConfig = true, 
-    ConfigFolder = "AkailHubConfig",
-    IntroText = "Carregando Akail Hub Ultimate...",
-    IntroEnabled = true
-})
+-- =================================================================
+-- ⭐ AKAIL HUB VIP PREMIUM — BLOX FRUITS UPDATE 30 (ORGANIZADO)
+-- =================================================================
+if getgenv().AkailHubUltimateLoaded then return end
+getgenv().AkailHubUltimateLoaded = true
 
--- ==================== SERVIÇOS & CONFIGURAÇÕES ====================
+-- =================================================================
+-- 1. SERVIÇOS & CONFIGURAÇÕES GLOBAIS
+-- =================================================================
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
+local VirtualUser = game:GetService("VirtualUser")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local TeleportService = game:GetService("TeleportService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CoreGui = game:GetService("CoreGui")
 local Lighting = game:GetService("Lighting")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
+
+if not LocalPlayer then
+    warn("⚠️ LocalPlayer não encontrado!")
+    return
+end
 
 getgenv().Config = {
     AutoFarm = false,
@@ -26,6 +32,8 @@ getgenv().Config = {
     FastAttackSpeed = 0.0004,
     BringMob = true,
     AutoHaki = true,
+    AutoRejoin = true,
+    AntiLag = true,
     AutoEliteHunter = false,
     AutoBossFarm = false,
     AutoSeaBeast = false,
@@ -39,247 +47,113 @@ getgenv().Config = {
     ESPBoss = false,
     ESPFruit = false,
     ESPChest = false,
+    AutoStatsMelee = false,
+    AutoStatsDefense = false,
+    AutoStatsFruit = false,
+    AutoStatsGun = false,
+    StatsPoints = 3,
     AutoMagnetFruit = false,
     AutoIslandSecrets = false,
+    AutoMagnetEvent = false,
+    AutoMagnetTokens = false,
+    AutoSeaOneRework = false,
+    AutoAwakenedBoss = false,
+    AutoTeleportFastTravel = false,
+    AutoLevelTo3000 = false,
+    AutoCelestialFruit = false,
+    AutoOniFruit = false,
+    AutoDarkRework = false,
+    AutoCrewFarm = false,
+    AutoFourthSea = false,
     InfiniteStamina = false,
     SpeedBoost = false,
     SpeedMultiplier = 1.5,
-    ShowNotifications = true
+    AutoDodge = false,
+    ShowNotifications = true,
+    ShowStats = true,
+    AutoLevel2026 = false
 }
 
-local function ShowNotification(title, message, duration)
-    if not getgenv().Config.ShowNotifications then return end
-    OrionLib:MakeNotification({
-        Title = title,
-        Content = message,
-        Image = "rbxassetid://4483362458",
-        Time = duration or 3
-    })
+local PlaceId = game.PlaceId
+local World1, World2, World3, World4 = false, false, false, false
+
+if PlaceId == 2753915549 or PlaceId == 85211729168715 then World1 = true
+elseif PlaceId == 4442272183 or PlaceId == 79091703265657 then World2 = true
+elseif PlaceId == 7449423635 or PlaceId == 100117331123089 then World3 = true
+elseif PlaceId == 12345678901 or PlaceId == 999999999999 then World4 = true
 end
 
--- ==================== ABAS ====================
-local TabFarm = Window:MakeTab({Name = "⚔️ Farm", Icon = "rbxassetid://4483362458"})
-local TabCombat = Window:MakeTab({Name = "🗡️ Combate", Icon = "rbxassetid://4483362458"})
-local TabSea = Window:MakeTab({Name = "🌊 Sea Events", Icon = "rbxassetid://4483362458"})
-local TabESP = Window:MakeTab({Name = "👁️ ESP", Icon = "rbxassetid://4483362458"})
-local TabFruits = Window:MakeTab({Name = "🍎 Frutas", Icon = "rbxassetid://4483362458"})
-local TabVIP = Window:MakeTab({Name = "⭐ VIP+", Icon = "rbxassetid://4483362458"})
-local TabUpdate30 = Window:MakeTab({Name = "🚀 Update 30", Icon = "rbxassetid://4483362458"})
+-- =================================================================
+-- 2. SISTEMA DE LOGS & NOTIFICAÇÕES
+-- =================================================================
+local function Log(msg, level)
+    level = level or "INFO"
+    local timestamp = os.date("%H:%M:%S")
+    print("[" .. timestamp .. "][" .. level .. "] " .. msg)
+end
 
--- ==================== ABA FARM ====================
-TabFarm:AddSection({Name = "Autofarm Principal"})
+Log("🔥 Iniciando AKAIL HUB UPDATE 30...", "LOAD")
 
-TabFarm:AddToggle({
-    Name = "Auto Farm Level",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.AutoFarm = Value
-        ShowNotification("Auto Farm", Value and "Ativado" or "Desativado")
-    end
-})
+local notificationStack = {}
 
-TabFarm:AddToggle({
-    Name = "Fast Attack (Ataque Rápido)",
-    Default = true,
-    Callback = function(Value)
-        getgenv().Config.FastAttack = Value
-    end
-})
-
-TabFarm:AddToggle({
-    Name = "Bring Mobs (Puxar Mobs)",
-    Default = true,
-    Callback = function(Value)
-        getgenv().Config.BringMob = Value
-    end
-})
-
-TabFarm:AddToggle({
-    Name = "Auto Haki",
-    Default = true,
-    Callback = function(Value)
-        getgenv().Config.AutoHaki = Value
-    end
-})
-
--- ==================== ABA COMBATE ====================
-TabCombat:AddSection({Name = "Chefes e Missões"})
-
-TabCombat:AddToggle({
-    Name = "Auto Elite Hunter",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.AutoEliteHunter = Value
-    end
-})
-
-TabCombat:AddToggle({
-    Name = "Auto Boss Farm",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.AutoBossFarm = Value
-    end
-})
-
-TabCombat:AddToggle({
-    Name = "Auto Raid",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.AutoRaid = Value
-    end
-})
-
--- ==================== ABA SEA EVENTS ====================
-TabSea:AddSection({Name = "Eventos do Mar"})
-
-TabSea:AddToggle({
-    Name = "Auto Sea Beast",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.AutoSeaBeast = Value
-    end
-})
-
-TabSea:AddToggle({
-    Name = "Auto Terror Shark",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.AutoTerrorShark = Value
-    end
-})
-
-TabSea:AddToggle({
-    Name = "Auto Bones",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.AutoBone = Value
-    end
-})
-
--- ==================== ABA ESP ====================
-TabESP:AddSection({Name = "Visualizadores (ESP)"})
-
-TabESP:AddToggle({
-    Name = "ESP Players",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.ESPPlayer = Value
-    end
-})
-
-TabESP:AddToggle({
-    Name = "ESP Bosses",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.ESPBoss = Value
-    end
-})
-
-TabESP:AddToggle({
-    Name = "ESP Fruits",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.ESPFruit = Value
-    end
-})
-
-TabESP:AddToggle({
-    Name = "ESP Chests",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.ESPChest = Value
-    end
-})
-
--- ==================== ABA FRUTAS ====================
-TabFruits:AddSection({Name = "Gerenciamento de Frutas"})
-
-TabFruits:AddToggle({
-    Name = "Auto Random Fruit",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.AutoRandomFruit = Value
-    end
-})
-
-TabFruits:AddToggle({
-    Name = "Auto Store Fruit",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.AutoStoreFruit = Value
-    end
-})
-
-TabFruits:AddToggle({
-    Name = "Collect Fruits (Chão)",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.AutoCollectFruits = Value
-    end
-})
-
--- ==================== ABA VIP+ ====================
-TabVIP:AddSection({Name = "Melhorias do Jogador"})
-
-TabVIP:AddToggle({
-    Name = "Infinite Stamina",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.InfiniteStamina = Value
-    end
-})
-
-TabVIP:AddToggle({
-    Name = "Speed Boost",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.SpeedBoost = Value
-    end
-})
-
-TabVIP:AddToggle({
-    Name = "Notificações na Tela",
-    Default = true,
-    Callback = function(Value)
-        getgenv().Config.ShowNotifications = Value
-    end
-})
-
-TabVIP:AddToggle({
-    Name = "Anti-Lag (FPS Booster)",
-    Default = true,
-    Callback = function(Value)
-        if Value then
-            pcall(function()
-                Lighting.GlobalShadows = false
-                Lighting.FogEnd = 9e9
-                settings().Rendering.QualityLevel = 1
-            end)
+local function ShowNotification(title, message, duration, color)
+    if not getgenv().Config.ShowNotifications then return end
+    
+    duration = duration or 3
+    color = color or Color3.fromRGB(0, 255, 128)
+    
+    local notif = Instance.new("Frame")
+    notif.Name = "Notification"
+    notif.Size = UDim2.new(0, 320, 0, 90)
+    notif.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+    notif.BorderSizePixel = 0
+    notif.Position = UDim2.new(0.82, 0, 0.05 + (#notificationStack * 0.11), 0)
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = notif
+    
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = color
+    stroke.Thickness = 2
+    stroke.Parent = notif
+    
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Text = "✓ " .. title
+    titleLabel.Size = UDim2.new(1, -10, 0, 30)
+    titleLabel.Position = UDim2.new(0, 5, 0, 5)
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.TextColor3 = color
+    titleLabel.TextSize = 12
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.Parent = notif
+    
+    local msgLabel = Instance.new("TextLabel")
+    msgLabel.Text = message
+    msgLabel.Size = UDim2.new(1, -10, 0, 50)
+    msgLabel.Position = UDim2.new(0, 5, 0, 35)
+    msgLabel.BackgroundTransparency = 1
+    msgLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    msgLabel.TextSize = 10
+    msgLabel.Font = Enum.Font.Gotham
+    msgLabel.TextWrapped = true
+    msgLabel.Parent = notif
+    
+    notif.Parent = CoreGui
+    table.insert(notificationStack, notif)
+    
+    task.delay(duration, function()
+        if notif and notif.Parent then
+            notif:Destroy()
         end
-    end
-})
+        local idx = table.find(notificationStack, notif)
+        if idx then table.remove(notificationStack, idx) end
+    end)
+end
 
--- ==================== ABA UPDATE 30 ====================
-TabUpdate30:AddSection({Name = "Novidades Exclusivas"})
-
-TabUpdate30:AddToggle({
-    Name = "🧲 Magnet Fruit",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.AutoMagnetFruit = Value
-    end
-})
-
-TabUpdate30:AddToggle({
-    Name = "🗝️ Island Secrets",
-    Default = false,
-    Callback = function(Value)
-        getgenv().Config.AutoIslandSecrets = Value
-    end
-})
-
--- ==================== LOGICA E MOTORES DO SCRIPT ====================
-
+-- =================================================================
+-- 3. FUNÇÕES UTILITÁRIAS & SEGURANÇA
+-- =================================================================
 local function IsAutoFarmActive()
     return getgenv().Config.AutoFarm 
         or getgenv().Config.AutoEliteHunter 
@@ -291,9 +165,329 @@ local function IsAutoFarmActive()
         or getgenv().Config.AutoCollectFruits
         or getgenv().Config.AutoMagnetFruit 
         or getgenv().Config.AutoIslandSecrets
+        or getgenv().Config.AutoAwakenedBoss
 end
 
--- Pivot para Movimentação
+-- Anti-AFK
+pcall(function()
+    LocalPlayer.Idled:Connect(function()
+        VirtualUser:Button2Down(Vector2.zero, workspace.CurrentCamera.CFrame)
+        task.wait(1)
+        VirtualUser:Button2Up(Vector2.zero, workspace.CurrentCamera.CFrame)
+    end)
+end)
+
+-- Auto Reconnect
+pcall(function()
+    if CoreGui:FindFirstChild("RobloxPromptGui") then
+        CoreGui.RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
+            if getgenv().Config.AutoRejoin and child.Name == "ErrorPrompt" then
+                TeleportService:Teleport(PlaceId, LocalPlayer)
+            end
+        end)
+    end
+end)
+
+-- Anti-Lag
+if getgenv().Config.AntiLag then
+    pcall(function()
+        Lighting.GlobalShadows = false
+        Lighting.FogEnd = 9e9
+        settings().Rendering.QualityLevel = 1
+        for _, v in ipairs(workspace:GetDescendants()) do
+            if v:IsA("BasePart") and not v:IsDescendantOf(LocalPlayer.Character or {}) then
+                v.Material = Enum.Material.SmoothPlastic
+                v.Reflectance = 0
+            elseif v:IsA("Decal") or v:IsA("Texture") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+        Log("✅ Anti-Lag ativado!", "OK")
+    end)
+end
+
+-- Noclip
+RunService.RenderStepped:Connect(function()
+    if IsAutoFarmActive() and LocalPlayer.Character then
+        pcall(function()
+            for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
+                if part:IsA("BasePart") then 
+                    part.CanCollide = false 
+                end
+            end
+        end)
+    end
+end)
+
+-- Infinite Stamina & Speed Boost
+task.spawn(function()
+    while task.wait(0.1) do
+        if getgenv().Config.InfiniteStamina and LocalPlayer.Character then
+            pcall(function()
+                local char = LocalPlayer.Character
+                if char:FindFirstChild("Stamina") then
+                    char.Stamina.Value = 100
+                end
+            end)
+        end
+    end
+end)
+
+task.spawn(function()
+    while task.wait(0.05) do
+        if getgenv().Config.SpeedBoost and LocalPlayer.Character then
+            pcall(function()
+                local humanoid = LocalPlayer.Character:FindFirstChild("Humanoid")
+                if humanoid then
+                    humanoid.WalkSpeed = 16 * getgenv().Config.SpeedMultiplier
+                end
+            end)
+        end
+    end
+end)
+
+-- =================================================================
+-- 4. INTERFACE GRÁFICA (UI PREMIUM)
+-- =================================================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AkailHubUltimate_UI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+pcall(function() ScreenGui.Parent = CoreGui end)
+if not ScreenGui.Parent then 
+    pcall(function() ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui", 5) end)
+end
+
+-- Painel de Estatísticas
+local StatsDisplay = Instance.new("Frame")
+StatsDisplay.Name = "StatsDisplay"
+StatsDisplay.Size = UDim2.new(0, 260, 0, 200)
+StatsDisplay.Position = UDim2.new(0.015, 0, 0.5, 0)
+StatsDisplay.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
+StatsDisplay.BorderSizePixel = 0
+StatsDisplay.Parent = ScreenGui
+
+local statsCorner = Instance.new("UICorner", StatsDisplay)
+statsCorner.CornerRadius = UDim.new(0, 8)
+local statsBorder = Instance.new("UIStroke", StatsDisplay)
+statsBorder.Color = Color3.fromRGB(255, 100, 200)
+statsBorder.Thickness = 2
+
+local statsLabel = Instance.new("TextLabel", StatsDisplay)
+statsLabel.Size = UDim2.new(1, 0, 1, 0)
+statsLabel.BackgroundTransparency = 1
+statsLabel.Text = "🎮 UPDATE 30\nLevel: ?\nHp: ?\nMagnet: OFF"
+statsLabel.TextColor3 = Color3.fromRGB(255, 100, 200)
+statsLabel.TextSize = 10
+statsLabel.Font = Enum.Font.GothamBold
+statsLabel.TextXAlignment = Enum.TextXAlignment.Left
+statsLabel.TextYAlignment = Enum.TextYAlignment.Top
+
+-- Botão de Alternar Menu (Toggle)
+local ToggleBtn = Instance.new("TextButton", ScreenGui)
+ToggleBtn.Size = UDim2.new(0, 52, 0, 52)
+ToggleBtn.Position = UDim2.new(0.015, 0, 0.15, 0)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
+ToggleBtn.Text = "☰"
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 100, 200)
+ToggleBtn.TextSize = 24
+ToggleBtn.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Heavy, Enum.FontStyle.Normal)
+
+Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 14)
+local UIBorderBtn = Instance.new("UIStroke", ToggleBtn)
+UIBorderBtn.Color = Color3.fromRGB(255, 100, 200)
+UIBorderBtn.Thickness = 2
+
+-- Janela Principal
+local MainFrame = Instance.new("Frame", ScreenGui)
+MainFrame.Size = UDim2.new(0, 550, 0, 600)
+MainFrame.Position = UDim2.new(0.5, -275, 0.5, -300)
+MainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Visible = falsed
+
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
+local UIBorderMain = Instance.new("UIStroke", MainFrame)
+UIBorderMain.Color = Color3.fromRGB(255, 100, 200)
+UIBorderMain.Thickness = 2
+
+-- Título
+local Title = Instance.new("TextLabel", MainFrame)
+Title.Size = UDim2.new(1, 0, 0, 40)
+Title.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+Title.Text = "   🔥 AKAIL HUB UPDATE 30"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 13
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+Instance.new("UICorner", Title).CornerRadius = UDim.new(0, 12)
+
+-- Barra de Abas (Tab Bar)
+local TabBar = Instance.new("Frame", MainFrame)
+TabBar.Size = UDim2.new(0, 120, 1, -48)
+TabBar.Position = UDim2.new(0, 8, 0, 42)
+TabBar.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+Instance.new("UICorner", TabBar).CornerRadius = UDim.new(0, 8)
+
+local TabList = Instance.new("UIListLayout", TabBar)
+TabList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+TabList.SortOrder = Enum.SortOrder.LayoutOrder
+TabList.Padding = UDim.new(0, 4)
+
+-- Frame de Conteúdo
+local ContentFrame = Instance.new("Frame", MainFrame)
+ContentFrame.Size = UDim2.new(1, -138, 1, -48)
+ContentFrame.Position = UDim2.new(0, 132, 0, 42)
+ContentFrame.BackgroundTransparency = 1
+
+local Pages = {}
+
+local function CreatePage(pageName)
+    local scroll = Instance.new("ScrollingFrame", ContentFrame)
+    scroll.Size = UDim2.new(1, 0, 1, 0)
+    scroll.BackgroundTransparency = 1
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 700)
+    scroll.ScrollBarThickness = 2
+    scroll.Visible = false
+    
+    local layout = Instance.new("UIListLayout", scroll)
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Padding = UDim.new(0, 4)
+    
+    Pages[pageName] = scroll
+    return scroll
+end
+
+local function CreateTabButton(tabName, pageTarget)
+    local tabBtn = Instance.new("TextButton", TabBar)
+    tabBtn.Size = UDim2.new(0.92, 0, 0, 28)
+    tabBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+    tabBtn.Text = tabName
+    tabBtn.TextColor3 = Color3.fromRGB(160, 160, 180)
+    tabBtn.TextSize = 7
+    tabBtn.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+    Instance.new("UICorner", tabBtn).CornerRadius = UDim.new(0, 6)
+
+    tabBtn.MouseButton1Click:Connect(function()
+        for _, p in pairs(Pages) do p.Visible = false end
+        for _, b in pairs(TabBar:GetChildren()) do
+            if b:IsA("TextButton") then
+                b.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+                b.TextColor3 = Color3.fromRGB(160, 160, 180)
+            end
+        end
+        pageTarget.Visible = true
+        tabBtn.BackgroundColor3 = Color3.fromRGB(255, 100, 200)
+        tabBtn.TextColor3 = Color3.fromRGB(10, 10, 14)
+    end)
+end
+
+local function AddToggleToPage(page, text, callback)
+    local btn = Instance.new("TextButton", page)
+    btn.Size = UDim2.new(0.96, 0, 0, 30)
+    btn.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    btn.Text = "  " .. text
+    btn.TextColor3 = Color3.fromRGB(225, 225, 235)
+    btn.TextSize = 8
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    btn.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+    local indicator = Instance.new("Frame", btn)
+    indicator.Size = UDim2.new(0, 10, 0, 10)
+    indicator.Position = UDim2.new(0.9, -8, 0.5, -5)
+    indicator.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
+    Instance.new("UICorner", indicator).CornerRadius = UDim.new(1, 0)
+
+    local state = false
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        indicator.BackgroundColor3 = state and Color3.fromRGB(255, 100, 200) or Color3.fromRGB(50, 50, 65)
+        if callback then callback(state) end
+        if getgenv().Config.ShowNotifications then
+            ShowNotification(text, state and "✓ Ativado" or "✗ Desativado", 2, Color3.fromRGB(255, 100, 200))
+        end
+    end)
+end
+
+-- Criando Páginas & Abas
+local PageFarm = CreatePage("Farm")
+local PageCombat = CreatePage("Combat")
+local PageSea = CreatePage("Sea")
+local PageESP = CreatePage("ESP")
+local PageFruits = CreatePage("Fruits")
+local PageStats = CreatePage("Stats")
+local PageVIP = CreatePage("VIP+")
+local PageUpdate30 = CreatePage("UPDATE 30")
+local Page2026 = CreatePage("2026")
+
+CreateTabButton("Farm", PageFarm)
+CreateTabButton("Combat", PageCombat)
+CreateTabButton("Sea", PageSea)
+CreateTabButton("ESP", PageESP)
+CreateTabButton("Fruits", PageFruits)
+CreateTabButton("Stats", PageStats)
+CreateTabButton("VIP+", PageVIP)
+CreateTabButton("UPD30", PageUpdate30)
+CreateTabButton("2026", Page2026)
+
+PageFarm.Visible = true
+
+-- Adicionando Toggles nas Páginas
+AddToggleToPage(PageFarm, "Auto Farm Level", function(v) getgenv().Config.AutoFarm = v end)
+AddToggleToPage(PageFarm, "Fast Attack", function(v) getgenv().Config.FastAttack = v end)
+AddToggleToPage(PageFarm, "Bring Mobs", function(v) getgenv().Config.BringMob = v end)
+AddToggleToPage(PageFarm, "Auto Haki", function(v) getgenv().Config.AutoHaki = v end)
+
+AddToggleToPage(PageCombat, "Elite Hunter", function(v) getgenv().Config.AutoEliteHunter = v end)
+AddToggleToPage(PageCombat, "Boss Farm", function(v) getgenv().Config.AutoBossFarm = v end)
+AddToggleToPage(PageCombat, "Auto Raid", function(v) getgenv().Config.AutoRaid = v end)
+
+AddToggleToPage(PageSea, "Sea Beast", function(v) getgenv().Config.AutoSeaBeast = v end)
+AddToggleToPage(PageSea, "Terror Shark", function(v) getgenv().Config.AutoTerrorShark = v end)
+AddToggleToPage(PageSea, "Auto Bones", function(v) getgenv().Config.AutoBone = v end)
+
+AddToggleToPage(PageESP, "ESP Players", function(v) getgenv().Config.ESPPlayer = v end)
+AddToggleToPage(PageESP, "ESP Bosses", function(v) getgenv().Config.ESPBoss = v end)
+AddToggleToPage(PageESP, "ESP Fruits", function(v) getgenv().Config.ESPFruit = v end)
+AddToggleToPage(PageESP, "ESP Chests", function(v) getgenv().Config.ESPChest = v end)
+
+AddToggleToPage(PageFruits, "Random Fruit", function(v) getgenv().Config.AutoRandomFruit = v end)
+AddToggleToPage(PageFruits, "Store Fruit", function(v) getgenv().Config.AutoStoreFruit = v end)
+AddToggleToPage(PageFruits, "Collect Fruits", function(v) getgenv().Config.AutoCollectFruits = v end)
+
+AddToggleToPage(PageStats, "Auto Melee", function(v) getgenv().Config.AutoStatsMelee = v end)
+AddToggleToPage(PageStats, "Auto Defense", function(v) getgenv().Config.AutoStatsDefense = v end)
+AddToggleToPage(PageStats, "Auto Fruit", function(v) getgenv().Config.AutoStatsFruit = v end)
+AddToggleToPage(PageStats, "Auto Gun", function(v) getgenv().Config.AutoStatsGun = v end)
+
+AddToggleToPage(PageVIP, "∞ Stamina", function(v) getgenv().Config.InfiniteStamina = v end)
+AddToggleToPage(PageVIP, "Speed Boost", function(v) getgenv().Config.SpeedBoost = v end)
+AddToggleToPage(PageVIP, "Notifications", function(v) getgenv().Config.ShowNotifications = v end)
+AddToggleToPage(PageVIP, "Show Stats", function(v) getgenv().Config.ShowStats = v end)
+
+AddToggleToPage(PageUpdate30, "🧲 Magnet Fruit", function(v) getgenv().Config.AutoMagnetFruit = v end)
+AddToggleToPage(PageUpdate30, "🗝️ Island Secrets", function(v) getgenv().Config.AutoIslandSecrets = v end)
+AddToggleToPage(PageUpdate30, "⚡ Magnet Event", function(v) getgenv().Config.AutoMagnetEvent = v end)
+AddToggleToPage(PageUpdate30, "🌊 Sea 1 Rework", function(v) getgenv().Config.AutoSeaOneRework = v end)
+AddToggleToPage(PageUpdate30, "📈 Level 3000", function(v) getgenv().Config.AutoLevelTo3000 = v end)
+
+AddToggleToPage(Page2026, "🌟 Celestial", function(v) getgenv().Config.AutoCelestialFruit = v end)
+AddToggleToPage(Page2026, "👹 Oni", function(v) getgenv().Config.AutoOniFruit = v end)
+AddToggleToPage(Page2026, "👥 Crew Farm", function(v) getgenv().Config.AutoCrewFarm = v end)
+
+ToggleBtn.MouseButton1Click:Connect(function() 
+    MainFrame.Visible = not MainFrame.Visible 
+    StatsDisplay.Visible = not StatsDisplay.Visible
+end)
+
+-- =================================================================
+-- 5. MOVIMENTAÇÃO & TWEEN (TELEPORT)
+-- =================================================================
 local PartPivot = Instance.new("Part")
 PartPivot.Size = Vector3.new(1, 1, 1)
 PartPivot.Name = "Akail_Pivot"
@@ -301,6 +495,7 @@ PartPivot.Anchored = true
 PartPivot.CanCollide = false
 PartPivot.Transparency = 1
 PartPivot.CFrame = CFrame.new(0, 100, 0)
+
 pcall(function() PartPivot.Parent = workspace end)
 
 task.spawn(function()
@@ -320,7 +515,32 @@ task.spawn(function()
     end
 end)
 
--- Fast Attack Engine
+local currentTween = nil
+
+local function ToTarget(TargetCFrame)
+    if not LocalPlayer or not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+    
+    pcall(function()
+        local root = LocalPlayer.Character.HumanoidRootPart
+        local dist = (TargetCFrame.Position - root.Position).Magnitude
+        local speed = dist > 2500 and 650 or 380
+        
+        if currentTween then 
+            currentTween:Cancel() 
+            currentTween = nil
+        end
+        
+        local duration = math.clamp(dist / speed, 0.05, 10)
+        local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear)
+        currentTween = TweenService:Create(PartPivot, tweenInfo, {CFrame = TargetCFrame})
+        
+        if currentTween then currentTween:Play() end
+    end)
+end
+
+-- =================================================================
+-- 6. SISTEMA DE COMBATE & FARM
+-- =================================================================
 task.spawn(function()
     while task.wait(getgenv().Config.FastAttackSpeed) do
         if IsAutoFarmActive() and getgenv().Config.FastAttack then
@@ -332,33 +552,96 @@ task.spawn(function()
     end
 end)
 
--- Infinite Stamina Engine
+-- =================================================================
+-- 7. SISTEMA DE ESP & ATUALIZAÇÃO DE STATS
+-- =================================================================
+local function CreateESP(obj, textName, color)
+    if not obj or not obj.Parent or obj:FindFirstChild("Akail_ESP") then return end
+    
+    pcall(function()
+        local billboard = Instance.new("BillboardGui", obj)
+        billboard.Name = "Akail_ESP"
+        billboard.Size = UDim2.new(0, 100, 0, 40)
+        billboard.AlwaysOnTop = true
+        billboard.StudsOffset = Vector3.new(0, 2.5, 0)
+        billboard.MaxDistance = 500
+        
+        local label = Instance.new("TextLabel", billboard)
+        label.Size = UDim2.new(1, 0, 1, 0)
+        label.BackgroundTransparency = 1
+        label.Text = textName
+        label.TextColor3 = color
+        label.TextSize = 11
+        label.Font = Enum.Font.GothamBold
+        label.TextStrokeTransparency = 0.2
+    end)
+end
+
 task.spawn(function()
-    while task.wait(0.1) do
-        if getgenv().Config.InfiniteStamina and LocalPlayer.Character then
+    while task.wait(1.5) do
+        pcall(function()
+            if getgenv().Config.ESPPlayer then
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                        CreateESP(p.Character.HumanoidRootPart, p.Name, Color3.fromRGB(255, 60, 60))
+                    end
+                end
+            end
+            
+            if getgenv().Config.ESPBoss and workspace:FindFirstChild("Enemies") then
+                for _, v in ipairs(workspace.Enemies:GetChildren()) do
+                    if v:FindFirstChild("Humanoid") and v:FindFirstChild("HumanoidRootPart") then
+                        if v.Humanoid.MaxHealth > 5000 then
+                            CreateESP(v.HumanoidRootPart, "👑 " .. v.Name, Color3.fromRGB(255, 215, 0))
+                        end
+                    end
+                end
+            end
+        end)
+    end
+end)
+
+-- Magnet Fruit Loop
+task.spawn(function()
+    while task.wait(2) do
+        if getgenv().Config.AutoMagnetFruit then
             pcall(function()
-                local char = LocalPlayer.Character
-                if char:FindFirstChild("Stamina") then
-                    char.Stamina.Value = 100
+                if workspace:FindFirstChild("Dropped") then
+                    for _, item in ipairs(workspace.Dropped:GetChildren()) do
+                        if item:IsA("Tool") and item.Name:lower():find("magnet") and item:FindFirstChild("Handle") then
+                            ToTarget(item.Handle.CFrame)
+                            ShowNotification("🧲 Magnet", "Coletando!", 1, Color3.fromRGB(255, 100, 200))
+                        end
+                    end
                 end
             end)
         end
     end
 end)
 
--- Speed Boost Engine
+-- Atualizar Painel de Stats
 task.spawn(function()
-    while task.wait(0.05) do
-        if getgenv().Config.SpeedBoost and LocalPlayer.Character then
+    while task.wait(1) do
+        if getgenv().Config.ShowStats then
             pcall(function()
-                local humanoid = LocalPlayer.Character:FindFirstChild("Humanoid")
-                if humanoid then
-                    humanoid.WalkSpeed = 16 * getgenv().Config.SpeedMultiplier
+                local level = "?"
+                local hp = "?"
+                local magnetStatus = getgenv().Config.AutoMagnetFruit and "ON ✅" or "OFF"
+                
+                if LocalPlayer and LocalPlayer:FindFirstChild("Data") and LocalPlayer.Data:FindFirstChild("Level") then
+                    level = tostring(LocalPlayer.Data.Level.Value)
                 end
+                
+                if LocalPlayer and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+                    local hum = LocalPlayer.Character.Humanoid
+                    hp = math.floor(hum.Health) .. "/" .. math.floor(hum.MaxHealth)
+                end
+                
+                statsLabel.Text = "🎮 UPDATE 30\nLevel: " .. level .. "\nHp: " .. hp .. "\nMagnet: " .. magnetStatus
             end)
         end
     end
 end)
 
-OrionLib:Init()
-ShowNotification("🔥 Akail Hub", "Carregado com sucesso na Orion Lib!", 4)
+Log("✅ AKAIL HUB CARREGADO COM SUCESSO!", "SUCCESS")
+ShowNotification("🔥 UPDATE 30", "Hub ativado! Tudo pronto para farmar!", 5, Color3.fromRGB(255, 100, 200))
