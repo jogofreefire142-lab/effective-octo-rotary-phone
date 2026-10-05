@@ -1,5 +1,5 @@
 --[[
-    Ride A Pet - LAB v18
+    Ride A Pet - LAB v20
     Alvo exclusivo: [⚡] Ride A Pet / Montar um Pet
     Base técnica: estrutura pública observada em scripts open-source do jogo.
 
@@ -42,13 +42,8 @@ local function Main()
             pcall(oldDestroy)
         end
     end
-    local ALLOWED_PLACE_ID = 124216119978534
-    if tonumber(game.PlaceId) ~= ALLOWED_PLACE_ID then
-        warn("[RideAPet v18] Bloqueado fora do Monter um Pet. PlaceId=" .. tostring(game.PlaceId))
-        return
-    end
 
-    local INSTANCE_KEY = "__RideAPet_COMPLETO_v18"
+    local INSTANCE_KEY = "__RideAPet_COMPLETO_v20"
     if type(Env[INSTANCE_KEY]) == "function" then
         pcall(Env[INSTANCE_KEY])
     end
@@ -66,12 +61,85 @@ local function Main()
     local UserInputService = GetService("UserInputService")
     local VirtualUser = GetService("VirtualUser")
     if not Players or not RunService or not TweenService or not ReplicatedStorage or not Workspace then
-        warn("[RideAPet v18] Servicos essenciais indisponiveis neste cliente.")
+        warn("[RideAPet v20] Servicos essenciais indisponiveis neste cliente.")
         return
     end
     local LocalPlayer = Players.LocalPlayer
     if not LocalPlayer then
-        warn("[RideAPet v18] LocalPlayer indisponível.")
+        warn("[RideAPet v20] LocalPlayer indisponível.")
+        return
+    end
+
+    local function GetGuiParent()
+        local ok, pg = pcall(function() return LocalPlayer:WaitForChild("PlayerGui", 15) end)
+        if ok and pg then return pg end
+        local gethuiFn = rawget(_G, "gethui")
+        if type(gethuiFn) == "function" then
+            local okH, hui = pcall(gethuiFn)
+            if okH and hui then return hui end
+        end
+        local CoreGui = GetService("CoreGui")
+        if CoreGui then
+            local okC, _ = pcall(function() return CoreGui.Name end)
+            if okC then return CoreGui end
+        end
+        return nil
+    end
+
+    local function CreateBootstrapUI()
+        local pg = GetGuiParent()
+        if not pg then return nil end
+        pcall(function()
+            local old = pg:FindFirstChild("RideAPet_BOOT_v20")
+            if old then old:Destroy() end
+        end)
+        local ok, gui = pcall(function()
+            local g = Instance.new("ScreenGui")
+            g.Name = "RideAPet_BOOT_v20"
+            g.ResetOnSpawn = false
+            g.IgnoreGuiInset = false
+            g.DisplayOrder = 2147483647
+            g.Parent = pg
+            local f = Instance.new("Frame")
+            f.Size = UDim2.fromOffset(360, 110)
+            f.Position = UDim2.new(0.5, -180, 0.5, -55)
+            f.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
+            f.BorderSizePixel = 0
+            f.Parent = g
+            Instance.new("UICorner", f).CornerRadius = UDim.new(0, 10)
+            local t = Instance.new("TextLabel")
+            t.Name = "Status"
+            t.Size = UDim2.new(1, -24, 1, -24)
+            t.Position = UDim2.fromOffset(12, 12)
+            t.BackgroundTransparency = 1
+            t.TextColor3 = Color3.new(1,1,1)
+            t.Font = Enum.Font.GothamBold
+            t.TextSize = 14
+            t.TextWrapped = true
+            t.Text = "Ride A Pet LAB v20\nInicializando..."
+            t.Parent = f
+            return g
+        end)
+        return ok and gui or nil
+    end
+
+    -- Interface de bootstrap criada ANTES de require/loaders/diagnósticos.
+    -- Se qualquer etapa posterior falhar, o usuário ainda verá o erro.
+    local BootGui = CreateBootstrapUI()
+    local function BootStatus(text)
+        if BootGui then
+            pcall(function()
+                local f = BootGui:FindFirstChildOfClass("Frame")
+                local label = f and f:FindFirstChild("Status")
+                if label then label.Text = tostring(text) end
+            end)
+        end
+    end
+    BootStatus("Ride A Pet LAB v20\nValidando ambiente...")
+    local ALLOWED_PLACE_ID = 124216119978534
+    if tonumber(game.PlaceId) ~= ALLOWED_PLACE_ID then
+        BootStatus("Ride A Pet LAB v20\nJogo incorreto.\nPlaceId atual: " .. tostring(game.PlaceId) .. "\nEsperado: " .. tostring(ALLOWED_PLACE_ID))
+        warn("[RideAPet v20] Bloqueado fora do Monter um Pet. PlaceId=" .. tostring(game.PlaceId))
         return
     end
 
@@ -186,7 +254,7 @@ local function Main()
     local function Error(context, err)
         State.errors += 1
         Status(context .. ": " .. tostring(err))
-        warn("[RideAPet v18] " .. context .. ": " .. tostring(err))
+        warn("[RideAPet v20] " .. context .. ": " .. tostring(err))
     end
 
     local function Notify(title, content, duration)
@@ -1813,17 +1881,6 @@ local function Main()
         return out
     end
 
-    local function GetGuiParent()
-        local ok, parent
-        if type(gethui) == "function" then
-            ok, parent = pcall(gethui)
-            if ok and parent then return parent end
-        end
-        ok, parent = pcall(function() return game:GetService("CoreGui") end)
-        if ok and parent then return parent end
-        return LocalPlayer:WaitForChild("PlayerGui")
-    end
-
     ------------------------------------------------------------------------
     -- Adapter: BobloUI
     ------------------------------------------------------------------------
@@ -1862,7 +1919,7 @@ local function Main()
         function backend:CreateWindow()
             local ui = lib:CreateWindow({
                 Id = "RideAPetLab",
-                Title = "Ride A Pet • LAB v18",
+                Title = "Ride A Pet • LAB v20",
                 Icon = "gamepad-2",
                 Theme = "Dark",
                 FooterText = "Ride A Pet • stable bootstrap",
@@ -2013,7 +2070,7 @@ local function Main()
         function backend:LoadConfiguration() end
         function backend:Destroy() pcall(function() if self.Root then self.Root:Destroy() end end) end
         function backend:CreateWindow()
-            local ui = lib:CreateWindow("Ride A Pet • LAB v18", {Keybind = "RightControl", Size = Vector2.new(560, 520)})
+            local ui = lib:CreateWindow("Ride A Pet • LAB v20", {Keybind = "RightControl", Size = Vector2.new(560, 520)})
             if not ui then return nil end
             self.Root = ui
             local window = {Root = ui}
@@ -2086,15 +2143,18 @@ local function Main()
     local function BuildNativeAdapter()
         local backend = {Kind = "Native"}
         local playerGui = GetGuiParent()
-        local old = playerGui:FindFirstChild("RideAPet_NATIVE_v18")
-        if old then pcall(function() old:Destroy() end) end
+        if not playerGui then return nil end
+        local okBuild, result = pcall(function()
+            local old = playerGui:FindFirstChild("RideAPet_NATIVE_v20")
+            if old then pcall(function() old:Destroy() end) end
 
-        local gui = Instance.new("ScreenGui")
-        gui.Name = "RideAPet_NATIVE_v18"
-        gui.ResetOnSpawn = false
-        gui.IgnoreGuiInset = true
-        gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-        gui.Parent = playerGui
+            local gui = Instance.new("ScreenGui")
+            gui.Name = "RideAPet_NATIVE_v20"
+            gui.ResetOnSpawn = false
+            gui.IgnoreGuiInset = true
+            gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+            gui.DisplayOrder = 2147483647
+            gui.Parent = playerGui
 
         local root = Instance.new("Frame")
         root.Size = UDim2.fromOffset(620, 440)
@@ -2107,7 +2167,7 @@ local function Main()
         local top = Instance.new("TextLabel")
         top.Size = UDim2.new(1, 0, 0, 42)
         top.BackgroundTransparency = 1
-        top.Text = "Ride A Pet • LAB v18  [NATIVE FALLBACK]"
+        top.Text = "Ride A Pet • LAB v20  [NATIVE FALLBACK]"
         top.TextColor3 = Color3.new(1,1,1)
         top.Font = Enum.Font.GothamBold
         top.TextSize = 16
@@ -2349,72 +2409,60 @@ local function Main()
             return window
         end
         return backend
+        end)
+        if not okBuild then
+            warn("[RideAPet v20] BuildNativeAdapter erro: " .. tostring(result))
+            return nil
+        end
+        return result
     end
 
     local function BuildUI()
-        local attempts = {
-            {"NativeStable", nil, nil},
-            {"BobloUI", "https://raw.githubusercontent.com/bobloscript/BobloUI/main/dist/BobloUI.min.lua", BuildBobloAdapter},
-            {"UUI", "https://raw.githubusercontent.com/Distendo/UUI/refs/heads/main/UUI.lua", BuildUUIAdapter},
-            {"Rayfield", "https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua", BuildRayfieldAdapter},
-        }
-        for _, item in ipairs(attempts) do
-            local name, url, builder = item[1], item[2], item[3]
-            if name == "NativeStable" then
-                local ok, adapter = pcall(BuildNativeAdapter)
-                if ok and adapter then
-                    UIBackend = name
-                    UIReady = true
-                    State.compatibility.UI = name
-                    return adapter
-                end
-            else
-                local lib, reason = LoadLibraryFrom(url)
-                if lib then
-                    local ok, adapter = pcall(builder, lib)
-                    if ok and adapter then
-                        UIBackend = name
-                        UIReady = true
-                        State.compatibility.UI = name
-                        return adapter
-                    end
-                    warn("[RideAPet v18] " .. name .. " adapter falhou: " .. tostring(reason or "unknown"))
-                else
-                    warn("[RideAPet v18] " .. name .. " nao carregou: " .. tostring(reason))
-                end
-            end
+        -- UI nativa é o backend principal. Bibliotecas externas foram removidas
+        -- para reduzir incompatibilidades entre Delta e outros executores.
+        local ok, adapter = pcall(BuildNativeAdapter)
+        if ok and adapter then
+            UIBackend = "NativeStable"
+            UIReady = true
+            State.compatibility.UI = UIBackend
+            return adapter
         end
-        UIBackend = "NativeFallback"
-        UIReady = true
+        UIBackend = "NativeFailed"
+        UIReady = false
         State.compatibility.UI = UIBackend
-        return BuildNativeAdapter()
+        warn("[RideAPet v20] UI nativa falhou: " .. tostring(adapter))
+        return nil
     end
 
+    BootStatus("Ride A Pet LAB v20\nCarregando estrutura do jogo...")
     WaitForGameStructure(12)
     InitializeFilterDefaults()
     ProbeCompatibility()
 
+    BootStatus("Ride A Pet LAB v20\nCriando interface...")
     Rayfield = BuildUI()
     if not Rayfield then
-        error("Nenhum backend de interface conseguiu inicializar")
+        BootStatus("Ride A Pet LAB v20\nERRO: não foi possível criar a interface.\nPlayerGui/API de UI indisponível.")
+        return
     end
 
     local okWindow, createdWindow = pcall(function()
         return Rayfield:CreateWindow({
-            Name = "Ride A Pet • LAB v18",
+            Name = "Ride A Pet • LAB v20",
             Icon = 0,
             LoadingTitle = "Ride A Pet",
-            LoadingSubtitle = "LAB v18 • bootstrap resiliente",
+            LoadingSubtitle = "LAB v20 • bootstrap resiliente",
             Theme = "Default",
             DisableRayfieldPrompts = true,
             DisableBuildWarnings = true,
-            ConfigurationSaving = {Enabled = true, FolderName = "RideAPetLab", FileName = "RideAPet_v18"},
+            ConfigurationSaving = {Enabled = true, FolderName = "RideAPetLab", FileName = "RideAPet_v20"},
             Discord = {Enabled = false},
             KeySystem = false,
         })
     end)
     if not okWindow or not createdWindow then
-        error("Falha criando a janela de interface via " .. tostring(UIBackend))
+        BootStatus("Ride A Pet LAB v20\nFalha criando a janela UI via " .. tostring(UIBackend))
+        return
     end
     Window = createdWindow
 
@@ -3129,7 +3177,7 @@ local function Main()
                     local timers = EggTimers()
                     local cash = Value("Cash", 0)
                     DashboardInfo:Set({
-                        Title = "Ride A Pet • LAB v18",
+                        Title = "Ride A Pet • LAB v20",
                         Content = string.format(
                             "UI: %s\nStatus: %s\nCash: %s\nOvos compatíveis: %d\nPets detectados: %d\nBasket: %d • Livres: %d • Plot: %d\n\nColetados: %d • Colocados: %d • Hatch: %d\nIndex: %d • Food: %d • Feed: %d • Sold: %d • Fav: %d\nErros: %d\nEstrutura: %s",
                             tostring(UIBackend),
@@ -3160,7 +3208,8 @@ local function Main()
     end)
 
     ProbeCompatibility()
-    Status("LAB v18 carregado via " .. tostring(UIBackend) .. " • núcleo baseado em funções publicamente verificadas.")
+    if BootGui then pcall(function() BootGui:Destroy() end) BootGui = nil end
+    Status("LAB v20 carregado via " .. tostring(UIBackend) .. " • núcleo baseado em funções publicamente verificadas.")
     SetAntiAFK(State.antiAFK)
     ApplyPlayerSettings()
     Notify("Ride A Pet", "Interface: " .. tostring(UIBackend) .. " • pronto.", 4)
@@ -3169,5 +3218,43 @@ end
 
 local ok, err = xpcall(Main, debug.traceback)
 if not ok then
-    warn("[RideAPet v18] Erro fatal:\n" .. tostring(err))
+    warn("[RideAPet v20] Erro fatal:\n" .. tostring(err))
+    -- Mostra o erro no PlayerGui mesmo que a janela principal tenha falhado.
+    pcall(function()
+        local Players = game:GetService("Players")
+        local lp = Players.LocalPlayer
+        local pg = lp and lp:FindFirstChild("PlayerGui")
+        if not pg then return end
+        local gui = pg:FindFirstChild("RideAPet_BOOT_v20")
+        if not gui then
+            gui = Instance.new("ScreenGui")
+            gui.Name = "RideAPet_BOOT_v20"
+            gui.ResetOnSpawn = false
+            gui.DisplayOrder = 2147483647
+            gui.Parent = pg
+            local f = Instance.new("Frame")
+            f.Size = UDim2.fromOffset(420, 150)
+            f.Position = UDim2.new(0.5, -210, 0.5, -75)
+            f.BackgroundColor3 = Color3.fromRGB(44, 22, 26)
+            f.BorderSizePixel = 0
+            f.Parent = gui
+            Instance.new("UICorner", f).CornerRadius = UDim.new(0, 10)
+            local t = Instance.new("TextLabel")
+            t.Size = UDim2.new(1, -20, 1, -20)
+            t.Position = UDim2.fromOffset(10, 10)
+            t.BackgroundTransparency = 1
+            t.TextColor3 = Color3.new(1,1,1)
+            t.Font = Enum.Font.Code
+            t.TextSize = 12
+            t.TextWrapped = true
+            t.TextXAlignment = Enum.TextXAlignment.Left
+            t.TextYAlignment = Enum.TextYAlignment.Top
+            t.Text = "Ride A Pet LAB v20\n\nFalha na inicialização:\n" .. tostring(err)
+            t.Parent = f
+        else
+            local f = gui:FindFirstChildOfClass("Frame")
+            local t = f and f:FindFirstChildOfClass("TextLabel")
+            if t then t.Text = "Ride A Pet LAB v20\n\nFalha na inicialização:\n" .. tostring(err) end
+        end
+    end)
 end
