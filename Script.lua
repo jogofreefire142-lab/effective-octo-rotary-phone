@@ -1,20 +1,34 @@
 --[[
     RIDE A PET - LAB MULTI-FUNÇÕES
-    Revisão completa:
-    - Compatibilidade com executor / fallback para PlayerGui
-    - GUI duplicada é removida ao executar novamente
-    - Arraste melhor em PC e celular
-    - Busca segura de RemoteEvent/RemoteFunction
-    - Cache de remotes para reduzir FindFirstChild repetitivo
-    - Tratamento de respawn
-    - Conexões e loops encerrados corretamente
-    - Validação da velocidade
-    - Status visual para diagnóstico
-    - Botão para parar todas as automações
+    V3 - revisão completa
+
+    Mantidos os recursos principais:
+    • compatibilidade com ambientes que oferecem gethui/cloneref/syn.protect_gui
+    • fallback para PlayerGui
+    • modificador de física
+    • auto-clique
+    • auto-chocar
+    • auto-fusão
+    • escolha do ovo
+    • painel arrastável
+    • minimizar
+    • parada geral
+    • diagnóstico dos remotes
+
+    Melhorias:
+    • execução repetida não deixa GUIs antigas
+    • busca de remotes com cache e cooldown
+    • não atualiza o texto de status a cada frame
+    • validação de números
+    • tratamento de respawn
+    • limpeza de conexões
+    • arraste somente pela barra de título
+    • proteção contra referências destruídas
+    • suporte a RemoteEvent e RemoteFunction
 ]]
 
 -- =========================================================
--- PARTE 1: SERVIÇOS E COMPATIBILIDADE
+-- 1. SERVIÇOS
 -- =========================================================
 
 local function getService(nome)
@@ -22,7 +36,11 @@ local function getService(nome)
         return game:GetService(nome)
     end)
 
-    return ok and servico or nil
+    if ok then
+        return servico
+    end
+
+    return nil
 end
 
 local function getClonedService(nome)
@@ -33,7 +51,10 @@ local function getClonedService(nome)
     end
 
     if type(cloneref) == "function" then
-        local ok, clone = pcall(cloneref, servico)
+        local ok, clone = pcall(function()
+            return cloneref(servico)
+        end)
+
         if ok and clone then
             return clone
         end
@@ -49,7 +70,15 @@ local ReplicatedStorage = getClonedService("ReplicatedStorage")
 local UserInputService = getClonedService("UserInputService")
 
 if not Players then
-    error("[RideAPet] Players não foi encontrado.")
+    error("[RideAPet] Players não está disponível.")
+end
+
+if not RunService then
+    error("[RideAPet] RunService não está disponível.")
+end
+
+if not ReplicatedStorage then
+    error("[RideAPet] ReplicatedStorage não está disponível.")
 end
 
 local LocalPlayer = Players.LocalPlayer
@@ -58,138 +87,57 @@ if not LocalPlayer then
     error("[RideAPet] LocalPlayer não está disponível.")
 end
 
-if not RunService then
-    error("[RideAPet] RunService não foi encontrado.")
-end
-
-if not ReplicatedStorage then
-    error("[RideAPet] ReplicatedStorage não foi encontrado.")
-end
-
 -- =========================================================
--- PARTE 2: CONFIGURAÇÃO
+-- 2. CONFIGURAÇÃO
 -- =========================================================
 
 local CONFIG = {
     NomeInterface = "RideAPet_Final",
 
-    LarguraPainel = 240,
-    AlturaAberto = 430,
-    AlturaFechado = 38,
+    LarguraPainel = 260,
+    AlturaAberto = 475,
+    AlturaFechado = 42,
 
     VelocidadePadrao = 255,
     VelocidadeMinima = 1,
     VelocidadeMaxima = 1000,
 
-    IntervaloClique = 0.01,
-    IntervaloOvo = 0.30,
+    IntervaloClique = 0.05,
+    IntervaloOvo = 0.35,
     IntervaloFusao = 2.00,
+
+    IntervaloBuscaRemote = 1.00,
+    IntervaloMensagem = 0.20,
 
     OvoPadrao = "Common Egg",
 }
 
+local Executando = true
+
 local AutoCliqueAtivado = false
 local AutoChocarAtivado = false
 local AutoFusaoAtivado = false
-local Executando = true
 
 local ConexaoVelocidade = nil
 local Conexoes = {}
 
-local RemoteCache = {
+local Remotes = {
     Click = nil,
     Egg = nil,
     Craft = nil,
 }
 
--- =========================================================
--- PARTE 3: GUI / EXECUÇÃO NOVAMENTE
--- =========================================================
+local UltimaBusca = {
+    Click = 0,
+    Egg = 0,
+    Craft = 0,
+}
 
-local function obterGuiExistente()
-    local pais = {}
-
-    if type(gethui) == "function" then
-        local ok, gui = pcall(gethui)
-        if ok and gui then
-            table.insert(pais, gui)
-        end
-    end
-
-    if CoreGui then
-        table.insert(pais, CoreGui)
-    end
-
-    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if playerGui then
-        table.insert(pais, playerGui)
-    end
-
-    return pais
-end
-
-local function destruirGuiAnterior()
-    for _, pai in ipairs(obterGuiExistente()) do
-        pcall(function()
-            for _, objeto in ipairs(pai:GetChildren()) do
-                if objeto:IsA("ScreenGui") and string.sub(objeto.Name, 1, #CONFIG.NomeInterface) == CONFIG.NomeInterface then
-                    objeto:Destroy()
-                end
-            end
-        end)
-    end
-end
-
-destruirGuiAnterior()
-
-local InterfaceRideAPet = Instance.new("ScreenGui")
-InterfaceRideAPet.Name = CONFIG.NomeInterface .. "_" .. tostring(math.random(10000, 99999))
-InterfaceRideAPet.ResetOnSpawn = false
-InterfaceRideAPet.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
-local function definirParentGui()
-    if type(gethui) == "function" then
-        local ok, hui = pcall(gethui)
-        if ok and hui then
-            InterfaceRideAPet.Parent = hui
-            return true
-        end
-    end
-
-    if syn and type(syn.protect_gui) == "function" and CoreGui then
-        local ok = pcall(function()
-            syn.protect_gui(InterfaceRideAPet)
-            InterfaceRideAPet.Parent = CoreGui
-        end)
-
-        if ok and InterfaceRideAPet.Parent then
-            return true
-        end
-    end
-
-    if CoreGui then
-        local ok = pcall(function()
-            InterfaceRideAPet.Parent = CoreGui
-        end)
-
-        if ok and InterfaceRideAPet.Parent then
-            return true
-        end
-    end
-
-    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-        or LocalPlayer:WaitForChild("PlayerGui")
-
-    InterfaceRideAPet.Parent = playerGui
-    return InterfaceRideAPet.Parent ~= nil
-end
-
-if not definirParentGui() then
-    error("[RideAPet] Não foi possível criar a interface.")
-end
+local UltimoStatus = ""
+local UltimoStatusTempo = 0
 
 -- =========================================================
--- PARTE 4: FUNÇÕES AUXILIARES
+-- 3. CONTROLE DE CONEXÕES
 -- =========================================================
 
 local function adicionarConexao(conexao)
@@ -201,11 +149,21 @@ local function adicionarConexao(conexao)
 end
 
 local function desconectar(conexao)
-    if conexao then
-        pcall(function()
-            conexao:Disconnect()
-        end)
+    if not conexao then
+        return
     end
+
+    pcall(function()
+        conexao:Disconnect()
+    end)
+end
+
+local function desconectarTodas()
+    for _, conexao in ipairs(Conexoes) do
+        desconectar(conexao)
+    end
+
+    table.clear(Conexoes)
 end
 
 local function pararVelocidade()
@@ -213,20 +171,239 @@ local function pararVelocidade()
     ConexaoVelocidade = nil
 end
 
-local function PararTudo()
+local function pararTudo()
     AutoCliqueAtivado = false
     AutoChocarAtivado = false
     AutoFusaoAtivado = false
+
     pararVelocidade()
 end
 
-local function limitarNumero(valor, minimo, maximo)
-    valor = tonumber(valor) or minimo
+-- =========================================================
+-- 4. GUI ANTIGA
+-- =========================================================
+
+local function obterPaisGui()
+    local pais = {}
+
+    if type(gethui) == "function" then
+        local ok, hui = pcall(gethui)
+
+        if ok and hui then
+            table.insert(pais, hui)
+        end
+    end
+
+    if CoreGui then
+        table.insert(pais, CoreGui)
+    end
+
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+
+    if playerGui then
+        table.insert(pais, playerGui)
+    end
+
+    return pais
+end
+
+local function apagarGuiAnterior()
+    for _, pai in ipairs(obterPaisGui()) do
+        pcall(function()
+            for _, objeto in ipairs(pai:GetChildren()) do
+                if objeto:IsA("ScreenGui")
+                    and string.sub(objeto.Name, 1, #CONFIG.NomeInterface) == CONFIG.NomeInterface then
+
+                    objeto:Destroy()
+                end
+            end
+        end)
+    end
+end
+
+apagarGuiAnterior()
+
+-- =========================================================
+-- 5. CRIAÇÃO DA GUI
+-- =========================================================
+
+local InterfaceRideAPet = Instance.new("ScreenGui")
+
+InterfaceRideAPet.Name =
+    CONFIG.NomeInterface .. "_" .. tostring(math.random(10000, 99999))
+
+InterfaceRideAPet.ResetOnSpawn = false
+InterfaceRideAPet.IgnoreGuiInset = true
+InterfaceRideAPet.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+InterfaceRideAPet.DisplayOrder = 999999
+
+local function anexarGui()
+    if type(gethui) == "function" then
+        local ok, hui = pcall(gethui)
+
+        if ok and hui then
+            local sucesso = pcall(function()
+                InterfaceRideAPet.Parent = hui
+            end)
+
+            if sucesso and InterfaceRideAPet.Parent then
+                return true
+            end
+        end
+    end
+
+    if syn and type(syn.protect_gui) == "function" and CoreGui then
+        local sucesso = pcall(function()
+            syn.protect_gui(InterfaceRideAPet)
+            InterfaceRideAPet.Parent = CoreGui
+        end)
+
+        if sucesso and InterfaceRideAPet.Parent then
+            return true
+        end
+    end
+
+    if CoreGui then
+        local sucesso = pcall(function()
+            InterfaceRideAPet.Parent = CoreGui
+        end)
+
+        if sucesso and InterfaceRideAPet.Parent then
+            return true
+        end
+    end
+
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+
+    if not playerGui then
+        playerGui = LocalPlayer:WaitForChild("PlayerGui", 10)
+    end
+
+    if not playerGui then
+        return false
+    end
+
+    local sucesso = pcall(function()
+        InterfaceRideAPet.Parent = playerGui
+    end)
+
+    return sucesso and InterfaceRideAPet.Parent ~= nil
+end
+
+if not anexarGui() then
+    error("[RideAPet] Não foi possível anexar a interface.")
+end
+
+-- =========================================================
+-- 6. PAINEL E ÁREAS DA INTERFACE
+-- =========================================================
+
+local FramePainel = Instance.new("Frame")
+FramePainel.Name = "PainelPrincipal"
+FramePainel.Size = UDim2.new(0, CONFIG.LarguraPainel, 0, CONFIG.AlturaAberto)
+FramePainel.Position = UDim2.new(0.15, 0, 0.15, 0)
+FramePainel.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
+FramePainel.BorderSizePixel = 0
+FramePainel.Parent = InterfaceRideAPet
+
+local CantoPainel = Instance.new("UICorner")
+CantoPainel.CornerRadius = UDim.new(0, 10)
+CantoPainel.Parent = FramePainel
+
+local BarraTitulo = Instance.new("Frame")
+BarraTitulo.Name = "BarraTitulo"
+BarraTitulo.Size = UDim2.new(1, -10, 0, 38)
+BarraTitulo.Position = UDim2.new(0, 5, 0, 5)
+BarraTitulo.BackgroundTransparency = 1
+BarraTitulo.Active = true
+BarraTitulo.Parent = FramePainel
+
+local TituloLab = Instance.new("TextLabel")
+TituloLab.Size = UDim2.new(1, -70, 1, 0)
+TituloLab.Position = UDim2.new(0, 8, 0, 0)
+TituloLab.BackgroundTransparency = 1
+TituloLab.Text = "RIDE A PET - LAB"
+TituloLab.TextColor3 = Color3.fromRGB(255, 255, 255)
+TituloLab.Font = Enum.Font.SourceSansBold
+TituloLab.TextSize = 16
+TituloLab.TextXAlignment = Enum.TextXAlignment.Left
+TituloLab.Parent = BarraTitulo
+
+local BotaoFechar = Instance.new("TextButton")
+BotaoFechar.Size = UDim2.new(0, 42, 0, 30)
+BotaoFechar.Position = UDim2.new(1, -48, 0, 3)
+BotaoFechar.BackgroundColor3 = Color3.fromRGB(65, 35, 40)
+BotaoFechar.Text = "X"
+BotaoFechar.TextColor3 = Color3.fromRGB(255, 255, 255)
+BotaoFechar.Font = Enum.Font.SourceSansBold
+BotaoFechar.TextSize = 16
+BotaoFechar.Parent = BarraTitulo
+
+Instance.new("UICorner", BotaoFechar).CornerRadius = UDim.new(0, 6)
+
+-- =========================================================
+-- 7. FUNÇÕES DE TEXTO / STATUS
+-- =========================================================
+
+local StatusLab = Instance.new("TextLabel")
+StatusLab.Size = UDim2.new(1, -40, 0, 25)
+StatusLab.Position = UDim2.new(0, 20, 0, 338)
+StatusLab.BackgroundTransparency = 1
+StatusLab.Text = "Status: pronto"
+StatusLab.TextColor3 = Color3.fromRGB(180, 180, 190)
+StatusLab.Font = Enum.Font.SourceSans
+StatusLab.TextSize = 12
+StatusLab.TextXAlignment = Enum.TextXAlignment.Left
+StatusLab.TextTruncate = Enum.TextTruncate.AtEnd
+StatusLab.Parent = FramePainel
+
+local function status(texto, forcar)
+    local agora = os.clock()
+    texto = tostring(texto)
+
+    if not forcar then
+        if texto == UltimoStatus and (agora - UltimoStatusTempo) < CONFIG.IntervaloMensagem then
+            return
+        end
+
+        if (agora - UltimoStatusTempo) < CONFIG.IntervaloMensagem then
+            return
+        end
+    end
+
+    UltimoStatus = texto
+    UltimoStatusTempo = agora
+
+    pcall(function()
+        if StatusLab and StatusLab.Parent then
+            StatusLab.Text = "Status: " .. texto
+        end
+    end)
+end
+
+-- =========================================================
+-- 8. FUNÇÕES NUMÉRICAS
+-- =========================================================
+
+local function normalizarNumero(texto, minimo, maximo, padrao)
+    local valor = tonumber(texto)
+
+    if not valor then
+        valor = padrao
+    end
+
+    if valor ~= valor then
+        valor = padrao
+    end
+
     return math.clamp(valor, minimo, maximo)
 end
 
--- Procura primeiro no nível principal e depois dentro de Events.
-local function encontrarEmEvents(nome)
+-- =========================================================
+-- 9. BUSCA DOS REMOTES
+-- =========================================================
+
+local function encontrarDentroEvents(nome)
     local events = ReplicatedStorage:FindFirstChild("Events")
 
     if not events then
@@ -236,113 +413,119 @@ local function encontrarEmEvents(nome)
     return events:FindFirstChild(nome)
 end
 
-local function encontrarRemote(nomes)
-    for _, nome in ipairs(nomes) do
+local function encontrarRemote(listaNomes)
+    for _, nome in ipairs(listaNomes) do
         local direto = ReplicatedStorage:FindFirstChild(nome)
 
         if direto then
             return direto
         end
 
-        local dentroEvents = encontrarEmEvents(nome)
+        local emEvents = encontrarDentroEvents(nome)
 
-        if dentroEvents then
-            return dentroEvents
+        if emEvents then
+            return emEvents
         end
     end
 
     return nil
 end
 
-local function obterRemote(cacheKey, nomes)
-    local cacheAtual = RemoteCache[cacheKey]
+local function obterRemote(chave, nomes)
+    local atual = Remotes[chave]
 
-    if cacheAtual and cacheAtual.Parent then
-        return cacheAtual
+    if atual then
+        local existente = pcall(function()
+            return atual.Parent ~= nil
+        end)
+
+        if existente then
+            local okParent, parent = pcall(function()
+                return atual.Parent
+            end)
+
+            if okParent and parent then
+                return atual
+            end
+        end
+
+        Remotes[chave] = nil
     end
 
-    local encontrado = encontrarRemote(nomes)
-    RemoteCache[cacheKey] = encontrado
+    local agora = os.clock()
 
-    return encontrado
+    if (agora - (UltimaBusca[chave] or 0)) < CONFIG.IntervaloBuscaRemote then
+        return nil
+    end
+
+    UltimaBusca[chave] = agora
+
+    local encontrado = encontrarRemote(nomes)
+
+    if encontrado and (
+        encontrado:IsA("RemoteEvent")
+        or encontrado:IsA("RemoteFunction")
+    ) then
+        Remotes[chave] = encontrado
+        return encontrado
+    end
+
+    return nil
 end
 
-local function limparCacheRemote(cacheKey)
-    RemoteCache[cacheKey] = nil
+local function limparRemote(chave)
+    Remotes[chave] = nil
+    UltimaBusca[chave] = 0
 end
 
 local function executarRemote(remote, ...)
-    if not remote or not remote.Parent then
+    if not remote then
         return false, "Remote não encontrado."
     end
 
-    local args = table.pack(...)
+    local parentOk, parent = pcall(function()
+        return remote.Parent
+    end)
+
+    if not parentOk or not parent then
+        return false, "Remote foi removido."
+    end
+
+    local argumentos = table.pack(...)
 
     if remote:IsA("RemoteEvent") then
-        local ok, erro = pcall(function()
-            remote:FireServer(table.unpack(args, 1, args.n))
+        local ok, resultado = pcall(function()
+            return remote:FireServer(
+                table.unpack(argumentos, 1, argumentos.n)
+            )
         end)
 
-        return ok, ok and nil or tostring(erro)
+        if ok then
+            return true, resultado
+        end
+
+        return false, resultado
     end
 
     if remote:IsA("RemoteFunction") then
         local ok, resultado = pcall(function()
-            return remote:InvokeServer(table.unpack(args, 1, args.n))
+            return remote:InvokeServer(
+                table.unpack(argumentos, 1, argumentos.n)
+            )
         end)
 
-        return ok, resultado
+        if ok then
+            return true, resultado
+        end
+
+        return false, resultado
     end
 
-    return false, "Objeto encontrado não é RemoteEvent nem RemoteFunction."
+    return false, "O objeto não é RemoteEvent nem RemoteFunction."
 end
 
 -- =========================================================
--- PARTE 5: PAINEL
--- =========================================================
-
-local FramePainel = Instance.new("Frame")
-FramePainel.Name = "PainelPrincipal"
-FramePainel.Size = UDim2.new(0, CONFIG.LarguraPainel, 0, CONFIG.AlturaAberto)
-FramePainel.Position = UDim2.new(0.15, 0, 0.15, 0)
-FramePainel.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
-FramePainel.BorderSizePixel = 0
-FramePainel.Active = true
-FramePainel.Parent = InterfaceRideAPet
-
-local CantoPainel = Instance.new("UICorner")
-CantoPainel.CornerRadius = UDim.new(0, 10)
-CantoPainel.Parent = FramePainel
-
-local TituloLab = Instance.new("TextLabel")
-TituloLab.Size = UDim2.new(1, -16, 0, 35)
-TituloLab.Position = UDim2.new(0, 8, 0, 0)
-TituloLab.BackgroundTransparency = 1
-TituloLab.Text = "RIDE A PET - LAB MULTI-FUNÇÕES"
-TituloLab.TextColor3 = Color3.fromRGB(255, 255, 255)
-TituloLab.Font = Enum.Font.SourceSansBold
-TituloLab.TextSize = 13
-TituloLab.Parent = FramePainel
-
-local StatusLab = Instance.new("TextLabel")
-StatusLab.Size = UDim2.new(1, -40, 0, 22)
-StatusLab.Position = UDim2.new(0, 20, 0, 330)
-StatusLab.BackgroundTransparency = 1
-StatusLab.Text = "Status: pronto"
-StatusLab.TextColor3 = Color3.fromRGB(180, 180, 190)
-StatusLab.Font = Enum.Font.SourceSans
-StatusLab.TextSize = 12
-StatusLab.TextXAlignment = Enum.TextXAlignment.Left
-StatusLab.Parent = FramePainel
-
-local function status(texto)
-    if StatusLab and StatusLab.Parent then
-        StatusLab.Text = "Status: " .. tostring(texto)
-    end
-end
-
--- =========================================================
--- PARTE 6: ARRASTE PC / CELULAR
+-- 10. ARRASTE SOMENTE PELA BARRA DE TÍTULO
 -- =========================================================
 
 local Arrastando = false
@@ -350,7 +533,7 @@ local InicioArraste = nil
 local PosicaoInicial = nil
 local InputArraste = nil
 
-adicionarConexao(FramePainel.InputBegan:Connect(function(input)
+adicionarConexao(BarraTitulo.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
 
@@ -361,7 +544,7 @@ adicionarConexao(FramePainel.InputBegan:Connect(function(input)
     end
 end))
 
-adicionarConexao(FramePainel.InputEnded:Connect(function(input)
+adicionarConexao(BarraTitulo.InputEnded:Connect(function(input)
     if input == InputArraste then
         Arrastando = false
         InputArraste = nil
@@ -370,7 +553,11 @@ end))
 
 if UserInputService then
     adicionarConexao(UserInputService.InputChanged:Connect(function(input)
-        if not Arrastando or not InicioArraste or not PosicaoInicial then
+        if not Arrastando then
+            return
+        end
+
+        if not InicioArraste or not PosicaoInicial then
             return
         end
 
@@ -391,38 +578,71 @@ if UserInputService then
 end
 
 -- =========================================================
--- PARTE 7: VELOCIDADE
+-- 11. CRIAÇÃO DE BOTÕES
 -- =========================================================
 
-local InputConfigVelocidade = Instance.new("TextBox")
-InputConfigVelocidade.Size = UDim2.new(0, 200, 0, 35)
-InputConfigVelocidade.Position = UDim2.new(0, 20, 0, 45)
-InputConfigVelocidade.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
-InputConfigVelocidade.Text = tostring(CONFIG.VelocidadePadrao)
-InputConfigVelocidade.ClearTextOnFocus = false
-InputConfigVelocidade.TextColor3 = Color3.fromRGB(255, 255, 255)
-InputConfigVelocidade.Font = Enum.Font.SourceSans
-InputConfigVelocidade.TextSize = 14
-InputConfigVelocidade.PlaceholderText = "Velocidade"
-InputConfigVelocidade.Parent = FramePainel
-Instance.new("UICorner", InputConfigVelocidade).CornerRadius = UDim.new(0, 6)
+local function criarBotao(nome, texto, posicaoY)
+    local botao = Instance.new("TextButton")
 
-local BotaoAplicarVelocidade = Instance.new("TextButton")
-BotaoAplicarVelocidade.Size = UDim2.new(0, 200, 0, 35)
-BotaoAplicarVelocidade.Position = UDim2.new(0, 20, 0, 90)
-BotaoAplicarVelocidade.BackgroundColor3 = Color3.fromRGB(211, 84, 0)
-BotaoAplicarVelocidade.Text = "Aplicar Modificador Física"
-BotaoAplicarVelocidade.TextColor3 = Color3.fromRGB(255, 255, 255)
-BotaoAplicarVelocidade.Font = Enum.Font.SourceSansBold
-BotaoAplicarVelocidade.TextSize = 14
-BotaoAplicarVelocidade.Parent = FramePainel
-Instance.new("UICorner", BotaoAplicarVelocidade).CornerRadius = UDim.new(0, 6)
+    botao.Name = nome
+    botao.Size = UDim2.new(0, 220, 0, 35)
+    botao.Position = UDim2.new(0, 20, 0, posicaoY)
+    botao.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    botao.Text = texto
+    botao.TextColor3 = Color3.fromRGB(255, 255, 255)
+    botao.Font = Enum.Font.SourceSansBold
+    botao.TextSize = 14
+    botao.AutoButtonColor = true
+    botao.Parent = FramePainel
+
+    Instance.new("UICorner", botao).CornerRadius = UDim.new(0, 6)
+
+    return botao
+end
+
+local function criarCampo(nome, texto, posicaoY, placeholder)
+    local campo = Instance.new("TextBox")
+
+    campo.Name = nome
+    campo.Size = UDim2.new(0, 220, 0, 35)
+    campo.Position = UDim2.new(0, 20, 0, posicaoY)
+    campo.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+    campo.Text = texto
+    campo.ClearTextOnFocus = false
+    campo.TextColor3 = Color3.fromRGB(255, 255, 255)
+    campo.Font = Enum.Font.SourceSans
+    campo.TextSize = 14
+    campo.PlaceholderText = placeholder or ""
+    campo.Parent = FramePainel
+
+    Instance.new("UICorner", campo).CornerRadius = UDim.new(0, 6)
+
+    return campo
+end
+
+-- =========================================================
+-- 12. VELOCIDADE
+-- =========================================================
+
+local InputConfigVelocidade = criarCampo(
+    "InputVelocidade",
+    tostring(CONFIG.VelocidadePadrao),
+    48,
+    "Velocidade"
+)
+
+local BotaoAplicarVelocidade = criarBotao(
+    "BotaoVelocidade",
+    "Aplicar Modificador Física",
+    90
+)
 
 adicionarConexao(BotaoAplicarVelocidade.MouseButton1Click:Connect(function()
-    local valor = limitarNumero(
+    local valor = normalizarNumero(
         InputConfigVelocidade.Text,
         CONFIG.VelocidadeMinima,
-        CONFIG.VelocidadeMaxima
+        CONFIG.VelocidadeMaxima,
+        CONFIG.VelocidadePadrao
     )
 
     InputConfigVelocidade.Text = tostring(valor)
@@ -436,41 +656,39 @@ adicionarConexao(BotaoAplicarVelocidade.MouseButton1Click:Connect(function()
 
         pcall(function()
             local character = LocalPlayer.Character
-            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
-            if not character or not humanoid then
+            if not character then
                 return
             end
 
-            if humanoid.Health <= 0 then
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+            if not humanoid or humanoid.Health <= 0 then
                 return
             end
 
             local direcao = humanoid.MoveDirection
 
             if direcao.Magnitude > 0 then
-                character:TranslateBy(direcao * (valor / 135))
+                character:TranslateBy(
+                    direcao * (valor / 135)
+                )
             end
         end)
     end)
 
-    status("modificador de física ativo: " .. tostring(valor))
+    status("física ativa: " .. tostring(valor), true)
 end))
 
 -- =========================================================
--- PARTE 8: AUTO-CLIQUE
+-- 13. AUTO-CLIQUE
 -- =========================================================
 
-local BotaoAutoClique = Instance.new("TextButton")
-BotaoAutoClique.Size = UDim2.new(0, 200, 0, 35)
-BotaoAutoClique.Position = UDim2.new(0, 20, 0, 140)
-BotaoAutoClique.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-BotaoAutoClique.Text = "Auto-Clique: DESLIGADO"
-BotaoAutoClique.TextColor3 = Color3.fromRGB(255, 255, 255)
-BotaoAutoClique.Font = Enum.Font.SourceSansBold
-BotaoAutoClique.TextSize = 14
-BotaoAutoClique.Parent = FramePainel
-Instance.new("UICorner", BotaoAutoClique).CornerRadius = UDim.new(0, 6)
+local BotaoAutoClique = criarBotao(
+    "BotaoAutoClique",
+    "Auto-Clique: DESLIGADO",
+    135
+)
 
 local function atualizarBotaoClique()
     if AutoCliqueAtivado then
@@ -485,13 +703,13 @@ end
 adicionarConexao(BotaoAutoClique.MouseButton1Click:Connect(function()
     AutoCliqueAtivado = not AutoCliqueAtivado
 
-    if AutoCliqueAtivado then
-        status("auto-clique ativado")
-    else
-        status("auto-clique desativado")
-    end
-
     atualizarBotaoClique()
+
+    if AutoCliqueAtivado then
+        status("auto-clique ativado", true)
+    else
+        status("auto-clique desativado", true)
+    end
 end))
 
 task.spawn(function()
@@ -499,17 +717,19 @@ task.spawn(function()
         task.wait(CONFIG.IntervaloClique)
 
         if AutoCliqueAtivado then
-            local remote = obterRemote("Click", {"Click", "ClickEvent"})
+            local remote = obterRemote(
+                "Click",
+                {"Click", "ClickEvent"}
+            )
 
             if not remote then
-                status("Click/ClickEvent não encontrado")
-                limparCacheRemote("Click")
+                status("procurando Click/ClickEvent")
             else
                 local ok, erro = executarRemote(remote)
 
                 if not ok then
-                    limparCacheRemote("Click")
-                    status("falha no Click: " .. tostring(erro))
+                    limparRemote("Click")
+                    status("erro no Click: " .. tostring(erro))
                 end
             end
         end
@@ -517,32 +737,21 @@ task.spawn(function()
 end)
 
 -- =========================================================
--- PARTE 9: AUTO-CHOCAR
+-- 14. OVO
 -- =========================================================
 
-local InputNomeOvo = Instance.new("TextBox")
-InputNomeOvo.Size = UDim2.new(0, 200, 0, 35)
-InputNomeOvo.Position = UDim2.new(0, 20, 0, 185)
-InputNomeOvo.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
-InputNomeOvo.Text = CONFIG.OvoPadrao
-InputNomeOvo.ClearTextOnFocus = false
-InputNomeOvo.TextColor3 = Color3.fromRGB(255, 255, 255)
-InputNomeOvo.Font = Enum.Font.SourceSans
-InputNomeOvo.TextSize = 13
-InputNomeOvo.PlaceholderText = "Nome do ovo"
-InputNomeOvo.Parent = FramePainel
-Instance.new("UICorner", InputNomeOvo).CornerRadius = UDim.new(0, 6)
+local InputNomeOvo = criarCampo(
+    "InputNomeOvo",
+    CONFIG.OvoPadrao,
+    180,
+    "Nome do ovo"
+)
 
-local BotaoAutoChocar = Instance.new("TextButton")
-BotaoAutoChocar.Size = UDim2.new(0, 200, 0, 35)
-BotaoAutoChocar.Position = UDim2.new(0, 20, 0, 230)
-BotaoAutoChocar.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-BotaoAutoChocar.Text = "Auto-Chocar: DESLIGADO"
-BotaoAutoChocar.TextColor3 = Color3.fromRGB(255, 255, 255)
-BotaoAutoChocar.Font = Enum.Font.SourceSansBold
-BotaoAutoChocar.TextSize = 14
-BotaoAutoChocar.Parent = FramePainel
-Instance.new("UICorner", BotaoAutoChocar).CornerRadius = UDim.new(0, 6)
+local BotaoAutoChocar = criarBotao(
+    "BotaoAutoChocar",
+    "Auto-Chocar: DESLIGADO",
+    225
+)
 
 local function atualizarBotaoOvo()
     if AutoChocarAtivado then
@@ -557,13 +766,24 @@ end
 adicionarConexao(BotaoAutoChocar.MouseButton1Click:Connect(function()
     AutoChocarAtivado = not AutoChocarAtivado
 
-    if AutoChocarAtivado then
-        status("auto-chocar ativado")
-    else
-        status("auto-chocar desativado")
-    end
-
     atualizarBotaoOvo()
+
+    if AutoChocarAtivado then
+        status("auto-chocar ativado", true)
+    else
+        status("auto-chocar desativado", true)
+    end
+end))
+
+adicionarConexao(InputNomeOvo.FocusLost:Connect(function()
+    local texto = tostring(InputNomeOvo.Text or "")
+
+    if texto == "" then
+        InputNomeOvo.Text = CONFIG.OvoPadrao
+        status("ovo vazio; usando " .. CONFIG.OvoPadrao, true)
+    else
+        status("ovo definido: " .. texto, true)
+    end
 end))
 
 task.spawn(function()
@@ -574,20 +794,27 @@ task.spawn(function()
             local nomeOvo = tostring(InputNomeOvo.Text or "")
 
             if nomeOvo == "" then
-                status("informe o nome do ovo")
+                InputNomeOvo.Text = CONFIG.OvoPadrao
+                nomeOvo = CONFIG.OvoPadrao
+            end
+
+            local remote = obterRemote(
+                "Egg",
+                {"BuyEgg", "OpenEgg"}
+            )
+
+            if not remote then
+                status("procurando BuyEgg/OpenEgg")
             else
-                local remote = obterRemote("Egg", {"BuyEgg", "OpenEgg"})
+                local ok, erro = executarRemote(
+                    remote,
+                    nomeOvo,
+                    1
+                )
 
-                if not remote then
-                    status("BuyEgg/OpenEgg não encontrado")
-                    limparCacheRemote("Egg")
-                else
-                    local ok, erro = executarRemote(remote, nomeOvo, 1)
-
-                    if not ok then
-                        limparCacheRemote("Egg")
-                        status("falha no ovo: " .. tostring(erro))
-                    end
+                if not ok then
+                    limparRemote("Egg")
+                    status("erro no ovo: " .. tostring(erro))
                 end
             end
         end
@@ -595,19 +822,14 @@ task.spawn(function()
 end)
 
 -- =========================================================
--- PARTE 10: AUTO-FUSÃO
+-- 15. FUSÃO
 -- =========================================================
 
-local BotaoAutoFusao = Instance.new("TextButton")
-BotaoAutoFusao.Size = UDim2.new(0, 200, 0, 35)
-BotaoAutoFusao.Position = UDim2.new(0, 20, 0, 275)
-BotaoAutoFusao.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-BotaoAutoFusao.Text = "Auto-Fusão: DESLIGADO"
-BotaoAutoFusao.TextColor3 = Color3.fromRGB(255, 255, 255)
-BotaoAutoFusao.Font = Enum.Font.SourceSansBold
-BotaoAutoFusao.TextSize = 14
-BotaoAutoFusao.Parent = FramePainel
-Instance.new("UICorner", BotaoAutoFusao).CornerRadius = UDim.new(0, 6)
+local BotaoAutoFusao = criarBotao(
+    "BotaoAutoFusao",
+    "Auto-Fusão: DESLIGADO",
+    270
+)
 
 local function atualizarBotaoFusao()
     if AutoFusaoAtivado then
@@ -622,13 +844,13 @@ end
 adicionarConexao(BotaoAutoFusao.MouseButton1Click:Connect(function()
     AutoFusaoAtivado = not AutoFusaoAtivado
 
-    if AutoFusaoAtivado then
-        status("auto-fusão ativada")
-    else
-        status("auto-fusão desativada")
-    end
-
     atualizarBotaoFusao()
+
+    if AutoFusaoAtivado then
+        status("auto-fusão ativada", true)
+    else
+        status("auto-fusão desativada", true)
+    end
 end))
 
 task.spawn(function()
@@ -636,17 +858,19 @@ task.spawn(function()
         task.wait(CONFIG.IntervaloFusao)
 
         if AutoFusaoAtivado then
-            local remote = obterRemote("Craft", {"CraftAll", "MergePets"})
+            local remote = obterRemote(
+                "Craft",
+                {"CraftAll", "MergePets"}
+            )
 
             if not remote then
-                status("CraftAll/MergePets não encontrado")
-                limparCacheRemote("Craft")
+                status("procurando CraftAll/MergePets")
             else
                 local ok, erro = executarRemote(remote)
 
                 if not ok then
-                    limparCacheRemote("Craft")
-                    status("falha na fusão: " .. tostring(erro))
+                    limparRemote("Craft")
+                    status("erro na fusão: " .. tostring(erro))
                 end
             end
         end
@@ -654,45 +878,117 @@ task.spawn(function()
 end)
 
 -- =========================================================
--- PARTE 11: PARAR TUDO / MINIMIZAR
+-- 16. DIAGNÓSTICO
 -- =========================================================
 
-local BotaoPararTudo = Instance.new("TextButton")
-BotaoPararTudo.Size = UDim2.new(0, 200, 0, 35)
-BotaoPararTudo.Position = UDim2.new(0, 20, 0, 365)
+local BotaoDiagnostico = criarBotao(
+    "BotaoDiagnostico",
+    "Testar Remotes",
+    315
+)
+
+adicionarConexao(BotaoDiagnostico.MouseButton1Click:Connect(function()
+    limparRemote("Click")
+    limparRemote("Egg")
+    limparRemote("Craft")
+
+    local click = encontrarRemote({"Click", "ClickEvent"})
+    local egg = encontrarRemote({"BuyEgg", "OpenEgg"})
+    local craft = encontrarRemote({"CraftAll", "MergePets"})
+
+    local encontrados = 0
+
+    if click then
+        encontrados += 1
+    end
+
+    if egg then
+        encontrados += 1
+    end
+
+    if craft then
+        encontrados += 1
+    end
+
+    if encontrados == 0 then
+        status("nenhum remote conhecido foi encontrado", true)
+        return
+    end
+
+    local partes = {}
+
+    table.insert(
+        partes,
+        "Click=" .. (click and click.ClassName or "não")
+    )
+
+    table.insert(
+        partes,
+        "Egg=" .. (egg and egg.ClassName or "não")
+    )
+
+    table.insert(
+        partes,
+        "Craft=" .. (craft and craft.ClassName or "não")
+    )
+
+    status(table.concat(partes, " | "), true)
+end))
+
+-- =========================================================
+-- 17. PARAR TUDO
+-- =========================================================
+
+local BotaoPararTudo = criarBotao(
+    "BotaoPararTudo",
+    "PARAR TUDO",
+    360
+)
+
 BotaoPararTudo.BackgroundColor3 = Color3.fromRGB(160, 50, 50)
-BotaoPararTudo.Text = "PARAR TUDO"
-BotaoPararTudo.TextColor3 = Color3.fromRGB(255, 255, 255)
-BotaoPararTudo.Font = Enum.Font.SourceSansBold
-BotaoPararTudo.TextSize = 14
-BotaoPararTudo.Parent = FramePainel
-Instance.new("UICorner", BotaoPararTudo).CornerRadius = UDim.new(0, 6)
 
 adicionarConexao(BotaoPararTudo.MouseButton1Click:Connect(function()
-    PararTudo()
+    pararTudo()
 
     atualizarBotaoClique()
     atualizarBotaoOvo()
     atualizarBotaoFusao()
 
-    status("todas as funções foram paradas")
+    status("todas as funções paradas", true)
 end))
 
+-- =========================================================
+-- 18. MINIMIZAR
+-- =========================================================
+
 local BotaoMinimizar = Instance.new("TextButton")
-BotaoMinimizar.Size = UDim2.new(0, 200, 0, 28)
-BotaoMinimizar.Position = UDim2.new(0, 20, 0, 398)
+BotaoMinimizar.Size = UDim2.new(0, 220, 0, 30)
+BotaoMinimizar.Position = UDim2.new(0, 20, 0, 405)
 BotaoMinimizar.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-BotaoMinimizar.Text = "Recolher Painel"
-BotaoMinimizar.TextColor3 = Color3.fromRGB(180, 180, 190)
-BotaoMinimizar.Font = Enum.Font.SourceSans
+BotaoMinimizar.Text = "RECOLHER PAINEL"
+BotaoMinimizar.TextColor3 = Color3.fromRGB(220, 220, 225)
+BotaoMinimizar.Font = Enum.Font.SourceSansBold
 BotaoMinimizar.TextSize = 13
 BotaoMinimizar.Parent = FramePainel
-Instance.new("UICorner", BotaoMinimizar).CornerRadius = UDim.new(0, 5)
+
+Instance.new("UICorner", BotaoMinimizar).CornerRadius = UDim.new(0, 6)
 
 local Aberto = true
 
-local function definirVisibilidadeAberto(valor)
-    Aberto = valor
+local Controles = {
+    InputConfigVelocidade,
+    BotaoAplicarVelocidade,
+    BotaoAutoClique,
+    InputNomeOvo,
+    BotaoAutoChocar,
+    BotaoAutoFusao,
+    BotaoDiagnostico,
+    BotaoPararTudo,
+    StatusLab,
+}
+
+local function aplicarEstadoPainel(aberto)
+    Aberto = aberto
 
     if Aberto then
         FramePainel:TweenSize(
@@ -703,19 +999,19 @@ local function definirVisibilidadeAberto(valor)
             true
         )
 
-        InputConfigVelocidade.Visible = true
-        BotaoAplicarVelocidade.Visible = true
-        BotaoAutoClique.Visible = true
-        InputNomeOvo.Visible = true
-        BotaoAutoChocar.Visible = true
-        BotaoAutoFusao.Visible = true
-        StatusLab.Visible = true
-        BotaoPararTudo.Visible = true
+        for _, objeto in ipairs(Controles) do
+            objeto.Visible = true
+        end
 
-        BotaoMinimizar.Text = "Recolher Painel"
-        BotaoMinimizar.Position = UDim2.new(0, 20, 0, 398)
-        BotaoMinimizar.Size = UDim2.new(0, 200, 0, 28)
+        BotaoMinimizar.Visible = true
+        BotaoMinimizar.Text = "RECOLHER PAINEL"
+        BotaoMinimizar.Position = UDim2.new(0, 20, 0, 405)
+        BotaoMinimizar.Size = UDim2.new(0, 220, 0, 30)
     else
+        for _, objeto in ipairs(Controles) do
+            objeto.Visible = false
+        end
+
         FramePainel:TweenSize(
             UDim2.new(0, CONFIG.LarguraPainel, 0, CONFIG.AlturaFechado),
             Enum.EasingDirection.Out,
@@ -724,55 +1020,74 @@ local function definirVisibilidadeAberto(valor)
             true
         )
 
-        InputConfigVelocidade.Visible = false
-        BotaoAplicarVelocidade.Visible = false
-        BotaoAutoClique.Visible = false
-        InputNomeOvo.Visible = false
-        BotaoAutoChocar.Visible = false
-        BotaoAutoFusao.Visible = false
-        StatusLab.Visible = false
-        BotaoPararTudo.Visible = false
-
+        BotaoMinimizar.Visible = true
         BotaoMinimizar.Text = "MENU"
-        BotaoMinimizar.Position = UDim2.new(0, 175, 0, 5)
-        BotaoMinimizar.Size = UDim2.new(0, 60, 0, 25)
+        BotaoMinimizar.Position = UDim2.new(0, 192, 0, 7)
+        BotaoMinimizar.Size = UDim2.new(0, 55, 0, 27)
     end
 end
 
 adicionarConexao(BotaoMinimizar.MouseButton1Click:Connect(function()
-    definirVisibilidadeAberto(not Aberto)
+    aplicarEstadoPainel(not Aberto)
 end))
 
 -- =========================================================
--- PARTE 12: LIMPEZA AO DESTRUIR
+-- 19. FECHAR / LIMPEZA
 -- =========================================================
 
+local function fecharTudo()
+    if not Executando then
+        return
+    end
+
+    Executando = false
+
+    pararTudo()
+    desconectarTodas()
+
+    table.clear(Remotes)
+    table.clear(UltimaBusca)
+
+    pcall(function()
+        InterfaceRideAPet:Destroy()
+    end)
+end
+
+adicionarConexao(BotaoFechar.MouseButton1Click:Connect(function()
+    fecharTudo()
+end))
+
+-- Quando a GUI sair da árvore por outro motivo.
 adicionarConexao(InterfaceRideAPet.AncestryChanged:Connect(function(_, parent)
     if parent then
         return
     end
 
     Executando = false
-    PararTudo()
+    pararTudo()
 
     for _, conexao in ipairs(Conexoes) do
         desconectar(conexao)
     end
 
     table.clear(Conexoes)
-    RemoteCache.Click = nil
-    RemoteCache.Egg = nil
-    RemoteCache.Craft = nil
 end))
 
 -- =========================================================
--- PARTE 13: RESPAWN / DIAGNÓSTICO
+-- 20. RESPAWN
 -- =========================================================
 
 adicionarConexao(LocalPlayer.CharacterAdded:Connect(function()
     if Executando then
-        status("personagem renascido; funções prontas")
+        status("personagem renascido; funções continuam prontas", true)
     end
 end))
 
-status("pronto")
+-- =========================================================
+-- 21. ESTADO INICIAL
+-- =========================================================
+
+atualizarBotaoClique()
+atualizarBotaoOvo()
+atualizarBotaoFusao()
+status("pronto", true)
