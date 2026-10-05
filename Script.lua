@@ -1,5 +1,5 @@
 --[[
-    Ride A Pet - LAB v20
+    Ride A Pet - LAB v22
     Alvo exclusivo: [⚡] Ride A Pet / Montar um Pet
     Base técnica: estrutura pública observada em scripts open-source do jogo.
 
@@ -28,6 +28,30 @@
     aberta usada como base desta versão.
 ]]
 
+-- Compatibilidade simples para executores: usa apenas APIs opcionais quando existirem.
+local function _safeGlobal(name)
+    local ok, value = pcall(function() return _G[name] end)
+    if ok then return value end
+end
+
+local _getgenv = _safeGlobal("getgenv")
+local _identifyExecutor = _safeGlobal("identifyexecutor") or _safeGlobal("getexecutorname")
+local ExecutorName = "Roblox/Unknown"
+if type(_identifyExecutor) == "function" then
+    local ok, name = pcall(_identifyExecutor)
+    if ok and name then ExecutorName = tostring(name) end
+end
+
+local _traceback = function(err)
+    local dbg = _safeGlobal("debug")
+    local tb = type(dbg) == "table" and dbg.traceback
+    if type(tb) == "function" then
+        local ok, result = pcall(tb, tostring(err))
+        if ok and result then return result end
+    end
+    return tostring(err)
+end
+
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
@@ -35,15 +59,21 @@ end
 local function Main()
     -- Compatibilidade e limpeza de instancias antigas. Isto melhora estabilidade;
     -- nao tenta esconder o script nem contornar sistemas anti-cheat.
-    local Env = (type(getgenv) == "function" and getgenv()) or _G
-    for _, oldKey in ipairs({"__RideAPet_COMPLETO_v13", "__RideAPet_COMPLETO_v14", "__RideAPet_COMPLETO_v15", "__RideAPet_COMPLETO_v16"}) do
+    local Env = _G
+do
+    if type(_getgenv) == "function" then
+        local okEnv, envValue = pcall(_getgenv)
+        if okEnv and type(envValue) == "table" then Env = envValue end
+    end
+end
+    for _, oldKey in ipairs({"__RideAPet_COMPLETO_v13", "__RideAPet_COMPLETO_v14", "__RideAPet_COMPLETO_v15", "__RideAPet_COMPLETO_v16", "__RideAPet_COMPLETO_v17", "__RideAPet_COMPLETO_v18", "__RideAPet_COMPLETO_v19", "__RideAPet_COMPLETO_v20", "__RideAPet_COMPLETO_v21"}) do
         local oldDestroy = Env[oldKey]
         if type(oldDestroy) == "function" then
             pcall(oldDestroy)
         end
     end
 
-    local INSTANCE_KEY = "__RideAPet_COMPLETO_v20"
+    local INSTANCE_KEY = "__RideAPet_COMPLETO_v22"
     if type(Env[INSTANCE_KEY]) == "function" then
         pcall(Env[INSTANCE_KEY])
     end
@@ -61,17 +91,17 @@ local function Main()
     local UserInputService = GetService("UserInputService")
     local VirtualUser = GetService("VirtualUser")
     if not Players or not RunService or not TweenService or not ReplicatedStorage or not Workspace then
-        warn("[RideAPet v20] Servicos essenciais indisponiveis neste cliente.")
+        warn("[RideAPet v22] Servicos essenciais indisponiveis neste cliente.")
         return
     end
     local LocalPlayer = Players.LocalPlayer
     if not LocalPlayer then
-        warn("[RideAPet v20] LocalPlayer indisponível.")
+        warn("[RideAPet v22] LocalPlayer indisponível.")
         return
     end
 
     local function GetGuiParent()
-        local ok, pg = pcall(function() return LocalPlayer:WaitForChild("PlayerGui", 15) end)
+        local ok, pg = pcall(function() return LocalPlayer:FindFirstChild("PlayerGui") end)
         if ok and pg then return pg end
         local gethuiFn = rawget(_G, "gethui")
         if type(gethuiFn) == "function" then
@@ -90,12 +120,12 @@ local function Main()
         local pg = GetGuiParent()
         if not pg then return nil end
         pcall(function()
-            local old = pg:FindFirstChild("RideAPet_BOOT_v20")
+            local old = pg:FindFirstChild("RideAPet_BOOT_v22")
             if old then old:Destroy() end
         end)
         local ok, gui = pcall(function()
             local g = Instance.new("ScreenGui")
-            g.Name = "RideAPet_BOOT_v20"
+            g.Name = "RideAPet_BOOT_v22"
             g.ResetOnSpawn = false
             g.IgnoreGuiInset = false
             g.DisplayOrder = 2147483647
@@ -116,7 +146,7 @@ local function Main()
             t.Font = Enum.Font.GothamBold
             t.TextSize = 14
             t.TextWrapped = true
-            t.Text = "Ride A Pet LAB v20\nInicializando..."
+            t.Text = "Ride A Pet LAB v22\nInicializando..."
             t.Parent = f
             return g
         end)
@@ -135,11 +165,11 @@ local function Main()
             end)
         end
     end
-    BootStatus("Ride A Pet LAB v20\nValidando ambiente...")
+    BootStatus("Ride A Pet LAB v22\nExecutor: " .. ExecutorName .. "\nValidando ambiente...")
     local ALLOWED_PLACE_ID = 124216119978534
     if tonumber(game.PlaceId) ~= ALLOWED_PLACE_ID then
-        BootStatus("Ride A Pet LAB v20\nJogo incorreto.\nPlaceId atual: " .. tostring(game.PlaceId) .. "\nEsperado: " .. tostring(ALLOWED_PLACE_ID))
-        warn("[RideAPet v20] Bloqueado fora do Monter um Pet. PlaceId=" .. tostring(game.PlaceId))
+        BootStatus("Ride A Pet LAB v22\nJogo incorreto.\nPlaceId atual: " .. tostring(game.PlaceId) .. "\nEsperado: " .. tostring(ALLOWED_PLACE_ID))
+        warn("[RideAPet v22] Bloqueado fora do Monter um Pet. PlaceId=" .. tostring(game.PlaceId))
         return
     end
 
@@ -196,7 +226,6 @@ local function Main()
         autoFarm = false,
         autoRideBest = false,
         rideBestMetric = "Speed",
-        autoServerHop = false,
         serverHopInterval = 300,
         antiAFK = true,
         eggESP = false,
@@ -254,7 +283,7 @@ local function Main()
     local function Error(context, err)
         State.errors += 1
         Status(context .. ": " .. tostring(err))
-        warn("[RideAPet v20] " .. context .. ": " .. tostring(err))
+        warn("[RideAPet v22] " .. context .. ": " .. tostring(err))
     end
 
     local function Notify(title, content, duration)
@@ -1799,7 +1828,7 @@ local function Main()
     end
 
     ------------------------------------------------------------------------
-    -- UI BOOTSTRAP v18
+    -- UI BOOTSTRAP v22
     -- Primaria: BobloUI; fallback: UUI; fallback: Rayfield; ultimo recurso:
     -- UI nativa. O objetivo aqui e evitar o "executou e nao apareceu nada".
     ------------------------------------------------------------------------
@@ -1807,349 +1836,26 @@ local function Main()
     local UIBackend = ""
     local UIReady = false
 
-    local function FetchText(url)
-        local methods = {}
-        if type(game.HttpGetAsync) == "function" then
-            table.insert(methods, function() return game:HttpGetAsync(url) end)
-        end
-        if type(game.HttpGet) == "function" then
-            table.insert(methods, function() return game:HttpGet(url) end)
-        end
-        local req = request or http_request
-        if type(req) == "function" then
-            table.insert(methods, function()
-                local r = req({Url = url, Method = "GET"})
-                if type(r) == "table" then
-                    return r.Body or r.body or r.ResponseBody
-                end
-                return r
-            end)
-        end
-        for _, fn in ipairs(methods) do
-            local ok, body = pcall(fn)
-            if ok and type(body) == "string" and #body > 500 then
-                return body
-            end
-        end
-        return nil
-    end
+    -- UI principal: somente Roblox/PlayerGui. Bibliotecas externas nao sao necessarias.
+    -- Isso reduz pontos de falha e o tamanho do bootstrap para executores moveis.
 
-    local function CompileText(source)
-        local compiler = loadstring or load
-        if type(compiler) ~= "function" or type(source) ~= "string" then
-            return nil
-        end
-        local ok, chunk = pcall(function() return compiler(source) end)
-        if ok and type(chunk) == "function" then
-            return chunk
-        end
-        return nil
-    end
-
-    local function LoadLibraryFrom(url)
-        local source = FetchText(url)
-        if not source then return nil, "download-failed" end
-        local chunk = CompileText(source)
-        if not chunk then return nil, "compile-failed" end
-        local ok, lib = pcall(chunk)
-        if not ok or not lib then return nil, "runtime-failed" end
-        return lib
-    end
-
-    local function SafeNotifyFallback(title, content, duration)
-        pcall(function()
-            local StarterGui = game:GetService("StarterGui")
-            StarterGui:SetCore("SendNotification", {
-                Title = tostring(title or "Ride A Pet"),
-                Text = tostring(content or ""),
-                Duration = tonumber(duration) or 4,
-            })
-        end)
-    end
-
-    local function MultiNormalize(values)
-        if type(values) ~= "table" then
-            return {values}
-        end
-        local isArray = (#values > 0)
-        if isArray then return values end
-        local out = {}
-        for key, value in pairs(values) do
-            if value then table.insert(out, key) end
-        end
-        table.sort(out)
-        return out
-    end
-
-    ------------------------------------------------------------------------
-    -- Adapter: BobloUI
-    ------------------------------------------------------------------------
-    local function BuildBobloAdapter(lib)
-        local backend = {Kind = "BobloUI", Root = nil}
-
-        function backend:Notify(title, content, duration)
-            local ui = self.Root
-            local ok = false
-            if ui and type(ui.Notify) == "function" then
-                ok = pcall(function()
-                    ui:Notify({
-                        Title = tostring(title or "Ride A Pet"),
-                        Content = tostring(content or ""),
-                        Duration = tonumber(duration) or 4,
-                        Type = "info",
-                    })
-                end)
-            end
-            if not ok then SafeNotifyFallback(title, content, duration) end
-        end
-
-        function backend:SaveConfiguration()
-            local ui = self.Root
-            pcall(function() if ui and ui.Config and ui.Config.Save then ui.Config:Save("Default") end end)
-        end
-        function backend:LoadConfiguration()
-            local ui = self.Root
-            pcall(function() if ui and ui.Config and ui.Config.Load then ui.Config:Load("Default") end end)
-        end
-        function backend:Destroy()
-            local ui = self.Root
-            pcall(function() if ui then ui:Destroy() end end)
-        end
-
-        function backend:CreateWindow()
-            local ui = lib:CreateWindow({
-                Id = "RideAPetLab",
-                Title = "Ride A Pet • LAB v20",
-                Icon = "gamepad-2",
-                Theme = "Dark",
-                FooterText = "Ride A Pet • stable bootstrap",
-                ConfigFolder = "RideAPetLab",
-                AutoLoad = true,
-                Singleton = true,
-            })
-            if not ui then return nil end
-            self.Root = ui
-            local window = {Root = ui}
-            function window:Destroy() backend:Destroy() end
-            function window:CreateTab(name, icon)
-                local page
-                local ok = pcall(function()
-                    page = ui:AddTab({Id = tostring(name), Title = tostring(name), Icon = "layout-dashboard"})
-                end)
-                if not ok or not page then return nil end
-                local tab = {Root = page, ParentWindow = window, _counter = 0}
-                local function nextId(prefix)
-                    tab._counter += 1
-                    return tostring(name) .. "_" .. prefix .. "_" .. tostring(tab._counter)
-                end
-                function tab:CreateSection(title)
-                    pcall(function()
-                        if page.AddSection then
-                            page:AddSection({Title = tostring(title), Layout = "Stack"})
-                        end
-                    end)
-                end
-                function tab:CreateParagraph(cfg)
-                    cfg = cfg or {}
-                    local obj
-                    local ok = pcall(function()
-                        obj = page:AddParagraph({
-                            Id = nextId("Paragraph"),
-                            Title = tostring(cfg.Title or ""),
-                            Content = tostring(cfg.Content or ""),
-                        })
-                    end)
-                    if not ok then obj = nil end
-                    local h = {Inner = obj}
-                    function h:Set(data)
-                        data = data or {}
-                        if self.Inner then
-                            local updated = false
-                            if type(self.Inner.Set) == "function" then
-                                local ok = pcall(function()
-                                    self.Inner:Set(tostring(data.Title or ""), tostring(data.Content or ""))
-                                end)
-                                updated = ok
-                            end
-                            if not updated then
-                                pcall(function()
-                                    if data.Title and type(self.Inner.SetTitle) == "function" then self.Inner:SetTitle(tostring(data.Title)) end
-                                    if data.Content and type(self.Inner.SetDescription) == "function" then self.Inner:SetDescription(tostring(data.Content)) end
-                                end)
-                            end
-                        end
-                    end
-                    return h
-                end
-                function tab:CreateLabel(text)
-                    return self:CreateParagraph({Content = tostring(text or "")})
-                end
-                function tab:CreateButton(cfg)
-                    return page:AddButton({
-                        Id = nextId("Button"),
-                        Title = tostring(cfg.Name or "Button"),
-                        Text = "Run",
-                        Callback = cfg.Callback,
-                    })
-                end
-                function tab:CreateToggle(cfg)
-                    return page:AddToggle({
-                        Id = tostring(cfg.Flag or nextId("Toggle")),
-                        Title = tostring(cfg.Name or "Toggle"),
-                        Default = cfg.CurrentValue == true,
-                        Callback = cfg.Callback,
-                    })
-                end
-                function tab:CreateSlider(cfg)
-                    local range = cfg.Range or {0, 100}
-                    return page:AddSlider({
-                        Id = tostring(cfg.Flag or nextId("Slider")),
-                        Title = tostring(cfg.Name or "Slider"),
-                        Min = range[1],
-                        Max = range[2],
-                        Default = cfg.CurrentValue or range[1],
-                        Step = cfg.Increment or 1,
-                        Callback = cfg.Callback,
-                    })
-                end
-                function tab:CreateDropdown(cfg)
-                    local multiple = cfg.MultipleOptions == true
-                    local options = cfg.Options or {}
-                    local default = cfg.CurrentOption
-                    if multiple then
-                        local selected = {}
-                        for _, v in ipairs(MultiNormalize(default or options)) do selected[v] = true end
-                        return page:AddDropdown({
-                            Id = tostring(cfg.Flag or nextId("MultiDropdown")),
-                            Title = tostring(cfg.Name or "Dropdown"),
-                            Options = options,
-                            Default = selected,
-                            Multi = true,
-                            Callback = function(v)
-                                cfg.Callback(MultiNormalize(v))
-                            end,
-                        })
-                    end
-                    local def = type(default) == "table" and default[1] or default
-                    local obj = page:AddDropdown({
-                        Id = tostring(cfg.Flag or nextId("Dropdown")),
-                        Title = tostring(cfg.Name or "Dropdown"),
-                        Options = options,
-                        Default = def,
-                        Multi = false,
-                        Callback = cfg.Callback,
-                    })
-                    if obj then
-                        function obj:Refresh(newOptions)
-                            pcall(function()
-                                if self.AddValues then self:AddValues(newOptions or {}) end
-                            end)
-                        end
-                    end
-                    return obj
-                end
-                return tab
-            end
-            return window
-        end
-        return backend
-    end
-
-    ------------------------------------------------------------------------
-    -- Adapter: UUI (single-file, pure Luau fallback)
-    ------------------------------------------------------------------------
-    local function BuildUUIAdapter(lib)
-        local backend = {Kind = "UUI", Root = nil, Library = lib}
-        function backend:Notify(title, content, duration)
-            local ok = pcall(function()
-                lib:Notify({Title = tostring(title or "Ride A Pet"), Content = tostring(content or ""), Duration = tonumber(duration) or 4, Type = "success"})
-            end)
-            if not ok then SafeNotifyFallback(title, content, duration) end
-        end
-        function backend:SaveConfiguration() end
-        function backend:LoadConfiguration() end
-        function backend:Destroy() pcall(function() if self.Root then self.Root:Destroy() end end) end
-        function backend:CreateWindow()
-            local ui = lib:CreateWindow("Ride A Pet • LAB v20", {Keybind = "RightControl", Size = Vector2.new(560, 520)})
-            if not ui then return nil end
-            self.Root = ui
-            local window = {Root = ui}
-            function window:Destroy() backend:Destroy() end
-            function window:CreateTab(name)
-                local page = ui:CreateTab(tostring(name))
-                if not page then return nil end
-                local tab = {Root = page}
-                function tab:CreateSection(title) pcall(function() page:CreateLabel(tostring(title)) end) end
-                function tab:CreateLabel(text) return page:CreateLabel(tostring(text or "")) end
-                function tab:CreateParagraph(cfg) return page:CreateLabel((cfg.Title and (tostring(cfg.Title) .. "\n") or "") .. tostring(cfg.Content or "")) end
-                function tab:CreateButton(cfg) return page:CreateButton(tostring(cfg.Name or "Button"), cfg.Callback) end
-                function tab:CreateToggle(cfg) return page:CreateToggle(tostring(cfg.Name or "Toggle"), cfg.CurrentValue == true, cfg.Callback) end
-                function tab:CreateSlider(cfg)
-                    local range = cfg.Range or {0, 100}
-                    return page:CreateSlider(tostring(cfg.Name or "Slider"), range[1], range[2], cfg.CurrentValue or range[1], cfg.Callback)
-                end
-                function tab:CreateDropdown(cfg)
-                    local opts = cfg.Options or {}
-                    local default = type(cfg.CurrentOption) == "table" and cfg.CurrentOption[1] or cfg.CurrentOption
-                    local control = page:CreateDropdown(tostring(cfg.Name or "Dropdown"), opts, cfg.Callback, default)
-                    if control then
-                        function control:Refresh() end
-                    end
-                    return control
-                end
-                return tab
-            end
-            return window
-        end
-        return backend
-    end
-
-    ------------------------------------------------------------------------
-    -- Adapter: Rayfield (legacy fallback)
-    ------------------------------------------------------------------------
-    local function BuildRayfieldAdapter(lib)
-        local backend = {Kind = "Rayfield"}
-        function backend:Notify(title, content, duration)
-            pcall(function() lib:Notify({Title = title, Content = content, Duration = duration or 4}) end)
-        end
-        function backend:SaveConfiguration() pcall(function() lib:SaveConfiguration() end) end
-        function backend:LoadConfiguration() pcall(function() lib:LoadConfiguration() end) end
-        function backend:Destroy() end
-        function backend:CreateWindow(settings)
-            local window = {Root = lib:CreateWindow(settings)}
-            if not window.Root then return nil end
-            function window:Destroy() pcall(function() self.Root:Destroy() end) end
-            function window:CreateTab(name, icon) 
-                local page = self.Root:CreateTab(name, icon or 0)
-                return setmetatable({Root = page}, {__index = function(tab, key)
-                    if key == "CreateSection" then return function(_, title) return page:CreateSection(title) end end
-                    if key == "CreateLabel" then return function(_, text) return page:CreateLabel(text) end end
-                    if key == "CreateParagraph" then return function(_, cfg) return page:CreateParagraph(cfg) end end
-                    if key == "CreateButton" then return function(_, cfg) return page:CreateButton(cfg) end end
-                    if key == "CreateToggle" then return function(_, cfg) return page:CreateToggle(cfg) end end
-                    if key == "CreateSlider" then return function(_, cfg) return page:CreateSlider(cfg) end end
-                    if key == "CreateDropdown" then return function(_, cfg) return page:CreateDropdown(cfg) end end
-                end})
-            end
-            return window
-        end
-        return backend
-    end
-
-    ------------------------------------------------------------------------
-    -- Ultimo recurso: UI nativa. Ela existe apenas para garantir que o Delta
-    -- nunca fique silencioso quando uma biblioteca externa nao carrega.
-    ------------------------------------------------------------------------
     local function BuildNativeAdapter()
         local backend = {Kind = "Native"}
         local playerGui = GetGuiParent()
+        if not playerGui then
+            local deadline = os.clock() + 5
+            repeat
+                task.wait(0.2)
+                playerGui = GetGuiParent()
+            until playerGui or os.clock() >= deadline
+        end
         if not playerGui then return nil end
         local okBuild, result = pcall(function()
-            local old = playerGui:FindFirstChild("RideAPet_NATIVE_v20")
+            local old = playerGui:FindFirstChild("RideAPet_NATIVE_v22")
             if old then pcall(function() old:Destroy() end) end
 
             local gui = Instance.new("ScreenGui")
-            gui.Name = "RideAPet_NATIVE_v20"
+            gui.Name = "RideAPet_NATIVE_v22"
             gui.ResetOnSpawn = false
             gui.IgnoreGuiInset = true
             gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
@@ -2167,7 +1873,7 @@ local function Main()
         local top = Instance.new("TextLabel")
         top.Size = UDim2.new(1, 0, 0, 42)
         top.BackgroundTransparency = 1
-        top.Text = "Ride A Pet • LAB v20  [NATIVE FALLBACK]"
+        top.Text = "Ride A Pet • LAB v22  [NATIVE FALLBACK]"
         top.TextColor3 = Color3.new(1,1,1)
         top.Font = Enum.Font.GothamBold
         top.TextSize = 16
@@ -2411,7 +2117,7 @@ local function Main()
         return backend
         end)
         if not okBuild then
-            warn("[RideAPet v20] BuildNativeAdapter erro: " .. tostring(result))
+            warn("[RideAPet v22] BuildNativeAdapter erro: " .. tostring(result))
             return nil
         end
         return result
@@ -2430,38 +2136,35 @@ local function Main()
         UIBackend = "NativeFailed"
         UIReady = false
         State.compatibility.UI = UIBackend
-        warn("[RideAPet v20] UI nativa falhou: " .. tostring(adapter))
+        warn("[RideAPet v22] UI nativa falhou: " .. tostring(adapter))
         return nil
     end
 
-    BootStatus("Ride A Pet LAB v20\nCarregando estrutura do jogo...")
-    WaitForGameStructure(12)
-    InitializeFilterDefaults()
+    -- A UI nao depende da estrutura do jogo. Ela abre primeiro; a estrutura e carregada em background.
+    BootStatus("Ride A Pet LAB v22\nCriando interface imediatamente...")
     ProbeCompatibility()
-
-    BootStatus("Ride A Pet LAB v20\nCriando interface...")
     Rayfield = BuildUI()
     if not Rayfield then
-        BootStatus("Ride A Pet LAB v20\nERRO: não foi possível criar a interface.\nPlayerGui/API de UI indisponível.")
+        BootStatus("Ride A Pet LAB v22\nERRO: não foi possível criar a interface.\nPlayerGui/API de UI indisponível.")
         return
     end
 
     local okWindow, createdWindow = pcall(function()
         return Rayfield:CreateWindow({
-            Name = "Ride A Pet • LAB v20",
+            Name = "Ride A Pet • LAB v22",
             Icon = 0,
             LoadingTitle = "Ride A Pet",
-            LoadingSubtitle = "LAB v20 • bootstrap resiliente",
+            LoadingSubtitle = "LAB v22 • bootstrap resiliente",
             Theme = "Default",
             DisableRayfieldPrompts = true,
             DisableBuildWarnings = true,
-            ConfigurationSaving = {Enabled = true, FolderName = "RideAPetLab", FileName = "RideAPet_v20"},
+            ConfigurationSaving = {Enabled = true, FolderName = "RideAPetLab", FileName = "RideAPet_v22"},
             Discord = {Enabled = false},
             KeySystem = false,
         })
     end)
     if not okWindow or not createdWindow then
-        BootStatus("Ride A Pet LAB v20\nFalha criando a janela UI via " .. tostring(UIBackend))
+        BootStatus("Ride A Pet LAB v22\nFalha criando a janela UI via " .. tostring(UIBackend))
         return
     end
     Window = createdWindow
@@ -3092,6 +2795,23 @@ local function Main()
         Callback = Destroy,
     })
 
+    -- Carrega/refaz referencias sem bloquear o aparecimento da interface.
+    task.spawn(function()
+        local ok, err = pcall(function()
+            WaitForGameStructure(12)
+            InitializeFilterDefaults()
+            RefreshGameReferences()
+            if EggDropdown then
+                local options = EggNameList()
+                if #options == 0 then options = {"Nenhum"} end
+                pcall(function() EggDropdown:Refresh(options) end)
+            end
+            if not SellAPI then InitSell() end
+            Status("Estrutura do jogo atualizada.")
+            Notify("Ride A Pet", "Estrutura carregada. Diagnostico disponivel na aba correspondente.", 3)
+        end)
+        if not ok then RecordFailure("Bootstrap", err) end
+    end)
 
     -- Respawn
     Connect(LocalPlayer.CharacterAdded, function()
@@ -3177,7 +2897,7 @@ local function Main()
                     local timers = EggTimers()
                     local cash = Value("Cash", 0)
                     DashboardInfo:Set({
-                        Title = "Ride A Pet • LAB v20",
+                        Title = "Ride A Pet • LAB v22",
                         Content = string.format(
                             "UI: %s\nStatus: %s\nCash: %s\nOvos compatíveis: %d\nPets detectados: %d\nBasket: %d • Livres: %d • Plot: %d\n\nColetados: %d • Colocados: %d • Hatch: %d\nIndex: %d • Food: %d • Feed: %d • Sold: %d • Fav: %d\nErros: %d\nEstrutura: %s",
                             tostring(UIBackend),
@@ -3209,26 +2929,26 @@ local function Main()
 
     ProbeCompatibility()
     if BootGui then pcall(function() BootGui:Destroy() end) BootGui = nil end
-    Status("LAB v20 carregado via " .. tostring(UIBackend) .. " • núcleo baseado em funções publicamente verificadas.")
+    Status("LAB v22 carregado via " .. tostring(UIBackend) .. " • núcleo baseado em funções publicamente verificadas.")
     SetAntiAFK(State.antiAFK)
     ApplyPlayerSettings()
     Notify("Ride A Pet", "Interface: " .. tostring(UIBackend) .. " • pronto.", 4)
 
 end
 
-local ok, err = xpcall(Main, debug.traceback)
+local ok, err = xpcall(Main, _traceback)
 if not ok then
-    warn("[RideAPet v20] Erro fatal:\n" .. tostring(err))
+    warn("[RideAPet v22] Erro fatal:\n" .. tostring(err))
     -- Mostra o erro no PlayerGui mesmo que a janela principal tenha falhado.
     pcall(function()
         local Players = game:GetService("Players")
         local lp = Players.LocalPlayer
         local pg = lp and lp:FindFirstChild("PlayerGui")
         if not pg then return end
-        local gui = pg:FindFirstChild("RideAPet_BOOT_v20")
+        local gui = pg:FindFirstChild("RideAPet_BOOT_v22")
         if not gui then
             gui = Instance.new("ScreenGui")
-            gui.Name = "RideAPet_BOOT_v20"
+            gui.Name = "RideAPet_BOOT_v22"
             gui.ResetOnSpawn = false
             gui.DisplayOrder = 2147483647
             gui.Parent = pg
@@ -3249,12 +2969,12 @@ if not ok then
             t.TextWrapped = true
             t.TextXAlignment = Enum.TextXAlignment.Left
             t.TextYAlignment = Enum.TextYAlignment.Top
-            t.Text = "Ride A Pet LAB v20\n\nFalha na inicialização:\n" .. tostring(err)
+            t.Text = "Ride A Pet LAB v22\n\nFalha na inicialização:\nExecutor: " .. tostring(ExecutorName) .. "\n" .. tostring(err)
             t.Parent = f
         else
             local f = gui:FindFirstChildOfClass("Frame")
             local t = f and f:FindFirstChildOfClass("TextLabel")
-            if t then t.Text = "Ride A Pet LAB v20\n\nFalha na inicialização:\n" .. tostring(err) end
+            if t then t.Text = "Ride A Pet LAB v22\n\nFalha na inicialização:\nExecutor: " .. tostring(ExecutorName) .. "\n" .. tostring(err) end
         end
     end)
 end
