@@ -1,70 +1,73 @@
 -- ================================================================
--- MONTAR UM PET / RIDE A PET - HUB LIMPO
--- Base: interface própria + execução com token + radar/farm por RenderedEggs
--- Sem Orion / sem webhook / sem envio de dados
--- PlaceId: 124216119978534
+-- MONTAR UM PET / RIDE A PET
+-- SOMENTE:
+-- 1. VELOCIDADE
+-- 2. RADAR DE OVOS + RARIDADE
+-- 3. POSIÇÃO EXATA X/Y/Z + DISTÂNCIA ATUALIZADA
 -- ================================================================
-
-local GAME_ID = 124216119978534
-
-if game.PlaceId ~= GAME_ID then
-    warn("[MONTAR UM PET] Este script foi feito para o jogo Ride A Pet.")
-    return
-end
-
-local ENV = (getgenv and getgenv()) or _G
-
--- ================================================================
--- LIMPEZA DE EXECUÇÕES ANTERIORES
--- ================================================================
-
-pcall(function()
-    if ENV.__MONTAR_UM_PET_HUB and ENV.__MONTAR_UM_PET_HUB.Stop then
-        ENV.__MONTAR_UM_PET_HUB.Stop()
-    end
-end)
 
 local Players = game:GetService("Players")
-local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 
-local Estado = {
-    Ativo = true,
-    Velocidade = false,
-    VelocidadeValor = 255,
-    AutoClique = false,
-    AutoChocar = false,
-    AutoFusao = false,
-    AutoFarm = false,
-    EggAlvo = "Cherub Egg",
-    FarmDelay = 0.20,
-    GlideSpeed = 500,
-}
+-- ================================================================
+-- CONFIGURAÇÃO
+-- ================================================================
 
+local Velocidade = 150
+local VelocidadeAtiva = true
+
+local IntervaloScan = 1
+local IntervaloAtualizacao = 0.20
+
+-- ================================================================
+-- LIMPEZA DE EXECUÇÃO ANTERIOR
+-- ================================================================
+
+local ENV = (getgenv and getgenv()) or _G
+
+pcall(function()
+    if ENV.__MONTAR_UM_PET_MINI
+        and ENV.__MONTAR_UM_PET_MINI.Stop then
+
+        ENV.__MONTAR_UM_PET_MINI.Stop()
+    end
+end)
+
+local Ativo = true
 local Conexoes = {}
-local TasksAtivas = {}
+local OvosRadar = {}
 
-local function RegistrarConexao(conexao)
+local function Registrar(conexao)
     if conexao then
         table.insert(Conexoes, conexao)
     end
+
     return conexao
 end
 
-local function RegistrarTask(thread)
-    if thread then
-        table.insert(TasksAtivas, thread)
+local function LimparRadar()
+    for _, dados in pairs(OvosRadar) do
+
+        pcall(function()
+            if dados.Marker
+                and dados.Marker.Parent then
+
+                dados.Marker:Destroy()
+            end
+        end)
+
     end
-    return thread
+
+    table.clear(OvosRadar)
 end
 
 local function PararTudo()
-    Estado.Ativo = false
+    Ativo = false
 
     for _, conexao in ipairs(Conexoes) do
         pcall(function()
@@ -73,10 +76,14 @@ local function PararTudo()
     end
 
     table.clear(Conexoes)
-    table.clear(TasksAtivas)
+    LimparRadar()
 
     pcall(function()
-        local gui = CoreGui:FindFirstChild("MontarUmPetHub")
+        local gui =
+            CoreGui:FindFirstChild(
+                "MontarUmPetMini"
+            )
+
         if gui then
             gui:Destroy()
         end
@@ -85,7 +92,12 @@ local function PararTudo()
     pcall(function()
         if gethui then
             local hui = gethui()
-            local gui = hui:FindFirstChild("MontarUmPetHub")
+
+            local gui =
+                hui:FindFirstChild(
+                    "MontarUmPetMini"
+                )
+
             if gui then
                 gui:Destroy()
             end
@@ -93,12 +105,12 @@ local function PararTudo()
     end)
 end
 
-ENV.__MONTAR_UM_PET_HUB = {
+ENV.__MONTAR_UM_PET_MINI = {
     Stop = PararTudo
 }
 
 -- ================================================================
--- FUNÇÕES BÁSICAS
+-- PERSONAGEM
 -- ================================================================
 
 local function GetCharacter()
@@ -106,1086 +118,789 @@ local function GetCharacter()
 end
 
 local function GetHumanoid()
-    local char = GetCharacter()
-    return char and char:FindFirstChildOfClass("Humanoid")
+    local character = GetCharacter()
+
+    if not character then
+        return nil
+    end
+
+    return character:FindFirstChildOfClass(
+        "Humanoid"
+    )
 end
 
 local function GetRoot()
-    local char = GetCharacter()
-    return char and char:FindFirstChild("HumanoidRootPart")
-end
+    local character = GetCharacter()
 
-local function GetPlayerGui()
-    return LocalPlayer:FindFirstChildOfClass("PlayerGui")
-end
-
-local function SafeName(value)
-    return string.lower(tostring(value or ""))
-end
-
-local function IsRemote(obj)
-    return obj
-        and (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction"))
-end
-
-local function FindRemote(names)
-    local events = ReplicatedStorage:FindFirstChild("Events")
-
-    if events then
-        for _, name in ipairs(names) do
-            local obj = events:FindFirstChild(name)
-            if IsRemote(obj) then
-                return obj
-            end
-        end
+    if not character then
+        return nil
     end
 
-    for _, name in ipairs(names) do
-        local obj = ReplicatedStorage:FindFirstChild(name)
-        if IsRemote(obj) then
-            return obj
-        end
-    end
-
-    for _, name in ipairs(names) do
-        local obj = ReplicatedStorage:FindFirstChild(name, true)
-        if IsRemote(obj) then
-            return obj
-        end
-    end
-
-    return nil
-end
-
-local function CallRemote(remote, ...)
-    if not IsRemote(remote) then
-        return false
-    end
-
-    local args = table.pack(...)
-
-    local ok = pcall(function()
-        if remote:IsA("RemoteEvent") then
-            remote:FireServer(table.unpack(args, 1, args.n))
-        else
-            remote:InvokeServer(table.unpack(args, 1, args.n))
-        end
-    end)
-
-    return ok
+    return character:FindFirstChild(
+        "HumanoidRootPart"
+    )
 end
 
 -- ================================================================
--- LISTA ATUAL DE OVOS + ORDENAÇÃO POR SORTE
+-- RARIDADE
 -- ================================================================
-
-local Luck = {
-    ["Cherub Egg"] = 1e12,
-    ["Blackhole Egg"] = 1e11,
-    ["Galaxy Egg"] = 1.5e9,
-    ["Aurora Egg"] = 3e8,
-    ["Soul Egg"] = 7e6,
-    ["Sinister Egg"] = 3e6,
-    ["Flaming Egg"] = 1e6,
-    ["Dominus Egg"] = 7e5,
-    ["Asteroid Egg"] = 5e5,
-    ["Skull Egg"] = 2.5e5,
-    ["Crystal Egg"] = 1.5e5,
-    ["Diamond Egg"] = 9e4,
-    ["Golden Egg"] = 3e4,
-    ["Glass Egg"] = 1e4,
-    ["Ice Egg"] = 3e3,
-    ["Slime Egg"] = 1e3,
-    ["Flower Egg"] = 750,
-    ["Mushroom Egg"] = 500,
-    ["Leaf Egg"] = 200,
-    ["Stone Egg"] = 100,
-    ["Easter Egg"] = 50,
-    ["Cracked Egg"] = 30,
-    ["Brown Egg"] = 5,
-    ["White Egg"] = 1,
-}
-
-local EggNames = {
-    "Cherub Egg",
-    "Blackhole Egg",
-    "Galaxy Egg",
-    "Aurora Egg",
-    "Soul Egg",
-    "Sinister Egg",
-    "Flaming Egg",
-    "Dominus Egg",
-    "Asteroid Egg",
-    "Skull Egg",
-    "Crystal Egg",
-    "Diamond Egg",
-    "Golden Egg",
-    "Glass Egg",
-    "Ice Egg",
-    "Slime Egg",
-    "Flower Egg",
-    "Mushroom Egg",
-    "Leaf Egg",
-    "Stone Egg",
-    "Easter Egg",
-    "Cracked Egg",
-    "Brown Egg",
-    "White Egg",
-}
 
 local function ClassificarRaridade(nome)
-    local n = SafeName(nome)
+    local n =
+        string.lower(tostring(nome or ""))
 
     if string.find(n, "secret", 1, true)
         or string.find(n, "divine", 1, true)
-        or string.find(n, "celestial", 1, true)
-        or string.find(n, "ethereal", 1, true)
-        or string.find(n, "godly", 1, true) then
-        return "🌌 Secreto / Divino", 5
+        or string.find(n, "god", 1, true) then
+
+        return "🌌 Secreto",
+            Color3.fromRGB(255, 0, 255)
+
+    elseif string.find(n, "myth", 1, true)
+        or string.find(n, "mitic", 1, true) then
+
+        return "🔥 Mítico",
+            Color3.fromRGB(255, 60, 60)
+
+    elseif string.find(n, "legend", 1, true)
+        or string.find(n, "lend", 1, true) then
+
+        return "👑 Lendário",
+            Color3.fromRGB(255, 170, 0)
+
+    elseif string.find(n, "epic", 1, true)
+        or string.find(n, "epico", 1, true) then
+
+        return "🔮 Épico",
+            Color3.fromRGB(170, 60, 255)
+
+    elseif string.find(n, "rare", 1, true)
+        or string.find(n, "raro", 1, true) then
+
+        return "🔵 Raro",
+            Color3.fromRGB(60, 160, 255)
     end
 
-    if string.find(n, "mythic", 1, true)
-        or string.find(n, "mythical", 1, true)
-        or string.find(n, "ancient", 1, true) then
-        return "🔥 Mítico / Antigo", 4
-    end
-
-    if string.find(n, "legendary", 1, true)
-        or string.find(n, "legend", 1, true) then
-        return "👑 Lendário", 3
-    end
-
-    if string.find(n, "epic", 1, true) then
-        return "🔮 Épico", 2
-    end
-
-    if string.find(n, "rare", 1, true) then
-        return "🔵 Raro", 1.5
-    end
-
-    if n == "white egg" or n == "brown egg" then
-        return "⚪ Comum", 1
-    end
-
-    return "⚪ Comum", 1
-end
-
-local function GetEggLuck(nome)
-    return Luck[nome] or 0
-end
-
-local function GetRarityFromIndex(eggName)
-    local gui = GetPlayerGui()
-
-    if not gui then
-        return nil
-    end
-
-    local main = gui:FindFirstChild("Main")
-    local index = main and main:FindFirstChild("Index")
-    local holders = index and index:FindFirstChild("Holders")
-    local eggHolder = holders and holders:FindFirstChild("EggsHolder")
-    local card = eggHolder and eggHolder:FindFirstChild(eggName)
-
-    if not card then
-        return nil
-    end
-
-    local keywords = {
-        "common",
-        "uncommon",
-        "rare",
-        "epic",
-        "legendary",
-        "mythic",
-        "mythical",
-        "secret",
-        "divine",
-        "celestial",
-        "ethereal",
-        "ancient",
-        "godly",
-        "exotic",
-        "exclusive",
-        "limited",
-        "special",
-        "unique",
-        "vip",
-    }
-
-    for _, child in ipairs(card:GetChildren()) do
-        local childName = SafeName(child.Name)
-
-        for _, keyword in ipairs(keywords) do
-            if string.find(childName, keyword, 1, true) then
-                return child.Name
-            end
-        end
-    end
-
-    return nil
+    return "⚪ Comum",
+        Color3.fromRGB(220, 220, 220)
 end
 
 -- ================================================================
 -- LOCALIZAÇÃO DOS OVOS
 -- ================================================================
 
-local function GetEggPosition(inst)
-    if not inst or not inst.Parent then
+local function EhOvo(nome)
+    local n =
+        string.lower(tostring(nome or ""))
+
+    return string.find(
+        n,
+        "egg",
+        1,
+        true
+    ) ~= nil
+        or string.find(
+            n,
+            "ovo",
+            1,
+            true
+        ) ~= nil
+end
+
+local function EncontrarModeloOvo(obj)
+    local atual = obj
+    local encontrado = nil
+
+    while atual do
+
+        if atual:IsA("Model")
+            and EhOvo(atual.Name) then
+
+            encontrado = atual
+        end
+
+        atual = atual.Parent
+    end
+
+    return encontrado
+end
+
+local function ObterParte(modelo)
+    if not modelo then
         return nil
     end
 
-    if inst:IsA("Model") then
-        local ok, pivot = pcall(function()
-            return inst:GetPivot()
-        end)
-
-        if ok and pivot then
-            return pivot.Position
-        end
-
-        local part = inst.PrimaryPart
-            or inst:FindFirstChildWhichIsA("BasePart", true)
-
-        return part and part.Position or nil
+    if modelo:IsA("BasePart") then
+        return modelo
     end
 
-    if inst:IsA("BasePart") then
-        return inst.Position
+    if modelo:IsA("Model") then
+
+        if modelo.PrimaryPart then
+            return modelo.PrimaryPart
+        end
+
+        return modelo:FindFirstChildWhichIsA(
+            "BasePart",
+            true
+        )
     end
 
     return nil
 end
 
-local function GetEggRoot()
-    return Workspace:FindFirstChild("RenderedEggs", true)
-        or Workspace:FindFirstChild("EggSpawns", true)
+local function ObterPosicao(modelo)
+    if not modelo
+        or not modelo.Parent then
+
+        return nil
+    end
+
+    if modelo:IsA("Model") then
+
+        local ok, pivot =
+            pcall(function()
+                return modelo:GetPivot()
+            end)
+
+        if ok and pivot then
+            return pivot.Position
+        end
+    end
+
+    local parte = ObterParte(modelo)
+
+    return parte and parte.Position
+        or nil
 end
 
-local function IsEggLike(inst)
-    if not inst then
-        return false
+-- ================================================================
+-- CRIAÇÃO DO ESP
+-- ================================================================
+
+local function CriarRadar(modelo)
+    if OvosRadar[modelo] then
+        return
     end
 
-    local name = SafeName(inst.Name)
+    local parte = ObterParte(modelo)
 
-    if Luck[inst.Name] then
-        return true
+    if not parte then
+        return
     end
 
-    if string.find(name, "egg", 1, true)
-        or string.find(name, "ovo", 1, true) then
-        return true
-    end
+    local raridade, cor =
+        ClassificarRaridade(modelo.Name)
 
-    return false
+    local marker = Instance.new("Folder")
+    marker.Name = "RadarOvo"
+    marker.Parent = parte
+
+    -- Caixa através da parede
+    local box =
+        Instance.new("BoxHandleAdornment")
+
+    box.Name = "OvoBox"
+    box.Adornee = parte
+    box.Size =
+        parte.Size
+        + Vector3.new(0.3, 0.3, 0.3)
+
+    box.Color3 = cor
+    box.Transparency = 0.60
+    box.AlwaysOnTop = true
+    box.ZIndex = 10
+    box.Parent = marker
+
+    -- Texto
+    local billboard =
+        Instance.new("BillboardGui")
+
+    billboard.Name = "OvoInfo"
+    billboard.Adornee = parte
+    billboard.Size =
+        UDim2.fromOffset(260, 90)
+
+    billboard.StudsOffset =
+        Vector3.new(0, 4, 0)
+
+    billboard.AlwaysOnTop = true
+    billboard.Parent = marker
+
+    local label =
+        Instance.new("TextLabel")
+
+    label.Size =
+        UDim2.fromScale(1, 1)
+
+    label.BackgroundTransparency = 1
+
+    label.TextColor3 = cor
+    label.TextStrokeTransparency = 0
+    label.TextStrokeColor3 =
+        Color3.fromRGB(0, 0, 0)
+
+    label.Font =
+        Enum.Font.SourceSansBold
+
+    label.TextSize = 14
+    label.TextWrapped = true
+
+    label.Parent = billboard
+
+    OvosRadar[modelo] = {
+        Marker = marker,
+        Box = box,
+        Billboard = billboard,
+        Label = label,
+        Part = parte,
+        Raridade = raridade,
+    }
 end
 
-local function GetEggCandidates(filterName)
-    local root = GetEggRoot()
+local function RemoverRadar(modelo)
+    local dados =
+        OvosRadar[modelo]
 
-    if not root then
-        return {}
+    if not dados then
+        return
     end
 
-    local hrp = GetRoot()
-    local origin = hrp and hrp.Position or Vector3.zero
-    local candidates = {}
-    local seen = {}
+    pcall(function()
+        if dados.Marker
+            and dados.Marker.Parent then
 
-    local children = root:GetChildren()
+            dados.Marker:Destroy()
+        end
+    end)
 
-    for _, child in ipairs(children) do
-        if IsEggLike(child) then
-            local key = child
+    OvosRadar[modelo] = nil
+end
 
-            if not seen[key] then
-                seen[key] = true
+-- ================================================================
+-- SCAN DOS OVOS
+-- ================================================================
 
-                local pos = GetEggPosition(child)
+local function ScanContainer(container, encontrados)
+    if not container then
+        return
+    end
 
-                if pos then
-                    local eggName = child.Name
+    for _, objeto in ipairs(
+        container:GetDescendants()
+    ) do
 
-                    local accepted =
-                        (not filterName)
-                        or filterName == ""
-                        or eggName == filterName
+        local modeloOvo =
+            EncontrarModeloOvo(objeto)
 
-                    if accepted then
-                        local rarity, rarityWeight =
-                            ClassificarRaridade(eggName)
+        if modeloOvo then
 
-                        local indexRarity =
-                            GetRarityFromIndex(eggName)
+            encontrados[modeloOvo] = true
 
-                        candidates[#candidates + 1] = {
-                            Instance = child,
-                            Name = eggName,
-                            Position = pos,
-                            Distance = (pos - origin).Magnitude,
-                            Luck = GetEggLuck(eggName),
-                            Rarity = indexRarity or rarity,
-                            RarityWeight = rarityWeight,
-                        }
-                    end
-                end
+            if not OvosRadar[modeloOvo] then
+                CriarRadar(modeloOvo)
             end
         end
     end
-
-    table.sort(candidates, function(a, b)
-        if a.Luck ~= b.Luck then
-            return a.Luck > b.Luck
-        end
-
-        if a.RarityWeight ~= b.RarityWeight then
-            return a.RarityWeight > b.RarityWeight
-        end
-
-        return a.Distance < b.Distance
-    end)
-
-    return candidates
 end
 
-local function FindBestEgg(filterName)
-    local list = GetEggCandidates(filterName)
-
-    if #list > 0 then
-        return list[1], list
+local function ScanOvos()
+    if not Ativo then
+        return
     end
 
-    return nil, {}
+    local encontrados = {}
+
+    local renderedEggs =
+        Workspace:FindFirstChild(
+            "RenderedEggs",
+            true
+        )
+
+    local eggSpawns =
+        Workspace:FindFirstChild(
+            "EggSpawns",
+            true
+        )
+
+    ScanContainer(
+        renderedEggs,
+        encontrados
+    )
+
+    ScanContainer(
+        eggSpawns,
+        encontrados
+    )
+
+    -- Remove ovos que desapareceram
+    for modelo in pairs(OvosRadar) do
+
+        if not encontrados[modelo]
+            or not modelo.Parent then
+
+            RemoverRadar(modelo)
+        end
+    end
 end
 
 -- ================================================================
--- GLIDE
+-- ATUALIZAÇÃO CONTÍNUA DAS POSIÇÕES
 -- ================================================================
 
-local glideLock = false
+task.spawn(function()
 
-local function GlideTo(targetPosition, speed)
-    local character = GetCharacter()
-    local root = GetRoot()
+    while Ativo do
 
-    if not character or not root or not targetPosition then
-        return false
-    end
+        local root = GetRoot()
 
-    if glideLock then
-        return false
-    end
+        if root then
 
-    glideLock = true
+            for modelo, dados in pairs(
+                OvosRadar
+            ) do
 
-    local humanoid = GetHumanoid()
-    local originalPlatformStand =
-        humanoid and humanoid.PlatformStand or false
+                if modelo.Parent
+                    and dados.Part
+                    and dados.Part.Parent
+                    and dados.Label.Parent then
 
-    local originalCollision = {}
+                    local pos =
+                        ObterPosicao(modelo)
 
-    if humanoid then
-        humanoid.PlatformStand = true
-    end
+                    if pos then
 
-    for _, part in ipairs(character:GetDescendants()) do
-        if part:IsA("BasePart") then
-            originalCollision[part] = part.CanCollide
-            part.CanCollide = false
-        end
-    end
+                        local distancia =
+                            (
+                                root.Position
+                                - pos
+                            ).Magnitude
 
-    local reached = false
-    local startTime = os.clock()
-    local maxTime = 15
-    local moveSpeed = tonumber(speed) or 500
+                        dados.Label.Text =
+                            string.format(
+                                "%s\n%s\nX: %.1f  Y: %.1f  Z: %.1f\nDistância: %.1f studs",
+                                modelo.Name,
+                                dados.Raridade,
+                                pos.X,
+                                pos.Y,
+                                pos.Z,
+                                distancia
+                            )
+                    end
+                else
 
-    while Estado.Ativo and character.Parent and root.Parent do
-        local current = root.Position
-        local delta = targetPosition - current
-        local distance = delta.Magnitude
-
-        if distance <= 2 then
-            reached = true
-            break
+                    RemoverRadar(modelo)
+                end
+            end
         end
 
-        if os.clock() - startTime > maxTime then
-            break
-        end
-
-        local dt = task.wait()
-        local step = math.min(distance, moveSpeed * dt)
-        local direction = delta.Unit
-        local newPos = current + direction * step
-
-        pcall(function()
-            root.CFrame = CFrame.new(newPos, newPos + direction)
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
+        task.wait(
+            IntervaloAtualizacao
+        )
     end
+end)
 
-    for part, canCollide in pairs(originalCollision) do
-        if part and part.Parent then
+-- ================================================================
+-- SCAN PERIÓDICO
+-- ================================================================
+
+task.spawn(function()
+
+    while Ativo do
+
+        pcall(ScanOvos)
+
+        task.wait(
+            IntervaloScan
+        )
+    end
+end)
+
+-- ================================================================
+-- VELOCIDADE
+-- Fórmula do arquivo original
+-- ================================================================
+
+Registrar(
+    RunService.RenderStepped:Connect(
+        function()
+
+            if not Ativo
+                or not VelocidadeAtiva then
+
+                return
+            end
+
+            local character =
+                GetCharacter()
+
+            local humanoid =
+                GetHumanoid()
+
+            if not character
+                or not humanoid then
+
+                return
+            end
+
+            local direcao =
+                humanoid.MoveDirection
+
+            if direcao.Magnitude <= 0 then
+                return
+            end
+
             pcall(function()
-                part.CanCollide = canCollide
+
+                character:TranslateBy(
+                    direcao
+                    * (Velocidade / 135)
+                )
+
             end)
         end
-    end
-
-    if humanoid and humanoid.Parent then
-        humanoid.PlatformStand = originalPlatformStand
-    end
-
-    glideLock = false
-
-    return reached
-end
+    )
+)
 
 -- ================================================================
--- INTERFACE
+-- PEQUENO PAINEL DE VELOCIDADE
 -- ================================================================
 
 local function GetGuiParent()
+
     if gethui then
-        local ok, hui = pcall(gethui)
+
+        local ok, hui =
+            pcall(gethui)
 
         if ok and hui then
             return hui
         end
     end
 
-    local ok, gui = pcall(function()
-        return CoreGui
-    end)
-
-    if ok and gui then
-        return gui
-    end
-
-    return GetPlayerGui()
+    return CoreGui
 end
 
-local ParentGui = GetGuiParent()
+local guiParent =
+    GetGuiParent()
 
-if not ParentGui then
-    warn("[MONTAR UM PET] Não foi possível obter um container de UI.")
-    return
-end
+if guiParent then
 
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MontarUmPetHub"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-ScreenGui.Parent = ParentGui
+    local ScreenGui =
+        Instance.new("ScreenGui")
 
-local Main = Instance.new("Frame")
-Main.Name = "Main"
-Main.Size = UDim2.fromOffset(300, 430)
-Main.Position = UDim2.new(0.05, 0, 0.12, 0)
-Main.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-Main.BorderSizePixel = 0
-Main.Active = true
-Main.Parent = ScreenGui
+    ScreenGui.Name =
+        "MontarUmPetMini"
 
-Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 12)
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.Parent = guiParent
 
-local Stroke = Instance.new("UIStroke")
-Stroke.Color = Color3.fromRGB(60, 60, 70)
-Stroke.Thickness = 1
-Stroke.Parent = Main
+    local Frame =
+        Instance.new("Frame")
 
-local Header = Instance.new("Frame")
-Header.Size = UDim2.new(1, 0, 0, 40)
-Header.BackgroundTransparency = 1
-Header.Parent = Main
+    Frame.Size =
+        UDim2.fromOffset(190, 115)
 
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, -85, 1, 0)
-Title.Position = UDim2.fromOffset(12, 0)
-Title.BackgroundTransparency = 1
-Title.Text = "⚡ MONTAR UM PET"
-Title.TextColor3 = Color3.new(1, 1, 1)
-Title.Font = Enum.Font.SourceSansBold
-Title.TextSize = 17
-Title.TextXAlignment = Enum.TextXAlignment.Left
-Title.Parent = Header
-
-local Close = Instance.new("TextButton")
-Close.Size = UDim2.fromOffset(32, 28)
-Close.Position = UDim2.new(1, -38, 0, 6)
-Close.BackgroundColor3 = Color3.fromRGB(90, 40, 40)
-Close.Text = "×"
-Close.TextColor3 = Color3.new(1, 1, 1)
-Close.Font = Enum.Font.SourceSansBold
-Close.TextSize = 20
-Close.Parent = Header
-
-Instance.new("UICorner", Close).CornerRadius = UDim.new(0, 7)
-
-local Minimize = Instance.new("TextButton")
-Minimize.Size = UDim2.fromOffset(32, 28)
-Minimize.Position = UDim2.new(1, -74, 0, 6)
-Minimize.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-Minimize.Text = "—"
-Minimize.TextColor3 = Color3.new(1, 1, 1)
-Minimize.Font = Enum.Font.SourceSansBold
-Minimize.TextSize = 18
-Minimize.Parent = Header
-
-Instance.new("UICorner", Minimize).CornerRadius = UDim.new(0, 7)
-
-local dragging = false
-local dragStart
-local startPos
-
-RegistrarConexao(
-    Header.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-
-            dragging = true
-            dragStart = input.Position
-            startPos = Main.Position
-        end
-    end)
-)
-
-RegistrarConexao(
-    UserInputService.InputChanged:Connect(function(input)
-        if not dragging then
-            return
-        end
-
-        if input.UserInputType ~= Enum.UserInputType.MouseMovement
-            and input.UserInputType ~= Enum.UserInputType.Touch then
-            return
-        end
-
-        local delta = input.Position - dragStart
-
-        Main.Position = UDim2.new(
-            startPos.X.Scale,
-            startPos.X.Offset + delta.X,
-            startPos.Y.Scale,
-            startPos.Y.Offset + delta.Y
+    Frame.Position =
+        UDim2.new(
+            0.04,
+            0,
+            0.20,
+            0
         )
-    end)
-)
 
-RegistrarConexao(
-    UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-
-            dragging = false
-        end
-    end)
-)
-
-local Content = Instance.new("ScrollingFrame")
-Content.Size = UDim2.new(1, -16, 1, -55)
-Content.Position = UDim2.fromOffset(8, 47)
-Content.BackgroundTransparency = 1
-Content.BorderSizePixel = 0
-Content.ScrollBarThickness = 4
-Content.CanvasSize = UDim2.new()
-Content.AutomaticCanvasSize = Enum.AutomaticSize.Y
-Content.Parent = Main
-
-local Layout = Instance.new("UIListLayout")
-Layout.Padding = UDim.new(0, 7)
-Layout.Parent = Content
-
-local Padding = Instance.new("UIPadding")
-Padding.PaddingLeft = UDim.new(0, 4)
-Padding.PaddingRight = UDim.new(0, 4)
-Padding.PaddingBottom = UDim.new(0, 8)
-Padding.Parent = Content
-
-local function AddLabel(text, height)
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, -8, 0, height or 28)
-    label.BackgroundColor3 = Color3.fromRGB(25, 25, 32)
-    label.Text = text
-    label.TextColor3 = Color3.fromRGB(205, 205, 215)
-    label.Font = Enum.Font.SourceSans
-    label.TextSize = 14
-    label.TextWrapped = true
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = Content
-
-    Instance.new("UICorner", label).CornerRadius = UDim.new(0, 8)
-
-    return label
-end
-
-local function AddButton(text, callback)
-    local button = Instance.new("TextButton")
-    button.Size = UDim2.new(1, -8, 0, 35)
-    button.BackgroundColor3 = Color3.fromRGB(34, 34, 43)
-    button.Text = text
-    button.TextColor3 = Color3.new(1, 1, 1)
-    button.Font = Enum.Font.SourceSansBold
-    button.TextSize = 14
-    button.AutoButtonColor = true
-    button.Parent = Content
-
-    Instance.new("UICorner", button).CornerRadius = UDim.new(0, 8)
-
-    RegistrarConexao(
-        button.MouseButton1Click:Connect(function()
-            pcall(callback)
-        end)
-    )
-
-    return button
-end
-
-local function AddToggle(text, initial, callback)
-    local active = initial
-
-    local button = Instance.new("TextButton")
-    button.Size = UDim2.new(1, -8, 0, 35)
-    button.TextColor3 = Color3.new(1, 1, 1)
-    button.Font = Enum.Font.SourceSansBold
-    button.TextSize = 14
-    button.Parent = Content
-
-    Instance.new("UICorner", button).CornerRadius = UDim.new(0, 8)
-
-    local function refresh()
-        button.Text =
-            text .. (active and "  [ON]" or "  [OFF]")
-
-        button.BackgroundColor3 = active
-            and Color3.fromRGB(35, 125, 75)
-            or Color3.fromRGB(34, 34, 43)
-    end
-
-    refresh()
-
-    RegistrarConexao(
-        button.MouseButton1Click:Connect(function()
-            active = not active
-            callback(active)
-            refresh()
-        end)
-    )
-
-    return button
-end
-
-local function AddTextBox(labelText, defaultText, callback)
-    local box = Instance.new("TextBox")
-    box.Size = UDim2.new(1, -8, 0, 35)
-    box.BackgroundColor3 = Color3.fromRGB(25, 25, 32)
-    box.Text = defaultText
-    box.PlaceholderText = labelText
-    box.TextColor3 = Color3.new(1, 1, 1)
-    box.PlaceholderColor3 = Color3.fromRGB(125, 125, 135)
-    box.Font = Enum.Font.SourceSans
-    box.TextSize = 14
-    box.ClearTextOnFocus = false
-    box.Parent = Content
-
-    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 8)
-
-    RegistrarConexao(
-        box.FocusLost:Connect(function()
-            callback(box.Text)
-        end)
-    )
-
-    return box
-end
-
--- ================================================================
--- CONTEÚDO DA UI
--- ================================================================
-
-AddLabel("Farm / movimento", 27)
-
-AddTextBox(
-    "Velocidade (ex.: 255)",
-    tostring(Estado.VelocidadeValor),
-    function(value)
-        local number = tonumber(value)
-
-        if number then
-            Estado.VelocidadeValor =
-                math.clamp(number, 16, 1000)
-        end
-    end
-)
-
-AddToggle(
-    "⚡ Velocidade",
-    false,
-    function(value)
-        Estado.Velocidade = value
-    end
-)
-
-AddToggle(
-    "🔥 Auto-Clique",
-    false,
-    function(value)
-        Estado.AutoClique = value
-    end
-)
-
-AddLabel(
-    "Egg alvo: use o nome exato do ovo.",
-    27
-)
-
-AddTextBox(
-    "Nome do ovo",
-    Estado.EggAlvo,
-    function(value)
-        if value and value ~= "" then
-            Estado.EggAlvo = value
-        end
-    end
-)
-
-AddButton(
-    "🔎 Ver melhor ovo disponível",
-    function()
-        local egg = FindBestEgg(nil)
-
-        if not egg then
-            AddLabel(
-                "Nenhum ovo encontrado em RenderedEggs/EggSpawns.",
-                42
-            )
-            return
-        end
-
-        AddLabel(
-            string.format(
-                "Melhor: %s\nSorte: %s | Raridade: %s | Dist.: %.0f",
-                egg.Name,
-                tostring(egg.Luck),
-                tostring(egg.Rarity),
-                egg.Distance
-            ),
-            58
+    Frame.BackgroundColor3 =
+        Color3.fromRGB(
+            18,
+            18,
+            24
         )
-    end
-)
 
-AddToggle(
-    "🥚 Auto-Chocar",
-    false,
-    function(value)
-        Estado.AutoChocar = value
-    end
-)
+    Frame.BorderSizePixel = 0
+    Frame.Active = true
+    Frame.Parent = ScreenGui
 
-AddToggle(
-    "🔄 Auto-Fusão",
-    false,
-    function(value)
-        Estado.AutoFusao = value
-    end
-)
+    Instance.new(
+        "UICorner",
+        Frame
+    ).CornerRadius =
+        UDim.new(0, 9)
 
-AddToggle(
-    "🚜 Auto Farm do Egg Alvo",
-    false,
-    function(value)
-        Estado.AutoFarm = value
-    end
-)
+    local Title =
+        Instance.new("TextLabel")
 
-AddButton(
-    "⚡ Ir até o melhor ovo",
-    function()
-        local egg = FindBestEgg(nil)
-
-        if not egg then
-            return
-        end
-
-        GlideTo(
-            egg.Position + Vector3.new(0, 2.5, 0),
-            Estado.GlideSpeed
+    Title.Size =
+        UDim2.new(
+            1,
+            -10,
+            0,
+            28
         )
-    end
-)
 
-AddButton(
-    "🎯 Ir até o Egg Alvo",
-    function()
-        local egg = FindBestEgg(Estado.EggAlvo)
+    Title.Position =
+        UDim2.fromOffset(8, 3)
 
-        if not egg then
-            return
-        end
+    Title.BackgroundTransparency = 1
+    Title.Text =
+        "⚡ Velocidade"
 
-        GlideTo(
-            egg.Position + Vector3.new(0, 2.5, 0),
-            Estado.GlideSpeed
+    Title.TextColor3 =
+        Color3.new(1, 1, 1)
+
+    Title.Font =
+        Enum.Font.SourceSansBold
+
+    Title.TextSize = 15
+    Title.TextXAlignment =
+        Enum.TextXAlignment.Left
+
+    Title.Parent = Frame
+
+    local Input =
+        Instance.new("TextBox")
+
+    Input.Size =
+        UDim2.fromOffset(105, 32)
+
+    Input.Position =
+        UDim2.fromOffset(8, 35)
+
+    Input.BackgroundColor3 =
+        Color3.fromRGB(
+            30,
+            30,
+            38
         )
-    end
-)
 
-AddButton(
-    "🏠 Salvar base",
-    function()
-        local root = GetRoot()
+    Input.Text =
+        tostring(Velocidade)
 
-        if root then
-            ENV.__MONTAR_UM_PET_BASE = root.CFrame
-        end
-    end
-)
+    Input.TextColor3 =
+        Color3.new(1, 1, 1)
 
-AddButton(
-    "↩️ Voltar para a base",
-    function()
-        local root = GetRoot()
-        local base = ENV.__MONTAR_UM_PET_BASE
+    Input.Font =
+        Enum.Font.SourceSans
 
-        if root and base then
-            GlideTo(
-                base.Position,
-                Estado.GlideSpeed
-            )
-        end
-    end
-)
+    Input.TextSize = 14
+    Input.ClearTextOnFocus = false
+    Input.Parent = Frame
 
-AddButton(
-    "📋 Listar ovos próximos",
-    function()
-        local list = GetEggCandidates(nil)
-        local lines = {}
+    Instance.new(
+        "UICorner",
+        Input
+    ).CornerRadius =
+        UDim.new(0, 6)
 
-        for i = 1, math.min(8, #list) do
-            local egg = list[i]
+    local Aplicar =
+        Instance.new("TextButton")
 
-            lines[#lines + 1] = string.format(
-                "%d. %s | %.0f studs",
-                i,
-                egg.Name,
-                egg.Distance
-            )
-        end
+    Aplicar.Size =
+        UDim2.fromOffset(60, 32)
 
-        AddLabel(
-            #lines > 0
-                and table.concat(lines, "\n")
-                or "Nenhum ovo encontrado.",
-            math.clamp(
-                26 + (#lines * 20),
-                42,
-                190
-            )
+    Aplicar.Position =
+        UDim2.fromOffset(120, 35)
+
+    Aplicar.BackgroundColor3 =
+        Color3.fromRGB(
+            35,
+            115,
+            70
         )
-    end
-)
 
-AddLabel(
-    "Sem Orion: a interface é local e não depende de biblioteca externa. " ..
-    "Os remotes só são usados quando encontrados no jogo.",
-    55
-)
+    Aplicar.Text = "Aplicar"
 
--- ================================================================
--- MINIMIZAR / FECHAR
--- ================================================================
+    Aplicar.TextColor3 =
+        Color3.new(1, 1, 1)
 
-local minimized = false
-local savedSize = Main.Size
+    Aplicar.Font =
+        Enum.Font.SourceSansBold
 
-RegistrarConexao(
-    Minimize.MouseButton1Click:Connect(function()
-        minimized = not minimized
+    Aplicar.TextSize = 13
+    Aplicar.Parent = Frame
 
-        if minimized then
-            savedSize = Main.Size
-            Content.Visible = false
-            Main.Size = UDim2.fromOffset(300, 42)
-            Minimize.Text = "+"
+    Instance.new(
+        "UICorner",
+        Aplicar
+    ).CornerRadius =
+        UDim.new(0, 6)
+
+    local Toggle =
+        Instance.new("TextButton")
+
+    Toggle.Size =
+        UDim2.new(
+            1,
+            -16,
+            0,
+            30
+        )
+
+    Toggle.Position =
+        UDim2.fromOffset(8, 76)
+
+    Toggle.TextColor3 =
+        Color3.new(1, 1, 1)
+
+    Toggle.Font =
+        Enum.Font.SourceSansBold
+
+    Toggle.TextSize = 13
+    Toggle.Parent = Frame
+
+    Instance.new(
+        "UICorner",
+        Toggle
+    ).CornerRadius =
+        UDim.new(0, 6)
+
+    local function AtualizarToggle()
+
+        if VelocidadeAtiva then
+
+            Toggle.Text =
+                "Velocidade: ATIVADA"
+
+            Toggle.BackgroundColor3 =
+                Color3.fromRGB(
+                    35,
+                    125,
+                    75
+                )
+
         else
-            Main.Size = savedSize
-            Content.Visible = true
-            Minimize.Text = "—"
+
+            Toggle.Text =
+                "Velocidade: DESATIVADA"
+
+            Toggle.BackgroundColor3 =
+                Color3.fromRGB(
+                    50,
+                    50,
+                    58
+                )
         end
-    end)
-)
+    end
 
-RegistrarConexao(
-    Close.MouseButton1Click:Connect(function()
-        PararTudo()
-    end)
-)
+    AtualizarToggle()
 
--- ================================================================
--- VELOCIDADE
--- ================================================================
+    Registrar(
+        Aplicar.MouseButton1Click:Connect(
+            function()
 
-RegistrarConexao(
-    RunService.RenderStepped:Connect(function()
-        if not Estado.Ativo or not Estado.Velocidade then
-            return
-        end
-
-        local humanoid = GetHumanoid()
-        local character = GetCharacter()
-
-        if not humanoid or not character then
-            return
-        end
-
-        local direction = humanoid.MoveDirection
-
-        if direction.Magnitude <= 0 then
-            return
-        end
-
-        pcall(function()
-            character:TranslateBy(
-                direction * (Estado.VelocidadeValor / 135)
-            )
-        end)
-    end)
-)
-
--- ================================================================
--- AUTO-CLIQUE
--- ================================================================
-
-RegistrarTask(
-    task.spawn(function()
-        local remote = nil
-
-        while Estado.Ativo do
-            task.wait(0.05)
-
-            if Estado.AutoClique then
-                if not remote or not remote.Parent then
-                    remote = FindRemote({
-                        "Click",
-                        "ClickEvent",
-                        "Tap",
-                    })
-                end
-
-                if remote then
-                    CallRemote(remote)
-                end
-            end
-        end
-    end)
-)
-
--- ================================================================
--- AUTO-CHOCAR
--- ================================================================
-
-RegistrarTask(
-    task.spawn(function()
-        local remote = nil
-
-        while Estado.Ativo do
-            task.wait(0.35)
-
-            if Estado.AutoChocar then
-                if not remote or not remote.Parent then
-                    remote = FindRemote({
-                        "BuyEgg",
-                        "OpenEgg",
-                        "PurchaseEgg",
-                    })
-                end
-
-                if remote then
-                    CallRemote(
-                        remote,
-                        Estado.EggAlvo,
-                        1
+                local valor =
+                    tonumber(
+                        Input.Text
                     )
+
+                if valor then
+
+                    Velocidade =
+                        math.clamp(
+                            valor,
+                            16,
+                            1000
+                        )
+
+                    Input.Text =
+                        tostring(
+                            Velocidade
+                        )
                 end
             end
-        end
-    end)
-)
+        )
+    )
 
--- ================================================================
--- AUTO-FUSÃO
--- ================================================================
+    Registrar(
+        Toggle.MouseButton1Click:Connect(
+            function()
 
-RegistrarTask(
-    task.spawn(function()
-        local remote = nil
+                VelocidadeAtiva =
+                    not VelocidadeAtiva
 
-        while Estado.Ativo do
-            task.wait(2)
+                AtualizarToggle()
+            end
+        )
+    )
 
-            if Estado.AutoFusao then
-                if not remote or not remote.Parent then
-                    remote = FindRemote({
-                        "CraftAll",
-                        "MergePets",
-                    })
-                end
+    -- Arrastar painel
+    local arrastando = false
+    local inicio
+    local posInicial
 
-                if remote then
-                    CallRemote(remote)
+    Registrar(
+        Frame.InputBegan:Connect(
+            function(input)
+
+                if input.UserInputType
+                    == Enum.UserInputType.MouseButton1
+                    or input.UserInputType
+                    == Enum.UserInputType.Touch then
+
+                    arrastando = true
+                    inicio = input.Position
+                    posInicial =
+                        Frame.Position
                 end
             end
-        end
-    end)
-)
+        )
+    )
 
--- ================================================================
--- AUTO FARM
--- ================================================================
+    Registrar(
+        UserInputService.InputChanged:Connect(
+            function(input)
 
-RegistrarTask(
-    task.spawn(function()
-        while Estado.Ativo do
-            task.wait(Estado.FarmDelay)
-
-            if Estado.AutoFarm and not glideLock then
-                local target =
-                    FindBestEgg(Estado.EggAlvo)
-
-                if not target then
-                    target = FindBestEgg(nil)
+                if not arrastando then
+                    return
                 end
 
-                if target then
-                    GlideTo(
-                        target.Position
-                            + Vector3.new(0, 2.5, 0),
-                        Estado.GlideSpeed
+                if input.UserInputType
+                    ~= Enum.UserInputType.MouseMovement
+                    and input.UserInputType
+                    ~= Enum.UserInputType.Touch then
+
+                    return
+                end
+
+                local delta =
+                    input.Position
+                    - inicio
+
+                Frame.Position =
+                    UDim2.new(
+                        posInicial.X.Scale,
+                        posInicial.X.Offset
+                            + delta.X,
+
+                        posInicial.Y.Scale,
+                        posInicial.Y.Offset
+                            + delta.Y
                     )
+            end
+        )
+    )
+
+    Registrar(
+        UserInputService.InputEnded:Connect(
+            function(input)
+
+                if input.UserInputType
+                    == Enum.UserInputType.MouseButton1
+                    or input.UserInputType
+                    == Enum.UserInputType.Touch then
+
+                    arrastando = false
                 end
             end
-        end
-    end)
+        )
+    )
+end
+
+-- ================================================================
+-- PRIMEIRO SCAN
+-- ================================================================
+
+pcall(ScanOvos)
+
+print(
+    "[RIDE A PET] Velocidade + radar de ovos ativos."
 )
-
--- ================================================================
--- RESPAWN
--- ================================================================
-
-RegistrarConexao(
-    LocalPlayer.CharacterAdded:Connect(function()
-        task.wait(1)
-        glideLock = false
-    end)
-)
-
--- ================================================================
--- FINAL
--- ================================================================
-
-print("[MONTAR UM PET] Hub iniciado.")
