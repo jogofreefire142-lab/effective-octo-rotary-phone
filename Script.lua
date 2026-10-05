@@ -1,5 +1,5 @@
 --[[
-    Ride A Pet - LAB v16
+    Ride A Pet - LAB v18
     Alvo exclusivo: [⚡] Ride A Pet / Montar um Pet
     Base técnica: estrutura pública observada em scripts open-source do jogo.
 
@@ -36,7 +36,7 @@ local function Main()
     -- Compatibilidade e limpeza de instancias antigas. Isto melhora estabilidade;
     -- nao tenta esconder o script nem contornar sistemas anti-cheat.
     local Env = (type(getgenv) == "function" and getgenv()) or _G
-    for _, oldKey in ipairs({"__RideAPet_COMPLETO_v13", "__RideAPet_COMPLETO_v14", "__RideAPet_COMPLETO_v15"}) do
+    for _, oldKey in ipairs({"__RideAPet_COMPLETO_v13", "__RideAPet_COMPLETO_v14", "__RideAPet_COMPLETO_v15", "__RideAPet_COMPLETO_v16"}) do
         local oldDestroy = Env[oldKey]
         if type(oldDestroy) == "function" then
             pcall(oldDestroy)
@@ -44,11 +44,11 @@ local function Main()
     end
     local ALLOWED_PLACE_ID = 124216119978534
     if tonumber(game.PlaceId) ~= ALLOWED_PLACE_ID then
-        warn("[RideAPet v16] Bloqueado fora do Monter um Pet. PlaceId=" .. tostring(game.PlaceId))
+        warn("[RideAPet v18] Bloqueado fora do Monter um Pet. PlaceId=" .. tostring(game.PlaceId))
         return
     end
 
-    local INSTANCE_KEY = "__RideAPet_COMPLETO_v16"
+    local INSTANCE_KEY = "__RideAPet_COMPLETO_v18"
     if type(Env[INSTANCE_KEY]) == "function" then
         pcall(Env[INSTANCE_KEY])
     end
@@ -66,12 +66,12 @@ local function Main()
     local UserInputService = GetService("UserInputService")
     local VirtualUser = GetService("VirtualUser")
     if not Players or not RunService or not TweenService or not ReplicatedStorage or not Workspace then
-        warn("[RideAPet v16] Servicos essenciais indisponiveis neste cliente.")
+        warn("[RideAPet v18] Servicos essenciais indisponiveis neste cliente.")
         return
     end
     local LocalPlayer = Players.LocalPlayer
     if not LocalPlayer then
-        warn("[RideAPet v16] LocalPlayer indisponível.")
+        warn("[RideAPet v18] LocalPlayer indisponível.")
         return
     end
 
@@ -126,6 +126,10 @@ local function Main()
         autoSell = false,
         autoFavorites = false,
         autoFarm = false,
+        autoRideBest = false,
+        rideBestMetric = "Speed",
+        autoServerHop = false,
+        serverHopInterval = 300,
         antiAFK = true,
         eggESP = false,
         espDistance = 5000,
@@ -133,6 +137,7 @@ local function Main()
         minLuck = 0,
         minWeight = 0,
         eggPriority = "Highest luck",
+        eggSearch = "",
         selectedEgg = "",
         selectedPetKey = "",
         selectedFood = "",
@@ -181,7 +186,7 @@ local function Main()
     local function Error(context, err)
         State.errors += 1
         Status(context .. ": " .. tostring(err))
-        warn("[RideAPet v16] " .. context .. ": " .. tostring(err))
+        warn("[RideAPet v18] " .. context .. ": " .. tostring(err))
     end
 
     local function Notify(title, content, duration)
@@ -274,6 +279,11 @@ local function Main()
             end
         else
             State.selectedMutations.None = true
+        end
+        if Data.Pets then
+            for name, data in pairs(Data.Pets) do
+                if type(data) == "table" then State.favoriteTypes[name] = true end
+            end
         end
     end
 
@@ -413,8 +423,20 @@ local function Main()
         end
     end
 
+    local function EnsureDismounted(token)
+        if Destroyed or (token and token ~= JobToken) then return false end
+        if LocalPlayer:GetAttribute("IsRiding") then
+            if not Fire("PetDismount") then return false end
+            if not WaitFor(function() return not LocalPlayer:GetAttribute("IsRiding") end, 3, token) then
+                return false
+            end
+        end
+        return true
+    end
+
     local function MoveTo(position, token, radius)
         if token ~= JobToken or Destroyed then return false end
+        if not EnsureDismounted(token) then return false end
         local character, humanoid, root = Character()
         if not character or not humanoid or not root then return false end
 
@@ -503,20 +525,60 @@ local function Main()
         end
     end
 
+    local Basket
+    local EggTools
+
     local function Home(token)
-        local _, _, root = Character()
+        if token ~= JobToken or Destroyed then return false end
         local plot = Plot()
         local base = plot and plot:FindFirstChild("Baseplate")
-        if not root or not plot or not base then return false end
+        local _, _, root = Character()
+        if not plot or not base or not root then return false end
+
         local point = base.CFrame:PointToObjectSpace(root.Position)
         local onPlot = math.abs(point.X) < base.Size.X / 2
             and math.abs(point.Z) < base.Size.Z / 2
             and math.abs(point.Y) < 35
+
+        if #Basket() > 0 then
+            local expected = {}
+            for _, egg in ipairs(Basket()) do
+                local name = egg:GetAttribute("Egg")
+                if name then expected[name] = (expected[name] or 0) + 1 end
+            end
+            local beforeTools = {}
+            for _, tool in ipairs(EggTools()) do beforeTools[tool] = true end
+
+            if not onPlot and not MoveTo(base.Position + Vector3.new(0, 3, 0), token, 12) then
+                return false
+            end
+
+            local function delivered()
+                if #Basket() > 0 then return false end
+                local received = {}
+                for _, tool in ipairs(EggTools()) do
+                    if not beforeTools[tool] then
+                        received[tool.Name] = (received[tool.Name] or 0) + 1
+                    end
+                end
+                for name, count in pairs(expected) do
+                    if (received[name] or 0) < count then return false end
+                end
+                return true
+            end
+
+            if not WaitFor(delivered, 4, token) then
+                Status("Entrega do ovo não confirmada.")
+                return false
+            end
+            return true
+        end
+
         if onPlot then return true end
         return MoveTo(base.Position + Vector3.new(0, 3, 0), token, 12)
     end
 
-    local function Basket()
+    Basket = function()
         local basket = LocalPlayer:FindFirstChild("Basket")
         return basket and basket:GetChildren() or {}
     end
@@ -527,7 +589,7 @@ local function Main()
         return config and config.Capacity or 1
     end
 
-    local function EggTools()
+    EggTools = function()
         local result = {}
         for _, tool in ipairs(Tools()) do
             if Data.Eggs and Data.Eggs[tool.Name] and not tool:GetAttribute("PetKey") then
@@ -627,6 +689,7 @@ local function Main()
         if row.Luck < State.minLuck then return false end
         if row.Weight < State.minWeight then return false end
         if row.Distance > State.maxCollectDistance then return false end
+        if State.eggSearch ~= "" and not string.find(string.lower(row.Name), string.lower(State.eggSearch), 1, true) then return false end
         return true
     end
 
@@ -938,6 +1001,42 @@ local function Main()
         end
         EndJob(token)
         return true
+    end
+
+    local function RideBestPet()
+        local pets = PetList()
+        if #pets == 0 then
+            Status("Nenhum pet encontrado para montar.")
+            return false
+        end
+        local metric = State.rideBestMetric == "Income" and "Income" or "Speed"
+        table.sort(pets, function(a, b)
+            local av, bv = tonumber(a[metric]) or 0, tonumber(b[metric]) or 0
+            if av == bv then return tostring(a.Key) < tostring(b.Key) end
+            return av > bv
+        end)
+        local best = pets[1]
+        local tool = Tool(nil, best.Key)
+        if not tool then
+            for _, candidate in ipairs(Tools()) do
+                if candidate:GetAttribute("PetKey") == best.Key then tool = candidate break end
+            end
+        end
+        if not tool or not Equip(tool) then
+            Status("Não foi possível equipar o melhor pet.")
+            return false
+        end
+        task.wait(0.25)
+        local deadline = os.clock() + 3
+        while os.clock() < deadline do
+            if LocalPlayer:GetAttribute("IsRiding") then
+                Status("Montado: " .. tostring(best.Name))
+                return true
+            end
+            task.wait(0.1)
+        end
+        Status("Pet equipado, mas a montagem não foi confirmada.")
+        return false
     end
 
     local function PlaceBestPets()
@@ -1258,6 +1357,25 @@ local function Main()
         return false
     end
 
+    local function ShouldFavorite(pet)
+        if not pet then return false end
+        if next(State.favoriteRarities) and not State.favoriteRarities[pet.Rarity] then return false end
+        if next(State.favoriteTypes) and not State.favoriteTypes[pet.Name] then return false end
+        return true
+    end
+
+    local function NextFavoritePet()
+        for _, pet in ipairs(InventoryPets()) do
+            if not pet.Favorite and ShouldFavorite(pet) then return pet end
+        end
+    end
+
+    local function AutoFavoriteOne()
+        local pet = NextFavoritePet()
+        if not pet then return false end
+        return FavoritePet(pet.Key)
+    end
+
     local function Dismount()
         if LocalPlayer:GetAttribute("IsRiding") then
             return Fire("PetDismount")
@@ -1490,6 +1608,7 @@ local function Main()
         State.autoPlace = false
         State.autoHatch = false
         State.autoBest = false
+        State.autoRideBest = false
         State.autoIndex = false
         State.autoFeed = false
         State.autoBuyFood = false
@@ -1559,62 +1678,743 @@ local function Main()
         return true
     end
 
-    -- Carrega Rayfield
-    local function LoadRayfield()
-        local urls = {
-            "https://sirius.menu/rayfield",
-            "https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua",
-        }
-        local compiler = loadstring or load
-        if type(game.HttpGet) ~= "function" or type(compiler) ~= "function" then
-            return nil, "HttpGet/loadstring (ou load) indisponivel"
+
+    local TeleportService = GetService("TeleportService")
+    local HttpService = GetService("HttpService")
+
+    local function RejoinServer()
+        if not TeleportService then
+            Notify("Servidor", "TeleportService indisponível.")
+            return false
         end
-        for _, url in ipairs(urls) do
-            local okHttp, source = pcall(function() return game:HttpGet(url) end)
-            if okHttp and type(source) == "string" and #source > 1000 then
-                local okCompile, chunk = pcall(function() return compiler(source) end)
-                if okCompile and type(chunk) == "function" then
-                    local okRun, library = pcall(chunk)
-                    if okRun and library then
-                        return library
+        local ok, err = pcall(function()
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+        end)
+        if not ok then Error("Rejoin", err) end
+        return ok
+    end
+
+    local function ServerHop()
+        if type(game.HttpGet) ~= "function" or not HttpService or not TeleportService then
+            Notify("Servidor", "API HTTP/Teleport não disponível neste executor.", 4)
+            return false
+        end
+        local cursor = ""
+        local url = "https://games.roblox.com/v1/games/" .. tostring(game.PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
+        if cursor ~= "" then url = url .. "&cursor=" .. cursor end
+        local ok, body = pcall(function() return game:HttpGet(url) end)
+        if not ok or type(body) ~= "string" then
+            Error("ServerHop", body)
+            return false
+        end
+        local decodeOk, data = pcall(function() return HttpService:JSONDecode(body) end)
+        if not decodeOk or type(data) ~= "table" then
+            Error("ServerHop", "resposta JSON inválida")
+            return false
+        end
+        local candidates = {}
+        for _, server in ipairs(data.data or {}) do
+            if server.id ~= game.JobId and tonumber(server.playing) and tonumber(server.maxPlayers) and server.playing < server.maxPlayers then
+                candidates[#candidates + 1] = server.id
+            end
+        end
+        if #candidates == 0 then
+            Notify("Servidor", "Nenhum servidor disponível encontrado.", 4)
+            return false
+        end
+        local jobId = candidates[math.random(1, #candidates)]
+        local teleOk, teleErr = pcall(function()
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, jobId, LocalPlayer)
+        end)
+        if not teleOk then Error("ServerHop", teleErr) end
+        return teleOk
+    end
+
+    ------------------------------------------------------------------------
+    -- UI BOOTSTRAP v18
+    -- Primaria: BobloUI; fallback: UUI; fallback: Rayfield; ultimo recurso:
+    -- UI nativa. O objetivo aqui e evitar o "executou e nao apareceu nada".
+    ------------------------------------------------------------------------
+
+    local UIBackend = ""
+    local UIReady = false
+
+    local function FetchText(url)
+        local methods = {}
+        if type(game.HttpGetAsync) == "function" then
+            table.insert(methods, function() return game:HttpGetAsync(url) end)
+        end
+        if type(game.HttpGet) == "function" then
+            table.insert(methods, function() return game:HttpGet(url) end)
+        end
+        local req = request or http_request
+        if type(req) == "function" then
+            table.insert(methods, function()
+                local r = req({Url = url, Method = "GET"})
+                if type(r) == "table" then
+                    return r.Body or r.body or r.ResponseBody
+                end
+                return r
+            end)
+        end
+        for _, fn in ipairs(methods) do
+            local ok, body = pcall(fn)
+            if ok and type(body) == "string" and #body > 500 then
+                return body
+            end
+        end
+        return nil
+    end
+
+    local function CompileText(source)
+        local compiler = loadstring or load
+        if type(compiler) ~= "function" or type(source) ~= "string" then
+            return nil
+        end
+        local ok, chunk = pcall(function() return compiler(source) end)
+        if ok and type(chunk) == "function" then
+            return chunk
+        end
+        return nil
+    end
+
+    local function LoadLibraryFrom(url)
+        local source = FetchText(url)
+        if not source then return nil, "download-failed" end
+        local chunk = CompileText(source)
+        if not chunk then return nil, "compile-failed" end
+        local ok, lib = pcall(chunk)
+        if not ok or not lib then return nil, "runtime-failed" end
+        return lib
+    end
+
+    local function SafeNotifyFallback(title, content, duration)
+        pcall(function()
+            local StarterGui = game:GetService("StarterGui")
+            StarterGui:SetCore("SendNotification", {
+                Title = tostring(title or "Ride A Pet"),
+                Text = tostring(content or ""),
+                Duration = tonumber(duration) or 4,
+            })
+        end)
+    end
+
+    local function MultiNormalize(values)
+        if type(values) ~= "table" then
+            return {values}
+        end
+        local isArray = (#values > 0)
+        if isArray then return values end
+        local out = {}
+        for key, value in pairs(values) do
+            if value then table.insert(out, key) end
+        end
+        table.sort(out)
+        return out
+    end
+
+    local function GetGuiParent()
+        local ok, parent
+        if type(gethui) == "function" then
+            ok, parent = pcall(gethui)
+            if ok and parent then return parent end
+        end
+        ok, parent = pcall(function() return game:GetService("CoreGui") end)
+        if ok and parent then return parent end
+        return LocalPlayer:WaitForChild("PlayerGui")
+    end
+
+    ------------------------------------------------------------------------
+    -- Adapter: BobloUI
+    ------------------------------------------------------------------------
+    local function BuildBobloAdapter(lib)
+        local backend = {Kind = "BobloUI", Root = nil}
+
+        function backend:Notify(title, content, duration)
+            local ui = self.Root
+            local ok = false
+            if ui and type(ui.Notify) == "function" then
+                ok = pcall(function()
+                    ui:Notify({
+                        Title = tostring(title or "Ride A Pet"),
+                        Content = tostring(content or ""),
+                        Duration = tonumber(duration) or 4,
+                        Type = "info",
+                    })
+                end)
+            end
+            if not ok then SafeNotifyFallback(title, content, duration) end
+        end
+
+        function backend:SaveConfiguration()
+            local ui = self.Root
+            pcall(function() if ui and ui.Config and ui.Config.Save then ui.Config:Save("Default") end end)
+        end
+        function backend:LoadConfiguration()
+            local ui = self.Root
+            pcall(function() if ui and ui.Config and ui.Config.Load then ui.Config:Load("Default") end end)
+        end
+        function backend:Destroy()
+            local ui = self.Root
+            pcall(function() if ui then ui:Destroy() end end)
+        end
+
+        function backend:CreateWindow()
+            local ui = lib:CreateWindow({
+                Id = "RideAPetLab",
+                Title = "Ride A Pet • LAB v18",
+                Icon = "gamepad-2",
+                Theme = "Dark",
+                FooterText = "Ride A Pet • stable bootstrap",
+                ConfigFolder = "RideAPetLab",
+                AutoLoad = true,
+                Singleton = true,
+            })
+            if not ui then return nil end
+            self.Root = ui
+            local window = {Root = ui}
+            function window:Destroy() backend:Destroy() end
+            function window:CreateTab(name, icon)
+                local page
+                local ok = pcall(function()
+                    page = ui:AddTab({Id = tostring(name), Title = tostring(name), Icon = "layout-dashboard"})
+                end)
+                if not ok or not page then return nil end
+                local tab = {Root = page, ParentWindow = window, _counter = 0}
+                local function nextId(prefix)
+                    tab._counter += 1
+                    return tostring(name) .. "_" .. prefix .. "_" .. tostring(tab._counter)
+                end
+                function tab:CreateSection(title)
+                    pcall(function()
+                        if page.AddSection then
+                            page:AddSection({Title = tostring(title), Layout = "Stack"})
+                        end
+                    end)
+                end
+                function tab:CreateParagraph(cfg)
+                    cfg = cfg or {}
+                    local obj
+                    local ok = pcall(function()
+                        obj = page:AddParagraph({
+                            Id = nextId("Paragraph"),
+                            Title = tostring(cfg.Title or ""),
+                            Content = tostring(cfg.Content or ""),
+                        })
+                    end)
+                    if not ok then obj = nil end
+                    local h = {Inner = obj}
+                    function h:Set(data)
+                        data = data or {}
+                        if self.Inner then
+                            local updated = false
+                            if type(self.Inner.Set) == "function" then
+                                local ok = pcall(function()
+                                    self.Inner:Set(tostring(data.Title or ""), tostring(data.Content or ""))
+                                end)
+                                updated = ok
+                            end
+                            if not updated then
+                                pcall(function()
+                                    if data.Title and type(self.Inner.SetTitle) == "function" then self.Inner:SetTitle(tostring(data.Title)) end
+                                    if data.Content and type(self.Inner.SetDescription) == "function" then self.Inner:SetDescription(tostring(data.Content)) end
+                                end)
+                            end
+                        end
                     end
+                    return h
+                end
+                function tab:CreateLabel(text)
+                    return self:CreateParagraph({Content = tostring(text or "")})
+                end
+                function tab:CreateButton(cfg)
+                    return page:AddButton({
+                        Id = nextId("Button"),
+                        Title = tostring(cfg.Name or "Button"),
+                        Text = "Run",
+                        Callback = cfg.Callback,
+                    })
+                end
+                function tab:CreateToggle(cfg)
+                    return page:AddToggle({
+                        Id = tostring(cfg.Flag or nextId("Toggle")),
+                        Title = tostring(cfg.Name or "Toggle"),
+                        Default = cfg.CurrentValue == true,
+                        Callback = cfg.Callback,
+                    })
+                end
+                function tab:CreateSlider(cfg)
+                    local range = cfg.Range or {0, 100}
+                    return page:AddSlider({
+                        Id = tostring(cfg.Flag or nextId("Slider")),
+                        Title = tostring(cfg.Name or "Slider"),
+                        Min = range[1],
+                        Max = range[2],
+                        Default = cfg.CurrentValue or range[1],
+                        Step = cfg.Increment or 1,
+                        Callback = cfg.Callback,
+                    })
+                end
+                function tab:CreateDropdown(cfg)
+                    local multiple = cfg.MultipleOptions == true
+                    local options = cfg.Options or {}
+                    local default = cfg.CurrentOption
+                    if multiple then
+                        local selected = {}
+                        for _, v in ipairs(MultiNormalize(default or options)) do selected[v] = true end
+                        return page:AddDropdown({
+                            Id = tostring(cfg.Flag or nextId("MultiDropdown")),
+                            Title = tostring(cfg.Name or "Dropdown"),
+                            Options = options,
+                            Default = selected,
+                            Multi = true,
+                            Callback = function(v)
+                                cfg.Callback(MultiNormalize(v))
+                            end,
+                        })
+                    end
+                    local def = type(default) == "table" and default[1] or default
+                    local obj = page:AddDropdown({
+                        Id = tostring(cfg.Flag or nextId("Dropdown")),
+                        Title = tostring(cfg.Name or "Dropdown"),
+                        Options = options,
+                        Default = def,
+                        Multi = false,
+                        Callback = cfg.Callback,
+                    })
+                    if obj then
+                        function obj:Refresh(newOptions)
+                            pcall(function()
+                                if self.AddValues then self:AddValues(newOptions or {}) end
+                            end)
+                        end
+                    end
+                    return obj
+                end
+                return tab
+            end
+            return window
+        end
+        return backend
+    end
+
+    ------------------------------------------------------------------------
+    -- Adapter: UUI (single-file, pure Luau fallback)
+    ------------------------------------------------------------------------
+    local function BuildUUIAdapter(lib)
+        local backend = {Kind = "UUI", Root = nil, Library = lib}
+        function backend:Notify(title, content, duration)
+            local ok = pcall(function()
+                lib:Notify({Title = tostring(title or "Ride A Pet"), Content = tostring(content or ""), Duration = tonumber(duration) or 4, Type = "success"})
+            end)
+            if not ok then SafeNotifyFallback(title, content, duration) end
+        end
+        function backend:SaveConfiguration() end
+        function backend:LoadConfiguration() end
+        function backend:Destroy() pcall(function() if self.Root then self.Root:Destroy() end end) end
+        function backend:CreateWindow()
+            local ui = lib:CreateWindow("Ride A Pet • LAB v18", {Keybind = "RightControl", Size = Vector2.new(560, 520)})
+            if not ui then return nil end
+            self.Root = ui
+            local window = {Root = ui}
+            function window:Destroy() backend:Destroy() end
+            function window:CreateTab(name)
+                local page = ui:CreateTab(tostring(name))
+                if not page then return nil end
+                local tab = {Root = page}
+                function tab:CreateSection(title) pcall(function() page:CreateLabel(tostring(title)) end) end
+                function tab:CreateLabel(text) return page:CreateLabel(tostring(text or "")) end
+                function tab:CreateParagraph(cfg) return page:CreateLabel((cfg.Title and (tostring(cfg.Title) .. "\n") or "") .. tostring(cfg.Content or "")) end
+                function tab:CreateButton(cfg) return page:CreateButton(tostring(cfg.Name or "Button"), cfg.Callback) end
+                function tab:CreateToggle(cfg) return page:CreateToggle(tostring(cfg.Name or "Toggle"), cfg.CurrentValue == true, cfg.Callback) end
+                function tab:CreateSlider(cfg)
+                    local range = cfg.Range or {0, 100}
+                    return page:CreateSlider(tostring(cfg.Name or "Slider"), range[1], range[2], cfg.CurrentValue or range[1], cfg.Callback)
+                end
+                function tab:CreateDropdown(cfg)
+                    local opts = cfg.Options or {}
+                    local default = type(cfg.CurrentOption) == "table" and cfg.CurrentOption[1] or cfg.CurrentOption
+                    local control = page:CreateDropdown(tostring(cfg.Name or "Dropdown"), opts, cfg.Callback, default)
+                    if control then
+                        function control:Refresh() end
+                    end
+                    return control
+                end
+                return tab
+            end
+            return window
+        end
+        return backend
+    end
+
+    ------------------------------------------------------------------------
+    -- Adapter: Rayfield (legacy fallback)
+    ------------------------------------------------------------------------
+    local function BuildRayfieldAdapter(lib)
+        local backend = {Kind = "Rayfield"}
+        function backend:Notify(title, content, duration)
+            pcall(function() lib:Notify({Title = title, Content = content, Duration = duration or 4}) end)
+        end
+        function backend:SaveConfiguration() pcall(function() lib:SaveConfiguration() end) end
+        function backend:LoadConfiguration() pcall(function() lib:LoadConfiguration() end) end
+        function backend:Destroy() end
+        function backend:CreateWindow(settings)
+            local window = {Root = lib:CreateWindow(settings)}
+            if not window.Root then return nil end
+            function window:Destroy() pcall(function() self.Root:Destroy() end) end
+            function window:CreateTab(name, icon) 
+                local page = self.Root:CreateTab(name, icon or 0)
+                return setmetatable({Root = page}, {__index = function(tab, key)
+                    if key == "CreateSection" then return function(_, title) return page:CreateSection(title) end end
+                    if key == "CreateLabel" then return function(_, text) return page:CreateLabel(text) end end
+                    if key == "CreateParagraph" then return function(_, cfg) return page:CreateParagraph(cfg) end end
+                    if key == "CreateButton" then return function(_, cfg) return page:CreateButton(cfg) end end
+                    if key == "CreateToggle" then return function(_, cfg) return page:CreateToggle(cfg) end end
+                    if key == "CreateSlider" then return function(_, cfg) return page:CreateSlider(cfg) end end
+                    if key == "CreateDropdown" then return function(_, cfg) return page:CreateDropdown(cfg) end end
+                end})
+            end
+            return window
+        end
+        return backend
+    end
+
+    ------------------------------------------------------------------------
+    -- Ultimo recurso: UI nativa. Ela existe apenas para garantir que o Delta
+    -- nunca fique silencioso quando uma biblioteca externa nao carrega.
+    ------------------------------------------------------------------------
+    local function BuildNativeAdapter()
+        local backend = {Kind = "Native"}
+        local playerGui = GetGuiParent()
+        local old = playerGui:FindFirstChild("RideAPet_NATIVE_v18")
+        if old then pcall(function() old:Destroy() end) end
+
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "RideAPet_NATIVE_v18"
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+        gui.Parent = playerGui
+
+        local root = Instance.new("Frame")
+        root.Size = UDim2.fromOffset(620, 440)
+        root.Position = UDim2.new(0.5, -310, 0.5, -220)
+        root.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
+        root.BorderSizePixel = 0
+        root.Parent = gui
+        Instance.new("UICorner", root).CornerRadius = UDim.new(0, 10)
+
+        local top = Instance.new("TextLabel")
+        top.Size = UDim2.new(1, 0, 0, 42)
+        top.BackgroundTransparency = 1
+        top.Text = "Ride A Pet • LAB v18  [NATIVE FALLBACK]"
+        top.TextColor3 = Color3.new(1,1,1)
+        top.Font = Enum.Font.GothamBold
+        top.TextSize = 16
+        top.Parent = root
+
+        local nav = Instance.new("ScrollingFrame")
+        nav.Size = UDim2.new(0, 145, 1, -42)
+        nav.Position = UDim2.fromOffset(0, 42)
+        nav.BackgroundColor3 = Color3.fromRGB(14, 16, 21)
+        nav.BorderSizePixel = 0
+        nav.ScrollBarThickness = 4
+        nav.Parent = root
+        local navLayout = Instance.new("UIListLayout", nav)
+        navLayout.Padding = UDim.new(0, 4)
+        local navPad = Instance.new("UIPadding", nav)
+        navPad.PaddingTop = UDim.new(0, 8)
+        navPad.PaddingLeft = UDim.new(0, 8)
+        navPad.PaddingRight = UDim.new(0, 8)
+
+        local body = Instance.new("ScrollingFrame")
+        body.Size = UDim2.new(1, -145, 1, -42)
+        body.Position = UDim2.new(0, 145, 0, 42)
+        body.BackgroundColor3 = Color3.fromRGB(21, 24, 30)
+        body.BorderSizePixel = 0
+        body.ScrollBarThickness = 5
+        body.Parent = root
+
+        local pages = {}
+        local order = 0
+
+        local function makeText(parent, text, h, size, bold)
+            local l = Instance.new("TextLabel")
+            l.Size = UDim2.new(1, -16, 0, h)
+            l.BackgroundTransparency = 1
+            l.TextXAlignment = Enum.TextXAlignment.Left
+            l.TextYAlignment = Enum.TextYAlignment.Center
+            l.TextWrapped = true
+            l.Text = tostring(text or "")
+            l.TextColor3 = Color3.fromRGB(235, 235, 240)
+            l.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
+            l.TextSize = size or 13
+            l.Parent = parent
+            return l
+        end
+
+        function backend:Notify(title, content, duration)
+            SafeNotifyFallback(title, content, duration)
+        end
+        function backend:SaveConfiguration() end
+        function backend:LoadConfiguration() end
+        function backend:Destroy() pcall(function() gui:Destroy() end) end
+        function backend:CreateWindow()
+            local window = {}
+            function window:Destroy() backend:Destroy() end
+            function window:CreateTab(name)
+                order += 1
+                local page = Instance.new("Frame")
+                page.Name = "Page_" .. tostring(order)
+                page.Size = UDim2.new(1, -16, 1, -16)
+                page.Position = UDim2.fromOffset(8, 8)
+                page.BackgroundTransparency = 1
+                page.Visible = (order == 1)
+                page.Parent = body
+                local list = Instance.new("UIListLayout", page)
+                list.Padding = UDim.new(0, 7)
+                local pad = Instance.new("UIPadding", page)
+                pad.PaddingLeft = UDim.new(0, 4)
+                pad.PaddingRight = UDim.new(0, 4)
+                local btn = Instance.new("TextButton")
+                btn.Size = UDim2.new(1, 0, 0, 34)
+                btn.BackgroundColor3 = Color3.fromRGB(30, 34, 42)
+                btn.Text = tostring(name)
+                btn.TextColor3 = Color3.new(1,1,1)
+                btn.Font = Enum.Font.GothamBold
+                btn.TextSize = 12
+                btn.Parent = nav
+                Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+                btn.Activated:Connect(function()
+                    for _, p in pairs(pages) do p.Visible = false end
+                    page.Visible = true
+                end)
+                pages[name] = page
+                local tab = {Root = page}
+                function tab:CreateSection(title) makeText(page, tostring(title), 28, 14, true) end
+                function tab:CreateLabel(text) return makeText(page, text, 28, 12, false) end
+                function tab:CreateParagraph(cfg)
+                    local l = makeText(page, (cfg.Title and (tostring(cfg.Title) .. "\n") or "") .. tostring(cfg.Content or ""), 60, 12, cfg.Title ~= nil)
+                    local h = {}
+                    function h:Set(data)
+                        l.Text = (data.Title and (tostring(data.Title) .. "\n") or "") .. tostring(data.Content or "")
+                    end
+                    return h
+                end
+                function tab:CreateButton(cfg)
+                    local b = Instance.new("TextButton")
+                    b.Size = UDim2.new(1, 0, 0, 36)
+                    b.BackgroundColor3 = Color3.fromRGB(42, 47, 58)
+                    b.Text = tostring(cfg.Name or "Button")
+                    b.TextColor3 = Color3.new(1,1,1)
+                    b.Font = Enum.Font.GothamBold
+                    b.TextSize = 12
+                    b.Parent = page
+                    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+                    b.Activated:Connect(function() pcall(cfg.Callback) end)
+                    return b
+                end
+                function tab:CreateToggle(cfg)
+                    local on = cfg.CurrentValue == true
+                    local b = Instance.new("TextButton")
+                    b.Size = UDim2.new(1, 0, 0, 36)
+                    b.BackgroundColor3 = on and Color3.fromRGB(34, 105, 74) or Color3.fromRGB(42, 47, 58)
+                    b.Text = tostring(cfg.Name or "Toggle") .. " : " .. (on and "ON" or "OFF")
+                    b.TextColor3 = Color3.new(1,1,1)
+                    b.Font = Enum.Font.Gotham
+                    b.TextSize = 12
+                    b.Parent = page
+                    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+                    b.Activated:Connect(function()
+                        on = not on
+                        b.Text = tostring(cfg.Name or "Toggle") .. " : " .. (on and "ON" or "OFF")
+                        b.BackgroundColor3 = on and Color3.fromRGB(34, 105, 74) or Color3.fromRGB(42, 47, 58)
+                        pcall(cfg.Callback, on)
+                    end)
+                    return b
+                end
+                function tab:CreateSlider(cfg)
+                    local f = Instance.new("Frame")
+                    f.Size = UDim2.new(1, 0, 0, 44)
+                    f.BackgroundTransparency = 1
+                    f.Parent = page
+                    makeText(f, tostring(cfg.Name or "Slider"), 20, 12, false).Size = UDim2.new(0.55,0,0,20)
+                    local box = Instance.new("TextBox")
+                    box.Size = UDim2.new(0.42, 0, 0, 28)
+                    box.Position = UDim2.new(0.58,0,0,0)
+                    box.BackgroundColor3 = Color3.fromRGB(34, 38, 46)
+                    box.TextColor3 = Color3.new(1,1,1)
+                    box.Text = tostring(cfg.CurrentValue or 0)
+                    box.ClearTextOnFocus = false
+                    box.Parent = f
+                    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+                    box.FocusLost:Connect(function()
+                        local n = tonumber(box.Text)
+                        if n then
+                            local range = cfg.Range or {0,100}
+                            n = math.clamp(n, range[1], range[2])
+                            if cfg.Increment then n = math.floor(n / cfg.Increment + 0.5) * cfg.Increment end
+                            box.Text = tostring(n)
+                            pcall(cfg.Callback, n)
+                        end
+                    end)
+                    return {SetValue = function(_,v) box.Text=tostring(v); pcall(cfg.Callback,v) end}
+                end
+                function tab:CreateDropdown(cfg)
+                    local options = cfg.Options or {}
+                    local multiple = cfg.MultipleOptions == true
+                    local selected = {}
+                    local initial = cfg.CurrentOption or options
+                    if multiple then
+                        for _, value in ipairs(type(initial) == "table" and initial or {initial}) do
+                            if value ~= nil then selected[tostring(value)] = true end
+                        end
+                    end
+                    local idx = 1
+                    local b = Instance.new("TextButton")
+                    b.Size = UDim2.new(1,0,0,36)
+                    b.BackgroundColor3 = Color3.fromRGB(42,47,58)
+                    b.TextColor3 = Color3.new(1,1,1)
+                    b.Font = Enum.Font.Gotham
+                    b.TextSize = 12
+                    b.TextWrapped = true
+                    b.Parent = page
+                    Instance.new("UICorner", b).CornerRadius = UDim.new(0,6)
+
+                    local function multiValues()
+                        local result = {}
+                        for _, value in ipairs(options) do
+                            if selected[tostring(value)] then result[#result+1] = value end
+                        end
+                        return result
+                    end
+                    local function refreshText()
+                        if #options == 0 then
+                            b.Text = tostring(cfg.Name or "Dropdown") .. " : -"
+                            return
+                        end
+                        if not multiple then
+                            b.Text = tostring(cfg.Name or "Dropdown") .. " : " .. tostring(options[idx] or options[1])
+                            return
+                        end
+                        local values = multiValues()
+                        local preview = #values == 0 and "None" or (#values <= 2 and table.concat(values, ", ") or (#values .. " selected"))
+                        b.Text = tostring(cfg.Name or "Dropdown") .. " : " .. preview
+                    end
+                    refreshText()
+                    b.Activated:Connect(function()
+                        if #options == 0 then return end
+                        if multiple then
+                            local value = tostring(options[idx] or options[1])
+                            selected[value] = not selected[value]
+                            refreshText()
+                            pcall(cfg.Callback, multiValues())
+                        else
+                            idx = idx % #options + 1
+                            refreshText()
+                            pcall(cfg.Callback, options[idx])
+                        end
+                    end)
+                    return {
+                        Refresh = function(_, newOptions)
+                            options = newOptions or {}
+                            idx = 1
+                            if multiple then
+                                local keep = {}
+                                for _, value in ipairs(options) do
+                                    if selected[tostring(value)] then keep[tostring(value)] = true end
+                                end
+                                selected = keep
+                            end
+                            refreshText()
+                        end,
+                        SetValue = function(_, value)
+                            if multiple then
+                                selected = {}
+                                for _, item in ipairs(type(value) == "table" and value or {value}) do selected[tostring(item)] = true end
+                                refreshText()
+                                pcall(cfg.Callback, multiValues())
+                            else
+                                for i, item in ipairs(options) do
+                                    if tostring(item) == tostring(value) then idx = i break end
+                                end
+                                refreshText()
+                                pcall(cfg.Callback, options[idx])
+                            end
+                        end,
+                    }
+                end
+                return tab
+            end
+            return window
+        end
+        return backend
+    end
+
+    local function BuildUI()
+        local attempts = {
+            {"NativeStable", nil, nil},
+            {"BobloUI", "https://raw.githubusercontent.com/bobloscript/BobloUI/main/dist/BobloUI.min.lua", BuildBobloAdapter},
+            {"UUI", "https://raw.githubusercontent.com/Distendo/UUI/refs/heads/main/UUI.lua", BuildUUIAdapter},
+            {"Rayfield", "https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua", BuildRayfieldAdapter},
+        }
+        for _, item in ipairs(attempts) do
+            local name, url, builder = item[1], item[2], item[3]
+            if name == "NativeStable" then
+                local ok, adapter = pcall(BuildNativeAdapter)
+                if ok and adapter then
+                    UIBackend = name
+                    UIReady = true
+                    State.compatibility.UI = name
+                    return adapter
+                end
+            else
+                local lib, reason = LoadLibraryFrom(url)
+                if lib then
+                    local ok, adapter = pcall(builder, lib)
+                    if ok and adapter then
+                        UIBackend = name
+                        UIReady = true
+                        State.compatibility.UI = name
+                        return adapter
+                    end
+                    warn("[RideAPet v18] " .. name .. " adapter falhou: " .. tostring(reason or "unknown"))
+                else
+                    warn("[RideAPet v18] " .. name .. " nao carregou: " .. tostring(reason))
                 end
             end
         end
-        return nil, "falha ao baixar/executar Rayfield"
+        UIBackend = "NativeFallback"
+        UIReady = true
+        State.compatibility.UI = UIBackend
+        return BuildNativeAdapter()
     end
 
     WaitForGameStructure(12)
     InitializeFilterDefaults()
     ProbeCompatibility()
-    local rayfieldError
-    Rayfield, rayfieldError = LoadRayfield()
+
+    Rayfield = BuildUI()
     if not Rayfield then
-        warn("[RideAPet v16] Rayfield não carregou: " .. tostring(rayfieldError))
-        return
+        error("Nenhum backend de interface conseguiu inicializar")
     end
 
     local okWindow, createdWindow = pcall(function()
         return Rayfield:CreateWindow({
-            Name = "Ride A Pet • LAB v16",
+            Name = "Ride A Pet • LAB v18",
             Icon = 0,
             LoadingTitle = "Ride A Pet",
-            LoadingSubtitle = "LAB v16 • estrutura real do jogo",
+            LoadingSubtitle = "LAB v18 • bootstrap resiliente",
             Theme = "Default",
             DisableRayfieldPrompts = true,
             DisableBuildWarnings = true,
-            ConfigurationSaving = {
-                Enabled = true,
-                FolderName = "RideAPetLab",
-                FileName = "RideAPet_v16",
-            },
+            ConfigurationSaving = {Enabled = true, FolderName = "RideAPetLab", FileName = "RideAPet_v18"},
             Discord = {Enabled = false},
             KeySystem = false,
         })
     end)
     if not okWindow or not createdWindow then
-        warn("[RideAPet v16] Falha criando janela.")
-        return
+        error("Falha criando a janela de interface via " .. tostring(UIBackend))
     end
     Window = createdWindow
 
@@ -1628,6 +2428,7 @@ local function Main()
     local Diagnostics = Window:CreateTab("Diagnóstico", 4483362458)
     local Player = Window:CreateTab("Jogador", 4483362458)
     local Config = Window:CreateTab("Config", 4483362458)
+    local Server = Window:CreateTab("Servidor", 4483362458)
 
     local DashboardInfo = Dashboard:CreateParagraph({
         Title = "Status",
@@ -1636,7 +2437,8 @@ local function Main()
 
     Dashboard:CreateParagraph({
         Title = "Compatibilidade do cliente",
-        Content = string.format("HttpGet: %s • Loader: %s • fireproximityprompt: %s • VirtualUser: %s",
+        Content = string.format("UI: %s • HttpGet: %s • Loader: %s • fireproximityprompt: %s • VirtualUser: %s",
+            State.compatibility.UI or UIBackend or "?",
             State.compatibility.HttpGet or "?",
             (State.compatibility.Loadstring == "OK" or State.compatibility.Load == "OK") and "OK" or "N/A",
             State.compatibility.FireProximityPrompt or "?",
@@ -1665,7 +2467,7 @@ local function Main()
 
     Dashboard:CreateParagraph({
         Title = "Funções com assinatura confirmada",
-        Content = "EggPickup • EggPlaced • Hatch • PickupPet • PlacePet • ClaimIndexReward • FeedPet • FavoritePet • BuyWithCash • PetDismount",
+        Content = "Confirmado: EggPickup • EggPlaced • Hatch • PickupPet • PlacePet • ClaimIndexReward • FeedPet • FavoritePet • BuyWithCash • PetDismount.\nRecursos de servidor são opcionais e dependem das APIs do executor.",
     })
 
     Farm:CreateSection("Loop principal")
@@ -1708,6 +2510,13 @@ local function Main()
         Callback = function(v) State.autoBest = v end,
     })
     Farm:CreateToggle({
+        Name = "Auto Montar Melhor Pet",
+        CurrentValue = false,
+        Flag = "AutoRideBest",
+        Callback = function(v) State.autoRideBest = v end,
+    })
+
+    Farm:CreateToggle({
         Name = "Auto Claim Index",
         CurrentValue = false,
         Flag = "AutoIndex",
@@ -1720,6 +2529,13 @@ local function Main()
         CurrentOption = {"Highest luck"},
         Flag = "EggPriority",
         Callback = function(v) State.eggPriority = type(v) == "table" and v[1] or v end,
+    })
+
+    Farm:CreateDropdown({
+        Name = "Métrica do melhor pet",
+        Options = {"Speed", "Income"},
+        CurrentOption = {State.rideBestMetric},
+        Callback = function(v) State.rideBestMetric = tostring(type(v) == "table" and v[1] or v) end,
     })
 
     Farm:CreateSlider({
@@ -1931,7 +2747,7 @@ local function Main()
     })
 
     Pets:CreateToggle({
-        Name = "Auto Favoritar selecionados",
+        Name = "Auto Favoritar pets compatíveis",
         CurrentValue = false,
         Flag = "AutoFavorites",
         Callback = function(v) State.autoFavorites = v end,
@@ -2139,6 +2955,20 @@ local function Main()
         end,
     })
 
+    Server:CreateSection("Servidor")
+    Server:CreateParagraph({
+        Title = "Controles de sessão",
+        Content = "Recursos genéricos de TeleportService/HTTP. Se o executor bloquear HTTP, a função apenas informa a limitação."
+    })
+    Server:CreateButton({
+        Name = "REENTRAR NO SERVIDOR ATUAL",
+        Callback = RejoinServer,
+    })
+    Server:CreateButton({
+        Name = "TROCAR DE SERVIDOR",
+        Callback = ServerHop,
+    })
+
     Config:CreateToggle({
         Name = "Anti-AFK",
         CurrentValue = true,
@@ -2197,63 +3027,77 @@ local function Main()
     })
 
     Config:CreateButton({
+        Name = "REPARAR REFERÊNCIAS AGORA",
+        Callback = function()
+            local ok, err = pcall(function()
+                RefreshGameReferences()
+                InitializeFilterDefaults()
+                if not SellAPI then InitSell() end
+                Status("Referências reparadas.")
+            end)
+            if not ok then Error("Repair", err) end
+        end,
+    })
+
+    Config:CreateButton({
         Name = "FECHAR",
         Callback = Destroy,
     })
 
+
     -- Respawn
     Connect(LocalPlayer.CharacterAdded, function()
         task.wait(0.8)
-        ApplyPlayerSettings()
+        pcall(RefreshGameReferences)
+        pcall(ApplyPlayerSettings)
     end)
 
-    -- Loop principal único para reduzir conflitos.
+    -- Loop principal único. Falha em uma função nao derruba as outras.
     task.spawn(function()
         while not Destroyed do
             if not Busy then
                 local ok, err = pcall(function()
-                    if State.autoIndex then
+                    if State.autoIndex and not IsPaused("AutoIndex") then
                         ClaimIndex()
-                    elseif State.autoHatch and #EggTimers() > 0 and EggTimers()[1].Remaining <= 0 then
+                    elseif State.autoHatch and not IsPaused("AutoHatch") and #EggTimers() > 0 and EggTimers()[1].Remaining <= 0 then
                         HatchReady()
-                    elseif State.autoPlace and #Basket() > 0 then
+                    elseif State.autoPlace and not IsPaused("AutoPlace") and #Basket() > 0 then
                         PlaceEggs()
-                    elseif State.autoBest then
+                    elseif State.autoBest and not IsPaused("AutoBest") then
                         PlaceBestPets()
-                    elseif State.autoFeed and State.selectedPetKey ~= "" and State.selectedFood ~= "" then
+                    elseif State.autoRideBest and not IsPaused("AutoRideBest") then
+                        if not LocalPlayer:GetAttribute("IsRiding") then RideBestPet() end
+                    elseif State.autoFeed and not IsPaused("AutoFeed") and State.selectedPetKey ~= "" and State.selectedFood ~= "" then
                         FeedPet(State.selectedPetKey, State.selectedFood)
-                    elseif State.autoBuyFood and State.selectedFood ~= "" then
+                    elseif State.autoBuyFood and not IsPaused("AutoBuyFood") and State.selectedFood ~= "" and State.selectedFood ~= "Nenhum" then
                         BuyFood(State.selectedFood, State.foodAmount)
-                    elseif State.autoSell then
+                    elseif State.autoSell and not IsPaused("AutoSell") then
                         local candidates = InventoryPets()
                         for _, pet in ipairs(candidates) do
                             if not State.sellFavoritesProtected or not pet.Favorite then
                                 if SellOne(pet.Key) then break end
                             end
                         end
-                    elseif State.autoCollect then
+                    elseif State.autoCollect and not IsPaused("AutoCollect") then
                         local list = EggList()
                         if list[1] then
                             CollectEgg(list[1])
-                        else
-                            Status("Aguardando ovo compatível com os filtros.")
                         end
-                    elseif State.autoFavorites and State.selectedPetKey ~= "" then
-                        FavoritePet(State.selectedPetKey)
+                    elseif State.autoFavorites and not IsPaused("AutoFavorites") then
+                        AutoFavoriteOne()
                     end
                 end)
-                if not ok then
-                    Error("Loop", err)
-                end
+                if not ok then RecordFailure("MainLoop", err) end
             end
             task.wait(0.35)
         end
     end)
 
-    -- Reparo leve de referencias do jogo, sem reinicializar a interface.
+    -- Manutencao das referencias do jogo.
     task.spawn(function()
         while not Destroyed do
-            pcall(RefreshGameReferences)
+            local ok, err = pcall(RefreshGameReferences)
+            if not ok then RecordFailure("ReferenceRefresh", err) end
             task.wait(5)
         end
     end)
@@ -2262,61 +3106,68 @@ local function Main()
     task.spawn(function()
         while not Destroyed do
             if State.eggESP then
-                pcall(function()
+                local ok, err = pcall(function()
                     RefreshEggESP()
                     UpdateEggESPText()
                 end)
+                if not ok then RecordFailure("EggESP", err) end
             end
-            task.wait(0.7)
+            task.wait(0.8)
         end
     end)
 
-    -- Status dashboard
+    -- Dashboard leve; quando a lib suporta Set(), atualiza. Caso contrario o
+    -- restante do script continua normalmente.
     task.spawn(function()
         while not Destroyed do
-            pcall(function()
+            local ok, err = pcall(function()
                 RefreshGameReferences()
                 if not SellAPI then InitSell() end
+                if DashboardInfo and DashboardInfo.Set then
+                    local rows = EggList()
+                    local pets = PetList()
+                    local timers = EggTimers()
+                    local cash = Value("Cash", 0)
+                    DashboardInfo:Set({
+                        Title = "Ride A Pet • LAB v18",
+                        Content = string.format(
+                            "UI: %s\nStatus: %s\nCash: %s\nOvos compatíveis: %d\nPets detectados: %d\nBasket: %d • Livres: %d • Plot: %d\n\nColetados: %d • Colocados: %d • Hatch: %d\nIndex: %d • Food: %d • Feed: %d • Sold: %d • Fav: %d\nErros: %d\nEstrutura: %s",
+                            tostring(UIBackend),
+                            tostring(State.status),
+                            FormatNumber(cash),
+                            #rows,
+                            #pets,
+                            #Basket(),
+                            #FreeNests(),
+                            #timers,
+                            State.collected,
+                            State.placed,
+                            State.hatched,
+                            State.claimed,
+                            State.boughtFood,
+                            State.fed,
+                            State.sold,
+                            State.favorited,
+                            State.errors,
+                            (GameRemotes and ActiveEggs and SavedData) and "OK" or "INCOMPLETA"
+                        )
+                    })
+                end
             end)
-            local rows = EggList()
-            local pets = PetList()
-            local timers = EggTimers()
-            local cash = Value("Cash", 0)
-            DashboardInfo:Set({
-                Title = "Ride A Pet • LAB v16",
-                Content = string.format(
-                    "Status: %s\nCash: %s\nOvos compatíveis: %d\nPets detectados: %d\nOvos no basket: %d\nNinhos livres: %d\nOvos no plot: %d\n\nColetados: %d • Colocados: %d • Hatch: %d\nIndex: %d • Food: %d • Feed: %d • Sold: %d • Fav: %d\nErros: %d\n\nEstrutura: %s",
-                    State.status,
-                    FormatNumber(cash),
-                    #rows,
-                    #pets,
-                    #Basket(),
-                    #FreeNests(),
-                    #timers,
-                    State.collected,
-                    State.placed,
-                    State.hatched,
-                    State.claimed,
-                    State.boughtFood,
-                    State.fed,
-                    State.sold,
-                    State.favorited,
-                    State.errors,
-                    (GameRemotes and ActiveEggs and SavedData) and "OK" or "INCOMPLETA"
-                )
-            })
-
-            task.wait(1)
+            if not ok then RecordFailure("Dashboard", err) end
+            task.wait(1.5)
         end
     end)
 
-    Status("LAB v16 carregado.")
+    ProbeCompatibility()
+    Status("LAB v18 carregado via " .. tostring(UIBackend) .. " • núcleo baseado em funções publicamente verificadas.")
     SetAntiAFK(State.antiAFK)
     ApplyPlayerSettings()
-    Notify("Ride A Pet", "LAB v16 carregado com estrutura real do jogo.", 4)
+    Notify("Ride A Pet", "Interface: " .. tostring(UIBackend) .. " • pronto.", 4)
+
 end
 
 local ok, err = xpcall(Main, debug.traceback)
 if not ok then
-    warn("[RideAPet v16] Erro fatal:\n" .. tostring(err))
+    warn("[RideAPet v18] Erro fatal:\n" .. tostring(err))
 end
