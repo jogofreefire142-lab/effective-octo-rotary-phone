@@ -1,28 +1,16 @@
 -- ================================================================
 -- MONTAR UM PET / RIDE A PET
--- SOMENTE:
--- 1. VELOCIDADE
--- 2. RADAR DE OVOS + RARIDADE
--- 3. POSIÇÃO EXATA X/Y/Z + DISTÂNCIA ATUALIZADA
+-- FASE 1:
+--   ⚡ ABA VELOCIDADE
+--   🥚 ABA OVOS (reservada para depois)
 -- ================================================================
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
-
--- ================================================================
--- CONFIGURAÇÃO
--- ================================================================
-
-local Velocidade = 150
-local VelocidadeAtiva = true
-
-local IntervaloScan = 1
-local IntervaloAtualizacao = 0.20
 
 -- ================================================================
 -- LIMPEZA DE EXECUÇÃO ANTERIOR
@@ -31,16 +19,18 @@ local IntervaloAtualizacao = 0.20
 local ENV = (getgenv and getgenv()) or _G
 
 pcall(function()
-    if ENV.__MONTAR_UM_PET_MINI
-        and ENV.__MONTAR_UM_PET_MINI.Stop then
+    if ENV.__MONTAR_UM_PET_TABS
+        and ENV.__MONTAR_UM_PET_TABS.Stop then
 
-        ENV.__MONTAR_UM_PET_MINI.Stop()
+        ENV.__MONTAR_UM_PET_TABS.Stop()
     end
 end)
 
 local Ativo = true
+local Velocidade = 150
+local VelocidadeAtiva = false
+
 local Conexoes = {}
-local OvosRadar = {}
 
 local function Registrar(conexao)
     if conexao then
@@ -48,22 +38,6 @@ local function Registrar(conexao)
     end
 
     return conexao
-end
-
-local function LimparRadar()
-    for _, dados in pairs(OvosRadar) do
-
-        pcall(function()
-            if dados.Marker
-                and dados.Marker.Parent then
-
-                dados.Marker:Destroy()
-            end
-        end)
-
-    end
-
-    table.clear(OvosRadar)
 end
 
 local function PararTudo()
@@ -76,13 +50,11 @@ local function PararTudo()
     end
 
     table.clear(Conexoes)
-    LimparRadar()
 
     pcall(function()
-        local gui =
-            CoreGui:FindFirstChild(
-                "MontarUmPetMini"
-            )
+        local gui = CoreGui:FindFirstChild(
+            "MontarUmPetTabs"
+        )
 
         if gui then
             gui:Destroy()
@@ -93,10 +65,9 @@ local function PararTudo()
         if gethui then
             local hui = gethui()
 
-            local gui =
-                hui:FindFirstChild(
-                    "MontarUmPetMini"
-                )
+            local gui = hui:FindFirstChild(
+                "MontarUmPetTabs"
+            )
 
             if gui then
                 gui:Destroy()
@@ -105,7 +76,7 @@ local function PararTudo()
     end)
 end
 
-ENV.__MONTAR_UM_PET_MINI = {
+ENV.__MONTAR_UM_PET_TABS = {
     Stop = PararTudo
 }
 
@@ -129,396 +100,9 @@ local function GetHumanoid()
     )
 end
 
-local function GetRoot()
-    local character = GetCharacter()
-
-    if not character then
-        return nil
-    end
-
-    return character:FindFirstChild(
-        "HumanoidRootPart"
-    )
-end
-
--- ================================================================
--- RARIDADE
--- ================================================================
-
-local function ClassificarRaridade(nome)
-    local n =
-        string.lower(tostring(nome or ""))
-
-    if string.find(n, "secret", 1, true)
-        or string.find(n, "divine", 1, true)
-        or string.find(n, "god", 1, true) then
-
-        return "🌌 Secreto",
-            Color3.fromRGB(255, 0, 255)
-
-    elseif string.find(n, "myth", 1, true)
-        or string.find(n, "mitic", 1, true) then
-
-        return "🔥 Mítico",
-            Color3.fromRGB(255, 60, 60)
-
-    elseif string.find(n, "legend", 1, true)
-        or string.find(n, "lend", 1, true) then
-
-        return "👑 Lendário",
-            Color3.fromRGB(255, 170, 0)
-
-    elseif string.find(n, "epic", 1, true)
-        or string.find(n, "epico", 1, true) then
-
-        return "🔮 Épico",
-            Color3.fromRGB(170, 60, 255)
-
-    elseif string.find(n, "rare", 1, true)
-        or string.find(n, "raro", 1, true) then
-
-        return "🔵 Raro",
-            Color3.fromRGB(60, 160, 255)
-    end
-
-    return "⚪ Comum",
-        Color3.fromRGB(220, 220, 220)
-end
-
--- ================================================================
--- LOCALIZAÇÃO DOS OVOS
--- ================================================================
-
-local function EhOvo(nome)
-    local n =
-        string.lower(tostring(nome or ""))
-
-    return string.find(
-        n,
-        "egg",
-        1,
-        true
-    ) ~= nil
-        or string.find(
-            n,
-            "ovo",
-            1,
-            true
-        ) ~= nil
-end
-
-local function EncontrarModeloOvo(obj)
-    local atual = obj
-    local encontrado = nil
-
-    while atual do
-
-        if atual:IsA("Model")
-            and EhOvo(atual.Name) then
-
-            encontrado = atual
-        end
-
-        atual = atual.Parent
-    end
-
-    return encontrado
-end
-
-local function ObterParte(modelo)
-    if not modelo then
-        return nil
-    end
-
-    if modelo:IsA("BasePart") then
-        return modelo
-    end
-
-    if modelo:IsA("Model") then
-
-        if modelo.PrimaryPart then
-            return modelo.PrimaryPart
-        end
-
-        return modelo:FindFirstChildWhichIsA(
-            "BasePart",
-            true
-        )
-    end
-
-    return nil
-end
-
-local function ObterPosicao(modelo)
-    if not modelo
-        or not modelo.Parent then
-
-        return nil
-    end
-
-    if modelo:IsA("Model") then
-
-        local ok, pivot =
-            pcall(function()
-                return modelo:GetPivot()
-            end)
-
-        if ok and pivot then
-            return pivot.Position
-        end
-    end
-
-    local parte = ObterParte(modelo)
-
-    return parte and parte.Position
-        or nil
-end
-
--- ================================================================
--- CRIAÇÃO DO ESP
--- ================================================================
-
-local function CriarRadar(modelo)
-    if OvosRadar[modelo] then
-        return
-    end
-
-    local parte = ObterParte(modelo)
-
-    if not parte then
-        return
-    end
-
-    local raridade, cor =
-        ClassificarRaridade(modelo.Name)
-
-    local marker = Instance.new("Folder")
-    marker.Name = "RadarOvo"
-    marker.Parent = parte
-
-    -- Caixa através da parede
-    local box =
-        Instance.new("BoxHandleAdornment")
-
-    box.Name = "OvoBox"
-    box.Adornee = parte
-    box.Size =
-        parte.Size
-        + Vector3.new(0.3, 0.3, 0.3)
-
-    box.Color3 = cor
-    box.Transparency = 0.60
-    box.AlwaysOnTop = true
-    box.ZIndex = 10
-    box.Parent = marker
-
-    -- Texto
-    local billboard =
-        Instance.new("BillboardGui")
-
-    billboard.Name = "OvoInfo"
-    billboard.Adornee = parte
-    billboard.Size =
-        UDim2.fromOffset(260, 90)
-
-    billboard.StudsOffset =
-        Vector3.new(0, 4, 0)
-
-    billboard.AlwaysOnTop = true
-    billboard.Parent = marker
-
-    local label =
-        Instance.new("TextLabel")
-
-    label.Size =
-        UDim2.fromScale(1, 1)
-
-    label.BackgroundTransparency = 1
-
-    label.TextColor3 = cor
-    label.TextStrokeTransparency = 0
-    label.TextStrokeColor3 =
-        Color3.fromRGB(0, 0, 0)
-
-    label.Font =
-        Enum.Font.SourceSansBold
-
-    label.TextSize = 14
-    label.TextWrapped = true
-
-    label.Parent = billboard
-
-    OvosRadar[modelo] = {
-        Marker = marker,
-        Box = box,
-        Billboard = billboard,
-        Label = label,
-        Part = parte,
-        Raridade = raridade,
-    }
-end
-
-local function RemoverRadar(modelo)
-    local dados =
-        OvosRadar[modelo]
-
-    if not dados then
-        return
-    end
-
-    pcall(function()
-        if dados.Marker
-            and dados.Marker.Parent then
-
-            dados.Marker:Destroy()
-        end
-    end)
-
-    OvosRadar[modelo] = nil
-end
-
--- ================================================================
--- SCAN DOS OVOS
--- ================================================================
-
-local function ScanContainer(container, encontrados)
-    if not container then
-        return
-    end
-
-    for _, objeto in ipairs(
-        container:GetDescendants()
-    ) do
-
-        local modeloOvo =
-            EncontrarModeloOvo(objeto)
-
-        if modeloOvo then
-
-            encontrados[modeloOvo] = true
-
-            if not OvosRadar[modeloOvo] then
-                CriarRadar(modeloOvo)
-            end
-        end
-    end
-end
-
-local function ScanOvos()
-    if not Ativo then
-        return
-    end
-
-    local encontrados = {}
-
-    local renderedEggs =
-        Workspace:FindFirstChild(
-            "RenderedEggs",
-            true
-        )
-
-    local eggSpawns =
-        Workspace:FindFirstChild(
-            "EggSpawns",
-            true
-        )
-
-    ScanContainer(
-        renderedEggs,
-        encontrados
-    )
-
-    ScanContainer(
-        eggSpawns,
-        encontrados
-    )
-
-    -- Remove ovos que desapareceram
-    for modelo in pairs(OvosRadar) do
-
-        if not encontrados[modelo]
-            or not modelo.Parent then
-
-            RemoverRadar(modelo)
-        end
-    end
-end
-
--- ================================================================
--- ATUALIZAÇÃO CONTÍNUA DAS POSIÇÕES
--- ================================================================
-
-task.spawn(function()
-
-    while Ativo do
-
-        local root = GetRoot()
-
-        if root then
-
-            for modelo, dados in pairs(
-                OvosRadar
-            ) do
-
-                if modelo.Parent
-                    and dados.Part
-                    and dados.Part.Parent
-                    and dados.Label.Parent then
-
-                    local pos =
-                        ObterPosicao(modelo)
-
-                    if pos then
-
-                        local distancia =
-                            (
-                                root.Position
-                                - pos
-                            ).Magnitude
-
-                        dados.Label.Text =
-                            string.format(
-                                "%s\n%s\nX: %.1f  Y: %.1f  Z: %.1f\nDistância: %.1f studs",
-                                modelo.Name,
-                                dados.Raridade,
-                                pos.X,
-                                pos.Y,
-                                pos.Z,
-                                distancia
-                            )
-                    end
-                else
-
-                    RemoverRadar(modelo)
-                end
-            end
-        end
-
-        task.wait(
-            IntervaloAtualizacao
-        )
-    end
-end)
-
--- ================================================================
--- SCAN PERIÓDICO
--- ================================================================
-
-task.spawn(function()
-
-    while Ativo do
-
-        pcall(ScanOvos)
-
-        task.wait(
-            IntervaloScan
-        )
-    end
-end)
-
 -- ================================================================
 -- VELOCIDADE
--- Fórmula do arquivo original
+-- MESMA FÓRMULA DO ARQUIVO ORIGINAL
 -- ================================================================
 
 Registrar(
@@ -531,11 +115,8 @@ Registrar(
                 return
             end
 
-            local character =
-                GetCharacter()
-
-            local humanoid =
-                GetHumanoid()
+            local character = GetCharacter()
+            local humanoid = GetHumanoid()
 
             if not character
                 or not humanoid then
@@ -551,27 +132,23 @@ Registrar(
             end
 
             pcall(function()
-
                 character:TranslateBy(
                     direcao
                     * (Velocidade / 135)
                 )
-
             end)
         end
     )
 )
 
 -- ================================================================
--- PEQUENO PAINEL DE VELOCIDADE
+-- PARENT DA INTERFACE
 -- ================================================================
 
 local function GetGuiParent()
 
     if gethui then
-
-        local ok, hui =
-            pcall(gethui)
+        local ok, hui = pcall(gethui)
 
         if ok and hui then
             return hui
@@ -581,326 +158,711 @@ local function GetGuiParent()
     return CoreGui
 end
 
-local guiParent =
-    GetGuiParent()
+local GuiParent = GetGuiParent()
 
-if guiParent then
-
-    local ScreenGui =
-        Instance.new("ScreenGui")
-
-    ScreenGui.Name =
-        "MontarUmPetMini"
-
-    ScreenGui.ResetOnSpawn = false
-    ScreenGui.Parent = guiParent
-
-    local Frame =
-        Instance.new("Frame")
-
-    Frame.Size =
-        UDim2.fromOffset(190, 115)
-
-    Frame.Position =
-        UDim2.new(
-            0.04,
-            0,
-            0.20,
-            0
-        )
-
-    Frame.BackgroundColor3 =
-        Color3.fromRGB(
-            18,
-            18,
-            24
-        )
-
-    Frame.BorderSizePixel = 0
-    Frame.Active = true
-    Frame.Parent = ScreenGui
-
-    Instance.new(
-        "UICorner",
-        Frame
-    ).CornerRadius =
-        UDim.new(0, 9)
-
-    local Title =
-        Instance.new("TextLabel")
-
-    Title.Size =
-        UDim2.new(
-            1,
-            -10,
-            0,
-            28
-        )
-
-    Title.Position =
-        UDim2.fromOffset(8, 3)
-
-    Title.BackgroundTransparency = 1
-    Title.Text =
-        "⚡ Velocidade"
-
-    Title.TextColor3 =
-        Color3.new(1, 1, 1)
-
-    Title.Font =
-        Enum.Font.SourceSansBold
-
-    Title.TextSize = 15
-    Title.TextXAlignment =
-        Enum.TextXAlignment.Left
-
-    Title.Parent = Frame
-
-    local Input =
-        Instance.new("TextBox")
-
-    Input.Size =
-        UDim2.fromOffset(105, 32)
-
-    Input.Position =
-        UDim2.fromOffset(8, 35)
-
-    Input.BackgroundColor3 =
-        Color3.fromRGB(
-            30,
-            30,
-            38
-        )
-
-    Input.Text =
-        tostring(Velocidade)
-
-    Input.TextColor3 =
-        Color3.new(1, 1, 1)
-
-    Input.Font =
-        Enum.Font.SourceSans
-
-    Input.TextSize = 14
-    Input.ClearTextOnFocus = false
-    Input.Parent = Frame
-
-    Instance.new(
-        "UICorner",
-        Input
-    ).CornerRadius =
-        UDim.new(0, 6)
-
-    local Aplicar =
-        Instance.new("TextButton")
-
-    Aplicar.Size =
-        UDim2.fromOffset(60, 32)
-
-    Aplicar.Position =
-        UDim2.fromOffset(120, 35)
-
-    Aplicar.BackgroundColor3 =
-        Color3.fromRGB(
-            35,
-            115,
-            70
-        )
-
-    Aplicar.Text = "Aplicar"
-
-    Aplicar.TextColor3 =
-        Color3.new(1, 1, 1)
-
-    Aplicar.Font =
-        Enum.Font.SourceSansBold
-
-    Aplicar.TextSize = 13
-    Aplicar.Parent = Frame
-
-    Instance.new(
-        "UICorner",
-        Aplicar
-    ).CornerRadius =
-        UDim.new(0, 6)
-
-    local Toggle =
-        Instance.new("TextButton")
-
-    Toggle.Size =
-        UDim2.new(
-            1,
-            -16,
-            0,
-            30
-        )
-
-    Toggle.Position =
-        UDim2.fromOffset(8, 76)
-
-    Toggle.TextColor3 =
-        Color3.new(1, 1, 1)
-
-    Toggle.Font =
-        Enum.Font.SourceSansBold
-
-    Toggle.TextSize = 13
-    Toggle.Parent = Frame
-
-    Instance.new(
-        "UICorner",
-        Toggle
-    ).CornerRadius =
-        UDim.new(0, 6)
-
-    local function AtualizarToggle()
-
-        if VelocidadeAtiva then
-
-            Toggle.Text =
-                "Velocidade: ATIVADA"
-
-            Toggle.BackgroundColor3 =
-                Color3.fromRGB(
-                    35,
-                    125,
-                    75
-                )
-
-        else
-
-            Toggle.Text =
-                "Velocidade: DESATIVADA"
-
-            Toggle.BackgroundColor3 =
-                Color3.fromRGB(
-                    50,
-                    50,
-                    58
-                )
-        end
-    end
-
-    AtualizarToggle()
-
-    Registrar(
-        Aplicar.MouseButton1Click:Connect(
-            function()
-
-                local valor =
-                    tonumber(
-                        Input.Text
-                    )
-
-                if valor then
-
-                    Velocidade =
-                        math.clamp(
-                            valor,
-                            16,
-                            1000
-                        )
-
-                    Input.Text =
-                        tostring(
-                            Velocidade
-                        )
-                end
-            end
-        )
+if not GuiParent then
+    warn(
+        "[MONTAR UM PET] Não foi possível criar a interface."
     )
 
-    Registrar(
-        Toggle.MouseButton1Click:Connect(
-            function()
-
-                VelocidadeAtiva =
-                    not VelocidadeAtiva
-
-                AtualizarToggle()
-            end
-        )
-    )
-
-    -- Arrastar painel
-    local arrastando = false
-    local inicio
-    local posInicial
-
-    Registrar(
-        Frame.InputBegan:Connect(
-            function(input)
-
-                if input.UserInputType
-                    == Enum.UserInputType.MouseButton1
-                    or input.UserInputType
-                    == Enum.UserInputType.Touch then
-
-                    arrastando = true
-                    inicio = input.Position
-                    posInicial =
-                        Frame.Position
-                end
-            end
-        )
-    )
-
-    Registrar(
-        UserInputService.InputChanged:Connect(
-            function(input)
-
-                if not arrastando then
-                    return
-                end
-
-                if input.UserInputType
-                    ~= Enum.UserInputType.MouseMovement
-                    and input.UserInputType
-                    ~= Enum.UserInputType.Touch then
-
-                    return
-                end
-
-                local delta =
-                    input.Position
-                    - inicio
-
-                Frame.Position =
-                    UDim2.new(
-                        posInicial.X.Scale,
-                        posInicial.X.Offset
-                            + delta.X,
-
-                        posInicial.Y.Scale,
-                        posInicial.Y.Offset
-                            + delta.Y
-                    )
-            end
-        )
-    )
-
-    Registrar(
-        UserInputService.InputEnded:Connect(
-            function(input)
-
-                if input.UserInputType
-                    == Enum.UserInputType.MouseButton1
-                    or input.UserInputType
-                    == Enum.UserInputType.Touch then
-
-                    arrastando = false
-                end
-            end
-        )
-    )
+    PararTudo()
+    return
 end
 
 -- ================================================================
--- PRIMEIRO SCAN
+-- GUI PRINCIPAL
 -- ================================================================
 
-pcall(ScanOvos)
+local ScreenGui = Instance.new("ScreenGui")
+
+ScreenGui.Name = "MontarUmPetTabs"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior =
+    Enum.ZIndexBehavior.Sibling
+
+ScreenGui.Parent = GuiParent
+
+local Main = Instance.new("Frame")
+
+Main.Size = UDim2.fromOffset(270, 190)
+Main.Position = UDim2.new(
+    0.05,
+    0,
+    0.18,
+    0
+)
+
+Main.BackgroundColor3 =
+    Color3.fromRGB(15, 15, 20)
+
+Main.BorderSizePixel = 0
+Main.Active = true
+Main.Parent = ScreenGui
+
+Instance.new(
+    "UICorner",
+    Main
+).CornerRadius =
+    UDim.new(0, 10)
+
+local Stroke = Instance.new("UIStroke")
+
+Stroke.Color =
+    Color3.fromRGB(55, 55, 65)
+
+Stroke.Thickness = 1
+Stroke.Parent = Main
+
+-- ================================================================
+-- CABEÇALHO
+-- ================================================================
+
+local Header = Instance.new("Frame")
+
+Header.Size = UDim2.new(
+    1,
+    0,
+    0,
+    34
+)
+
+Header.BackgroundTransparency = 1
+Header.Parent = Main
+
+local Title = Instance.new("TextLabel")
+
+Title.Size = UDim2.new(
+    1,
+    -50,
+    1,
+    0
+)
+
+Title.Position =
+    UDim2.fromOffset(
+        10,
+        0
+    )
+
+Title.BackgroundTransparency = 1
+Title.Text = "⚡ MONTAR UM PET"
+Title.TextColor3 =
+    Color3.new(1, 1, 1)
+
+Title.Font =
+    Enum.Font.SourceSansBold
+
+Title.TextSize = 15
+Title.TextXAlignment =
+    Enum.TextXAlignment.Left
+
+Title.Parent = Header
+
+local Fechar = Instance.new("TextButton")
+
+Fechar.Size =
+    UDim2.fromOffset(
+        28,
+        26
+    )
+
+Fechar.Position =
+    UDim2.new(
+        1,
+        -34,
+        0,
+        4
+    )
+
+Fechar.BackgroundColor3 =
+    Color3.fromRGB(85, 40, 40)
+
+Fechar.Text = "×"
+
+Fechar.TextColor3 =
+    Color3.new(1, 1, 1)
+
+Fechar.Font =
+    Enum.Font.SourceSansBold
+
+Fechar.TextSize = 18
+Fechar.Parent = Header
+
+Instance.new(
+    "UICorner",
+    Fechar
+).CornerRadius =
+    UDim.new(0, 6)
+
+-- ================================================================
+-- ÁREA DAS ABAS
+-- ================================================================
+
+local TabsBar = Instance.new("Frame")
+
+TabsBar.Size = UDim2.new(
+    1,
+    -12,
+    0,
+    34
+)
+
+TabsBar.Position =
+    UDim2.fromOffset(
+        6,
+        37
+    )
+
+TabsBar.BackgroundTransparency = 1
+TabsBar.Parent = Main
+
+local VelTab = Instance.new("TextButton")
+
+VelTab.Size =
+    UDim2.new(
+        0.5,
+        -3,
+        1,
+        0
+    )
+
+VelTab.Position =
+    UDim2.fromOffset(
+        0,
+        0
+    )
+
+VelTab.BackgroundColor3 =
+    Color3.fromRGB(
+        40,
+        110,
+        70
+    )
+
+VelTab.Text =
+    "⚡ Velocidade"
+
+VelTab.TextColor3 =
+    Color3.new(1, 1, 1)
+
+VelTab.Font =
+    Enum.Font.SourceSansBold
+
+VelTab.TextSize = 13
+VelTab.Parent = TabsBar
+
+Instance.new(
+    "UICorner",
+    VelTab
+).CornerRadius =
+    UDim.new(0, 7)
+
+local OvoTab = Instance.new("TextButton")
+
+OvoTab.Size =
+    UDim2.new(
+        0.5,
+        -3,
+        1,
+        0
+    )
+
+OvoTab.Position =
+    UDim2.new(
+        0.5,
+        3,
+        0,
+        0
+    )
+
+OvoTab.BackgroundColor3 =
+    Color3.fromRGB(
+        45,
+        45,
+        55
+    )
+
+OvoTab.Text =
+    "🥚 Ovos"
+
+OvoTab.TextColor3 =
+    Color3.new(1, 1, 1)
+
+OvoTab.Font =
+    Enum.Font.SourceSansBold
+
+OvoTab.TextSize = 13
+OvoTab.Parent = TabsBar
+
+Instance.new(
+    "UICorner",
+    OvoTab
+).CornerRadius =
+    UDim.new(0, 7)
+
+-- ================================================================
+-- PÁGINA VELOCIDADE
+-- ================================================================
+
+local VelPage = Instance.new("Frame")
+
+VelPage.Size = UDim2.new(
+    1,
+    -12,
+    1,
+    -80
+)
+
+VelPage.Position =
+    UDim2.fromOffset(
+        6,
+        76
+    )
+
+VelPage.BackgroundTransparency = 1
+VelPage.Parent = Main
+
+local Input = Instance.new("TextBox")
+
+Input.Size =
+    UDim2.new(
+        0.60,
+        -4,
+        0,
+        34
+    )
+
+Input.Position =
+    UDim2.fromOffset(
+        0,
+        5
+    )
+
+Input.BackgroundColor3 =
+    Color3.fromRGB(
+        28,
+        28,
+        36
+    )
+
+Input.Text =
+    tostring(Velocidade)
+
+Input.TextColor3 =
+    Color3.new(1, 1, 1)
+
+Input.PlaceholderText =
+    "Velocidade"
+
+Input.PlaceholderColor3 =
+    Color3.fromRGB(
+        130,
+        130,
+        140
+    )
+
+Input.Font =
+    Enum.Font.SourceSans
+
+Input.TextSize = 14
+Input.ClearTextOnFocus = false
+Input.Parent = VelPage
+
+Instance.new(
+    "UICorner",
+    Input
+).CornerRadius =
+    UDim.new(0, 7)
+
+local Aplicar = Instance.new("TextButton")
+
+Aplicar.Size =
+    UDim2.new(
+        0.40,
+        -4,
+        0,
+        34
+    )
+
+Aplicar.Position =
+    UDim2.new(
+        0.60,
+        4,
+        0,
+        5
+    )
+
+Aplicar.BackgroundColor3 =
+    Color3.fromRGB(
+        40,
+        110,
+        70
+    )
+
+Aplicar.Text =
+    "Aplicar"
+
+Aplicar.TextColor3 =
+    Color3.new(1, 1, 1)
+
+Aplicar.Font =
+    Enum.Font.SourceSansBold
+
+Aplicar.TextSize = 13
+Aplicar.Parent = VelPage
+
+Instance.new(
+    "UICorner",
+    Aplicar
+).CornerRadius =
+    UDim.new(0, 7)
+
+local Toggle = Instance.new("TextButton")
+
+Toggle.Size =
+    UDim2.new(
+        1,
+        0,
+        0,
+        34
+    )
+
+Toggle.Position =
+    UDim2.fromOffset(
+        0,
+        48
+    )
+
+Toggle.Font =
+    Enum.Font.SourceSansBold
+
+Toggle.TextSize = 13
+Toggle.TextColor3 =
+    Color3.new(1, 1, 1)
+
+Toggle.Parent = VelPage
+
+Instance.new(
+    "UICorner",
+    Toggle
+).CornerRadius =
+    UDim.new(0, 7)
+
+local Status = Instance.new("TextLabel")
+
+Status.Size =
+    UDim2.new(
+        1,
+        0,
+        0,
+        25
+    )
+
+Status.Position =
+    UDim2.fromOffset(
+        0,
+        86
+    )
+
+Status.BackgroundTransparency = 1
+Status.TextColor3 =
+    Color3.fromRGB(
+        180,
+        180,
+        190
+    )
+
+Status.Font =
+    Enum.Font.SourceSans
+
+Status.TextSize = 12
+Status.TextXAlignment =
+    Enum.TextXAlignment.Left
+
+Status.Parent = VelPage
+
+local function AtualizarVelocidade()
+
+    if VelocidadeAtiva then
+
+        Toggle.Text =
+            "Velocidade: ATIVADA"
+
+        Toggle.BackgroundColor3 =
+            Color3.fromRGB(
+                35,
+                125,
+                75
+            )
+
+        Status.Text =
+            "Valor atual: "
+            .. tostring(Velocidade)
+
+    else
+
+        Toggle.Text =
+            "Velocidade: DESATIVADA"
+
+        Toggle.BackgroundColor3 =
+            Color3.fromRGB(
+                48,
+                48,
+                58
+            )
+
+        Status.Text =
+            "Valor salvo: "
+            .. tostring(Velocidade)
+    end
+end
+
+AtualizarVelocidade()
+
+-- ================================================================
+-- PÁGINA OVOS
+-- Somente espaço reservado por enquanto.
+-- ================================================================
+
+local OvoPage = Instance.new("Frame")
+
+OvoPage.Size = VelPage.Size
+OvoPage.Position = VelPage.Position
+OvoPage.BackgroundTransparency = 1
+OvoPage.Visible = false
+OvoPage.Parent = Main
+
+local OvoStatus = Instance.new("TextLabel")
+
+OvoStatus.Size =
+    UDim2.new(
+        1,
+        0,
+        0,
+        50
+    )
+
+OvoStatus.Position =
+    UDim2.fromOffset(
+        0,
+        15
+    )
+
+OvoStatus.BackgroundTransparency = 1
+OvoStatus.Text =
+    "🥚 Radar de ovos\nEm desenvolvimento"
+
+OvoStatus.TextColor3 =
+    Color3.fromRGB(
+        180,
+        180,
+        190
+    )
+
+OvoStatus.Font =
+    Enum.Font.SourceSans
+
+OvoStatus.TextSize = 14
+OvoStatus.Parent = OvoPage
+
+-- ================================================================
+-- TROCA DE ABA
+-- ================================================================
+
+Registrar(
+    VelTab.MouseButton1Click:Connect(
+        function()
+
+            VelPage.Visible = true
+            OvoPage.Visible = false
+
+            VelTab.BackgroundColor3 =
+                Color3.fromRGB(
+                    40,
+                    110,
+                    70
+                )
+
+            OvoTab.BackgroundColor3 =
+                Color3.fromRGB(
+                    45,
+                    45,
+                    55
+                )
+        end
+    )
+)
+
+Registrar(
+    OvoTab.MouseButton1Click:Connect(
+        function()
+
+            VelPage.Visible = false
+            OvoPage.Visible = true
+
+            OvoTab.BackgroundColor3 =
+                Color3.fromRGB(
+                    40,
+                    110,
+                    70
+                )
+
+            VelTab.BackgroundColor3 =
+                Color3.fromRGB(
+                    45,
+                    45,
+                    55
+                )
+        end
+    )
+)
+
+-- ================================================================
+-- APLICAR VELOCIDADE
+-- ================================================================
+
+Registrar(
+    Aplicar.MouseButton1Click:Connect(
+        function()
+
+            local valor =
+                tonumber(
+                    Input.Text
+                )
+
+            if not valor then
+
+                Input.Text =
+                    tostring(
+                        Velocidade
+                    )
+
+                return
+            end
+
+            Velocidade =
+                math.clamp(
+                    valor,
+                    16,
+                    1000
+                )
+
+            Input.Text =
+                tostring(
+                    Velocidade
+                )
+
+            AtualizarVelocidade()
+        end
+    )
+)
+
+-- ================================================================
+-- ATIVAR / DESATIVAR
+-- ================================================================
+
+Registrar(
+    Toggle.MouseButton1Click:Connect(
+        function()
+
+            VelocidadeAtiva =
+                not VelocidadeAtiva
+
+            AtualizarVelocidade()
+        end
+    )
+)
+
+-- ================================================================
+-- FECHAR
+-- ================================================================
+
+Registrar(
+    Fechar.MouseButton1Click:Connect(
+        function()
+            PararTudo()
+        end
+    )
+)
+
+-- ================================================================
+-- ARRASTAR NO CELULAR
+-- ================================================================
+
+local Arrastando = false
+local InicioArraste
+local PosicaoInicial
+
+Registrar(
+    Header.InputBegan:Connect(
+        function(input)
+
+            if input.UserInputType
+                == Enum.UserInputType.MouseButton1
+                or input.UserInputType
+                == Enum.UserInputType.Touch then
+
+                Arrastando = true
+
+                InicioArraste =
+                    input.Position
+
+                PosicaoInicial =
+                    Main.Position
+            end
+        end
+    )
+)
+
+Registrar(
+    UserInputService.InputChanged:Connect(
+        function(input)
+
+            if not Arrastando then
+                return
+            end
+
+            if input.UserInputType
+                ~= Enum.UserInputType.MouseMovement
+                and input.UserInputType
+                ~= Enum.UserInputType.Touch then
+
+                return
+            end
+
+            local delta =
+                input.Position
+                - InicioArraste
+
+            Main.Position =
+                UDim2.new(
+                    PosicaoInicial.X.Scale,
+                    PosicaoInicial.X.Offset
+                        + delta.X,
+
+                    PosicaoInicial.Y.Scale,
+                    PosicaoInicial.Y.Offset
+                        + delta.Y
+                )
+        end
+    )
+)
+
+Registrar(
+    UserInputService.InputEnded:Connect(
+        function(input)
+
+            if input.UserInputType
+                == Enum.UserInputType.MouseButton1
+                or input.UserInputType
+                == Enum.UserInputType.Touch then
+
+                Arrastando = false
+            end
+        end
+    )
+)
 
 print(
-    "[RIDE A PET] Velocidade + radar de ovos ativos."
+    "[MONTAR UM PET] Abas + velocidade carregadas."
 )
