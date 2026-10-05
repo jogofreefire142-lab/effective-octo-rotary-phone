@@ -1,1470 +1,2322 @@
 --[[
-    RIDE A PET - LAB MAX v8
-    Foco: teste/diagnóstico do sistema de pets do "Monter um Pet".
+    Ride A Pet - LAB v16
+    Alvo exclusivo: [⚡] Ride A Pet / Montar um Pet
+    Base técnica: estrutura pública observada em scripts open-source do jogo.
 
-    Abas:
-      • INÍCIO      - visão geral, métricas, atalhos e log
-      • PETS        - movimento, auto-clique e auto-fusão
-      • OVOS        - configuração e auto-chocar
-      • INVENTÁRIO  - inspeção local de estruturas relacionadas a pets
-      • REMOTES     - scanner, filtros, seleção, caminho e teste 1x
-      • CONFIG      - intervalos, manutenção e reinício seguro
+    Confirmado em fonte aberta:
+      Remotes/Game:
+        EggPickup(eggId)
+        EggPlaced({NestId = nestName})
+        Hatch({EggKey = eggKey})
+        PickupPet(petKey)
+        PlacePet(petKey, worldPosition)
+        ClaimIndexReward()
+        FeedPet(petKey, foodName)
+        FavoritePet(petKey)
+        BuyWithCash("Food", foodName)
+        PetDismount()
+      Estrutura:
+        ServerData/ActiveEggs
+        SavedData
+        GameData/{Eggs,Pets,General,Mutations,EggBaskets,IndexRewards,Foods,Shop}
+        GameServices/{PetAging,DayNight}
+        Plots/<plot>/Nests, Eggs, Pets
+        Stalls/Sell/Richie
 
-    Importante:
-      O jogo determina quais argumentos os RemoteEvents/RemoteFunctions exigem.
-      O painel não tenta adivinhar estruturas desconhecidas nem burlar validações.
-      O modo "TESTAR 1X" usa apenas os argumentos já configurados no laboratório.
+    O script não inventa assinaturas para Rebirth/Hatch Luck/Nest Unlock.
+    Essas funções podem aparecer em hubs, mas não foram confirmadas pela fonte
+    aberta usada como base desta versão.
 ]]
 
--- =========================================================
--- SERVIÇOS
--- =========================================================
-local Workspace = cloneref and cloneref(game:GetService("Workspace")) or game:GetService("Workspace")
-local Players = cloneref and cloneref(game:GetService("Players")) or game:GetService("Players")
-local CoreGui = cloneref and cloneref(game:GetService("CoreGui")) or game:GetService("CoreGui")
-local RunService = cloneref and cloneref(game:GetService("RunService")) or game:GetService("RunService")
-local ReplicatedStorage = cloneref and cloneref(game:GetService("ReplicatedStorage")) or game:GetService("ReplicatedStorage")
-local UserInputService = cloneref and cloneref(game:GetService("UserInputService")) or game:GetService("UserInputService")
-local TweenService = cloneref and cloneref(game:GetService("TweenService")) or game:GetService("TweenService")
-
-local LocalPlayer = Players.LocalPlayer
-
--- =========================================================
--- INSTÂNCIA ÚNICA
--- =========================================================
-local AmbienteGlobal = (getgenv and getgenv()) or _G
-local CHAVE_INSTANCIA = "__RideAPet_COMPLETO_v8"
-
-if AmbienteGlobal[CHAVE_INSTANCIA] and type(AmbienteGlobal[CHAVE_INSTANCIA]) == "function" then
-    pcall(AmbienteGlobal[CHAVE_INSTANCIA])
+if not game:IsLoaded() then
+    game.Loaded:Wait()
 end
 
-local InstanciaEncerrada = false
-local Conexoes = {}
-local ConexaoVelocidade = nil
-local CharacterConnection = nil
-local InterfaceRideAPet = nil
-local EncerrarInstanciaAtual
-
-local AutoCliqueAtivado = false
-local AutoChocarAtivado = false
-local AutoFusaoAtivado = false
-local VelocidadeAtivada = false
-local Minimizado = false
-
-local Config = {
-    velocidade = 255,
-    clickIntervalo = 0.05,
-    ovoIntervalo = 0.30,
-    fusaoIntervalo = 2.0,
-    nomeOvo = "Common Egg",
-    quantidadeOvo = 1,
-    limiteListaRemotes = 250,
-}
-
-local Metricas = {
-    clicks = 0,
-    ovos = 0,
-    fusoes = 0,
-    erros = 0,
-    testesManuais = 0,
-    ultimoResultado = "Nenhuma ação executada.",
-}
-
-local RemoteCache = {
-    todos = {},
-    porNome = {},
-    porCategoria = {
-        Pet = {}, Egg = {}, Equip = {}, Unequip = {}, Merge = {}, Inventory = {}, Click = {}, Outro = {}
-    },
-    total = 0,
-    atualizadoEm = 0,
-}
-
-local RemoteSelecionado = nil
-local FiltroCategoria = "Todos"
-local RemoteWatchAtivo = true
-local UltimoScanMs = 0
-local ScanEmAndamento = false
-local RemoteRoots = {}
-local UltimoStatus = "Pronto."
-local StatusLog = {}
-
-local function RegistrarConexao(connection)
-    if connection then
-        table.insert(Conexoes, connection)
-    end
-    return connection
-end
-
-local function DesconectarTudo()
-    for _, connection in ipairs(Conexoes) do
-        pcall(function() connection:Disconnect() end)
-    end
-    Conexoes = {}
-
-    if ConexaoVelocidade then
-        pcall(function() ConexaoVelocidade:Disconnect() end)
-        ConexaoVelocidade = nil
-    end
-
-    if CharacterConnection then
-        pcall(function() CharacterConnection:Disconnect() end)
-        CharacterConnection = nil
-    end
-end
-
-EncerrarInstanciaAtual = function()
-    if InstanciaEncerrada then return end
-    InstanciaEncerrada = true
-
-    AutoCliqueAtivado = false
-    AutoChocarAtivado = false
-    AutoFusaoAtivado = false
-    VelocidadeAtivada = false
-
-    DesconectarTudo()
-
-    if InterfaceRideAPet then
-        pcall(function()
-            if InterfaceRideAPet.Parent then
-                InterfaceRideAPet:Destroy()
-            end
-        end)
-    end
-end
-
-AmbienteGlobal[CHAVE_INSTANCIA] = EncerrarInstanciaAtual
-
--- Limpa interfaces de versões anteriores.
-local function RemoverInterfacesAntigas()
-    local containers = {}
-    pcall(function() if gethui then table.insert(containers, gethui()) end end)
-    pcall(function() table.insert(containers, CoreGui) end)
-    pcall(function() table.insert(containers, LocalPlayer:FindFirstChildOfClass("PlayerGui")) end)
-
-    local nomes = {
-        ["RideAPet_COMPLETO_SINGLETON"] = true,
-        ["RideAPet_COMPLETO_V4"] = true,
-        ["RideAPet_COMPLETO_V5"] = true,
-        ["RideAPet_COMPLETO_V6"] = true,
-        ["RideAPet_COMPLETO_V7"] = true,
-        ["RideAPet_COMPLETO_V8"] = true,
-    }
-
-    for _, container in ipairs(containers) do
-        if container then
-            for _, child in ipairs(container:GetChildren()) do
-                if child:IsA("ScreenGui") and (nomes[child.Name] or string.match(child.Name, "^RideAPet_Final_%d+$")) then
-                    pcall(function() child:Destroy() end)
-                end
-            end
+local function Main()
+    -- Compatibilidade e limpeza de instancias antigas. Isto melhora estabilidade;
+    -- nao tenta esconder o script nem contornar sistemas anti-cheat.
+    local Env = (type(getgenv) == "function" and getgenv()) or _G
+    for _, oldKey in ipairs({"__RideAPet_COMPLETO_v13", "__RideAPet_COMPLETO_v14", "__RideAPet_COMPLETO_v15"}) do
+        local oldDestroy = Env[oldKey]
+        if type(oldDestroy) == "function" then
+            pcall(oldDestroy)
         end
     end
-end
-
-RemoverInterfacesAntigas()
-
--- =========================================================
--- UTILITÁRIOS
--- =========================================================
-local function SafeFind(parent, name)
-    if not parent then return nil end
-    local ok, result = pcall(function() return parent:FindFirstChild(name) end)
-    return ok and result or nil
-end
-
-local function GetFullPath(instance)
-    local ok, path = pcall(function() return instance:GetFullName() end)
-    return ok and path or instance.Name
-end
-
-local function ClasseRemote(obj)
-    if obj:IsA("RemoteEvent") then return "RemoteEvent" end
-    if obj:IsA("RemoteFunction") then return "RemoteFunction" end
-    return obj.ClassName
-end
-
-local function ClassificarRemote(nome, caminho)
-    local texto = string.lower((nome or "") .. " " .. (caminho or ""))
-
-    if string.find(texto, "click") or string.find(texto, "tap") then
-        return "Click"
-    elseif string.find(texto, "egg") or string.find(texto, "hatch") or string.find(texto, "chocar") then
-        return "Egg"
-    elseif string.find(texto, "unequip") or string.find(texto, "removeequip") or string.find(texto, "remove_pet") then
-        return "Unequip"
-    elseif string.find(texto, "equip") or string.find(texto, "selectpet") or string.find(texto, "setpet") then
-        return "Equip"
-    elseif string.find(texto, "merge") or string.find(texto, "craft") or string.find(texto, "fuse") then
-        return "Merge"
-    elseif string.find(texto, "inventory") or string.find(texto, "storage") or string.find(texto, "backpack") then
-        return "Inventory"
-    elseif string.find(texto, "pet") or string.find(texto, "companion") then
-        return "Pet"
-    end
-
-    return "Outro"
-end
-
-local function NormalizarIntervalo(texto, padrao, minimo, maximo)
-    local n = tonumber(texto)
-    if not n then return padrao end
-    return math.clamp(n, minimo, maximo)
-end
-
-local function LogStatus(texto)
-    UltimoStatus = tostring(texto)
-    table.insert(StatusLog, os.date("%H:%M:%S") .. "  " .. UltimoStatus)
-    if #StatusLog > 80 then
-        table.remove(StatusLog, 1)
-    end
-end
-
-local function CopiarTexto(texto)
-    local ok = false
-    if setclipboard then
-        ok = pcall(function() setclipboard(texto) end)
-    elseif toclipboard then
-        ok = pcall(function() toclipboard(texto) end)
-    end
-
-    if ok then
-        LogStatus("Caminho copiado para a área de transferência.")
-    else
-        LogStatus("Área de transferência não disponível neste ambiente.")
-    end
-end
-
--- =========================================================
--- REMOTE SCANNER / CACHE
--- =========================================================
-local function ObterFontesScan()
-    local fontes = {
-        {nome = "ReplicatedStorage", obj = ReplicatedStorage},
-        {nome = "Workspace", obj = Workspace},
-    }
-
-    local playerGui = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if playerGui then
-        table.insert(fontes, {nome = "PlayerGui", obj = playerGui})
-    end
-
-    return fontes
-end
-
-local function ScanRemotes(force)
-    if ScanEmAndamento then
-        return RemoteCache.total
-    end
-
-    local agora = os.clock() * 1000
-    if not force and (agora - UltimoScanMs) < 350 then
-        return RemoteCache.total
-    end
-
-    ScanEmAndamento = true
-    local novos = {
-        todos = {},
-        porNome = {},
-        porCategoria = {
-            Pet = {}, Egg = {}, Equip = {}, Unequip = {}, Merge = {}, Inventory = {}, Click = {}, Outro = {}
-        },
-        total = 0,
-        atualizadoEm = os.time(),
-        fontes = {},
-    }
-
-    local vistos = {}
-    local fontes = ObterFontesScan()
-    RemoteRoots = fontes
-
-    for _, fonte in ipairs(fontes) do
-        if fonte.obj then
-            novos.fontes[fonte.nome] = true
-            local ok, descendants = pcall(function()
-                return fonte.obj:GetDescendants()
-            end)
-
-            if ok and descendants then
-                for _, obj in ipairs(descendants) do
-                    if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-                        local caminho = GetFullPath(obj)
-                        if not vistos[obj] then
-                            vistos[obj] = true
-                            local item = {
-                                objeto = obj,
-                                nome = obj.Name,
-                                tipo = ClasseRemote(obj),
-                                caminho = caminho,
-                                categoria = ClassificarRemote(obj.Name, caminho),
-                                fonte = fonte.nome,
-                            }
-
-                            novos.total = novos.total + 1
-                            table.insert(novos.todos, item)
-
-                            local chave = string.lower(obj.Name)
-                            novos.porNome[chave] = novos.porNome[chave] or {}
-                            table.insert(novos.porNome[chave], item)
-                            table.insert(novos.porCategoria[item.categoria], item)
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    table.sort(novos.todos, function(a, b)
-        if a.categoria == b.categoria then
-            return string.lower(a.caminho) < string.lower(b.caminho)
-        end
-        return a.categoria < b.categoria
-    end)
-
-    RemoteCache = novos
-    UltimoScanMs = agora
-    ScanEmAndamento = false
-
-    if RemoteSelecionado and RemoteSelecionado.objeto then
-        local aindaExiste = RemoteSelecionado.objeto.Parent ~= nil
-        if not aindaExiste then
-            RemoteSelecionado = nil
-        end
-    end
-
-    LogStatus(string.format("Scanner atualizado: %d remote(s) em %d fonte(s).", RemoteCache.total, #fontes))
-    return RemoteCache.total
-end
-
-local function RegistrarWatchersRemotes()
-    if not RemoteWatchAtivo then return end
-
-    for _, fonte in ipairs(ObterFontesScan()) do
-        if fonte.obj then
-            RegistrarConexao(fonte.obj.DescendantAdded:Connect(function(obj)
-                if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-                    task.delay(0.15, function()
-                        if not InstanciaEncerrada then
-                            ScanRemotes(true)
-                        end
-                    end)
-                end
-            end))
-
-            RegistrarConexao(fonte.obj.DescendantRemoving:Connect(function(obj)
-                if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-                    task.delay(0.15, function()
-                        if not InstanciaEncerrada then
-                            ScanRemotes(true)
-                        end
-                    end)
-                end
-            end))
-        end
-    end
-end
-
-local function FindRemoteByNames(nomes, categoriaPreferida)
-    if RemoteCache.total == 0 then
-        ScanRemotes(true)
-    end
-
-    for _, nome in ipairs(nomes) do
-        local lista = RemoteCache.porNome[string.lower(nome)]
-        if lista then
-            if categoriaPreferida then
-                for _, item in ipairs(lista) do
-                    if item.categoria == categoriaPreferida and item.objeto and item.objeto.Parent then
-                        return item.objeto, item
-                    end
-                end
-            end
-            if lista[1] and lista[1].objeto and lista[1].objeto.Parent then
-                return lista[1].objeto, lista[1]
-            end
-        end
-    end
-
-    if categoriaPreferida and RemoteCache.porCategoria[categoriaPreferida] then
-        local lista = RemoteCache.porCategoria[categoriaPreferida]
-        for _, alvo in ipairs(nomes) do
-            local busca = string.lower(alvo)
-            for _, item in ipairs(lista) do
-                if item.objeto and item.objeto.Parent and string.find(string.lower(item.nome), busca, 1, true) then
-                    return item.objeto, item
-                end
-            end
-        end
-    end
-
-    return nil, nil
-end
-
-local function ExecutarRemote(objeto, ...)
-    if not objeto or not objeto.Parent then
-        return false, "Remote indisponível."
-    end
-
-    local ok, resultado = pcall(function(...)
-        if objeto:IsA("RemoteEvent") then
-            return objeto:FireServer(...)
-        elseif objeto:IsA("RemoteFunction") then
-            return objeto:InvokeServer(...)
-        end
-    end, ...)
-
-    if not ok then
-        Metricas.erros = Metricas.erros + 1
-        Metricas.ultimoResultado = "ERRO: " .. tostring(resultado)
-        return false, tostring(resultado)
-    end
-
-    Metricas.ultimoResultado = "OK: " .. objeto.Name
-    return true, resultado
-end
-
-local function ExecutarAcaoPorCategoria(item)
-    if not item or not item.objeto then
-        return false, "Nenhum remote selecionado."
-    end
-
-    local categoria = item.categoria
-    Metricas.testesManuais = Metricas.testesManuais + 1
-
-    if categoria == "Egg" then
-        return ExecutarRemote(item.objeto, Config.nomeOvo, Config.quantidadeOvo)
-    elseif categoria == "Click" or categoria == "Merge" or categoria == "Pet" or categoria == "Equip" or categoria == "Unequip" or categoria == "Inventory" then
-        return ExecutarRemote(item.objeto)
-    end
-
-    return false, "Categoria 'Outro' bloqueada no teste 1x; confirme o remote antes de executar."
-end
-
-ScanRemotes(true)
-RegistrarWatchersRemotes()
-
--- =========================================================
--- GUI / TEMA
--- =========================================================
-local Theme = {
-    bg = Color3.fromRGB(9, 11, 17),
-    sidebar = Color3.fromRGB(14, 17, 25),
-    card = Color3.fromRGB(18, 22, 32),
-    card2 = Color3.fromRGB(23, 28, 40),
-    field = Color3.fromRGB(27, 32, 45),
-    stroke = Color3.fromRGB(44, 51, 68),
-    text = Color3.fromRGB(244, 246, 250),
-    subtext = Color3.fromRGB(163, 171, 187),
-    muted = Color3.fromRGB(105, 115, 131),
-    accent = Color3.fromRGB(102, 124, 255),
-    accent2 = Color3.fromRGB(76, 97, 215),
-    success = Color3.fromRGB(61, 194, 120),
-    warning = Color3.fromRGB(235, 173, 77),
-    danger = Color3.fromRGB(220, 78, 92),
-}
-
-local Camera = Workspace.CurrentCamera
-local viewport = Camera and Camera.ViewportSize or Vector2.new(900, 650)
-local painelW = math.floor(math.clamp(viewport.X * 0.92, 350, 760))
-local painelH = math.floor(math.clamp(viewport.Y * 0.84, 420, 560))
-
-InterfaceRideAPet = Instance.new("ScreenGui")
-InterfaceRideAPet.Name = "RideAPet_COMPLETO_V8"
-InterfaceRideAPet.ResetOnSpawn = false
-InterfaceRideAPet.IgnoreGuiInset = true
-InterfaceRideAPet.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
-local SucessoInjecao = pcall(function()
-    if gethui then
-        InterfaceRideAPet.Parent = gethui()
-    elseif syn and syn.protect_gui then
-        syn.protect_gui(InterfaceRideAPet)
-        InterfaceRideAPet.Parent = CoreGui
-    else
-        InterfaceRideAPet.Parent = CoreGui
-    end
-end)
-
-if not SucessoInjecao then
-    InterfaceRideAPet.Parent = LocalPlayer:WaitForChild("PlayerGui")
-end
-
-local FramePainel = Instance.new("Frame")
-FramePainel.Size = UDim2.fromOffset(painelW, painelH)
-FramePainel.Position = UDim2.new(0.5, -painelW / 2, 0.5, -painelH / 2)
-FramePainel.BackgroundColor3 = Theme.bg
-FramePainel.BorderSizePixel = 0
-FramePainel.Active = true
-FramePainel.Parent = InterfaceRideAPet
-Instance.new("UICorner", FramePainel).CornerRadius = UDim.new(0, 13)
-local StrokePainel = Instance.new("UIStroke")
-StrokePainel.Color = Theme.stroke
-StrokePainel.Thickness = 1
-StrokePainel.Parent = FramePainel
-
--- =========================================================
--- HELPERS GUI
--- =========================================================
-local function Corner(obj, radius)
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, radius or 7)
-    c.Parent = obj
-    return c
-end
-
-local function Stroke(obj, color, thickness)
-    local s = Instance.new("UIStroke")
-    s.Color = color or Theme.stroke
-    s.Thickness = thickness or 1
-    s.Transparency = 0.35
-    s.Parent = obj
-    return s
-end
-
-local function Label(parent, text, size, pos, fontSize, color, xalign)
-    local l = Instance.new("TextLabel")
-    l.Size = size
-    l.Position = pos or UDim2.new()
-    l.BackgroundTransparency = 1
-    l.Text = text
-    l.TextColor3 = color or Theme.text
-    l.Font = Enum.Font.Gotham
-    l.TextSize = fontSize or 13
-    l.TextWrapped = true
-    l.TextXAlignment = xalign or Enum.TextXAlignment.Left
-    l.Parent = parent
-    return l
-end
-
-local function Button(parent, text, size, pos, callback, primary)
-    local b = Instance.new("TextButton")
-    b.Size = size
-    b.Position = pos or UDim2.new()
-    b.BackgroundColor3 = primary and Theme.accent or Theme.card2
-    b.BorderSizePixel = 0
-    b.Text = text
-    b.TextColor3 = Theme.text
-    b.Font = Enum.Font.GothamSemibold
-    b.TextSize = 11
-    b.AutoButtonColor = false
-    b.Parent = parent
-    Corner(b, 7)
-    Stroke(b, Theme.stroke, 1)
-
-    b.MouseEnter:Connect(function()
-        if not b:GetAttribute("Active") then
-            b.BackgroundColor3 = primary and Color3.fromRGB(117, 138, 255) or Color3.fromRGB(31, 37, 53)
-        end
-    end)
-    b.MouseLeave:Connect(function()
-        if not b:GetAttribute("Active") then
-            b.BackgroundColor3 = primary and Theme.accent or Theme.card2
-        end
-    end)
-
-    if callback then
-        b.MouseButton1Click:Connect(function()
-            local ok, err = pcall(callback)
-            if not ok then
-                Metricas.erros = Metricas.erros + 1
-                LogStatus("Erro no botão: " .. tostring(err))
-            end
-        end)
-    end
-    return b
-end
-
-local function Input(parent, text, placeholder, size, pos)
-    local t = Instance.new("TextBox")
-    t.Size = size
-    t.Position = pos or UDim2.new()
-    t.BackgroundColor3 = Theme.field
-    t.BorderSizePixel = 0
-    t.Text = text or ""
-    t.PlaceholderText = placeholder or ""
-    t.PlaceholderColor3 = Theme.muted
-    t.TextColor3 = Theme.text
-    t.Font = Enum.Font.Gotham
-    t.TextSize = 11
-    t.ClearTextOnFocus = false
-    t.Parent = parent
-    Corner(t, 7)
-    Stroke(t, Theme.stroke, 1)
-    return t
-end
-
-local function Card(parent, size, pos)
-    local f = Instance.new("Frame")
-    f.Size = size
-    f.Position = pos or UDim2.new()
-    f.BackgroundColor3 = Theme.card
-    f.BorderSizePixel = 0
-    f.Parent = parent
-    Corner(f, 9)
-    Stroke(f, Theme.stroke, 1)
-    return f
-end
-
-local function EstadoBotao(botao, ativo, textoAtivo, textoInativo)
-    botao:SetAttribute("Active", ativo)
-    botao.Text = ativo and textoAtivo or textoInativo
-    botao.BackgroundColor3 = ativo and Theme.success or Theme.card2
-end
-
--- =========================================================
--- HEADER / DRAG
--- =========================================================
-local Header = Instance.new("Frame")
-Header.Size = UDim2.new(1, 0, 0, 50)
-Header.BackgroundColor3 = Theme.sidebar
-Header.BorderSizePixel = 0
-Header.Parent = FramePainel
-Corner(Header, 12)
-
-local HeaderMask = Instance.new("Frame")
-HeaderMask.Size = UDim2.new(1, 0, 0, 15)
-HeaderMask.Position = UDim2.new(0, 0, 1, -15)
-HeaderMask.BackgroundColor3 = Theme.sidebar
-HeaderMask.BorderSizePixel = 0
-HeaderMask.Parent = Header
-
-local Logo = Label(Header, "RIDE A PET", UDim2.new(0, 190, 0, 20), UDim2.new(0, 16, 0, 7), 14, Theme.text)
-local Subtitle = Label(Header, "LAB MAX  •  MONTER UM PET  •  v8", UDim2.new(0, 300, 0, 16), UDim2.new(0, 16, 0, 27), 9, Theme.subtext)
-
-local StatusDot = Instance.new("Frame")
-StatusDot.Size = UDim2.fromOffset(9, 9)
-StatusDot.Position = UDim2.new(1, -160, 0, 20)
-StatusDot.BackgroundColor3 = Theme.subtext
-StatusDot.BorderSizePixel = 0
-StatusDot.Parent = Header
-Corner(StatusDot, 10)
-
-local HeaderStatus = Label(Header, "PRONTO", UDim2.fromOffset(72, 20), UDim2.new(1, -148, 0, 15), 9, Theme.subtext)
-local BtnMin = Button(Header, "—", UDim2.fromOffset(32, 28), UDim2.new(1, -90, 0, 11), nil, false)
-local BtnClose = Button(Header, "×", UDim2.fromOffset(32, 28), UDim2.new(1, -52, 0, 11), nil, false)
-
-local Arrastando = false
-local InicioArraste
-local PosicaoInicial
-
-RegistrarConexao(Header.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        Arrastando = true
-        InicioArraste = input.Position
-        PosicaoInicial = FramePainel.Position
-    end
-end))
-RegistrarConexao(Header.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        Arrastando = false
-    end
-end))
-RegistrarConexao(UserInputService.InputChanged:Connect(function(input)
-    if Arrastando and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-        local delta = input.Position - InicioArraste
-        FramePainel.Position = UDim2.new(
-            PosicaoInicial.X.Scale,
-            PosicaoInicial.X.Offset + delta.X,
-            PosicaoInicial.Y.Scale,
-            PosicaoInicial.Y.Offset + delta.Y
-        )
-    end
-end))
-
--- =========================================================
--- SIDEBAR / PÁGINAS
--- =========================================================
-local SidebarWidth = math.max(112, math.floor(painelW * 0.18))
-local Sidebar = Instance.new("Frame")
-Sidebar.Size = UDim2.new(0, SidebarWidth, 1, -50)
-Sidebar.Position = UDim2.new(0, 0, 0, 50)
-Sidebar.BackgroundColor3 = Theme.sidebar
-Sidebar.BorderSizePixel = 0
-Sidebar.Parent = FramePainel
-
-local SidebarPad = Instance.new("UIPadding")
-SidebarPad.PaddingTop = UDim.new(0, 10)
-SidebarPad.PaddingLeft = UDim.new(0, 8)
-SidebarPad.PaddingRight = UDim.new(0, 8)
-SidebarPad.Parent = Sidebar
-
-local Tabs = {}
-local Pages = {}
-local AbaAtual = "Início"
-
-local Conteudo = Instance.new("Frame")
-Conteudo.Size = UDim2.new(1, -SidebarWidth, 1, -50)
-Conteudo.Position = UDim2.new(0, SidebarWidth, 0, 50)
-Conteudo.BackgroundColor3 = Theme.bg
-Conteudo.BorderSizePixel = 0
-Conteudo.Parent = FramePainel
-
-local function CriarPagina(nome)
-    local p = Instance.new("ScrollingFrame")
-    p.Name = "Page_" .. nome
-    p.Size = UDim2.new(1, -18, 1, -16)
-    p.Position = UDim2.new(0, 9, 0, 8)
-    p.BackgroundTransparency = 1
-    p.BorderSizePixel = 0
-    p.ScrollBarThickness = 4
-    p.ScrollBarImageColor3 = Theme.stroke
-    p.CanvasSize = UDim2.fromOffset(0, 0)
-    p.Visible = false
-    p.Parent = Conteudo
-
-    local list = Instance.new("UIListLayout")
-    list.Padding = UDim.new(0, 9)
-    list.SortOrder = Enum.SortOrder.LayoutOrder
-    list.Parent = p
-
-    list:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        p.CanvasSize = UDim2.fromOffset(0, list.AbsoluteContentSize.Y + 16)
-    end)
-
-    Pages[nome] = p
-    return p
-end
-
-local function CriarAba(nome, simbolo, pagina)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(1, 0, 0, 38)
-    b.BackgroundColor3 = Theme.sidebar
-    b.BorderSizePixel = 0
-    b.Text = simbolo .. "  " .. nome
-    b.TextColor3 = Theme.subtext
-    b.TextXAlignment = Enum.TextXAlignment.Left
-    b.Font = Enum.Font.GothamSemibold
-    b.TextSize = 10
-    b.AutoButtonColor = false
-    b.Parent = Sidebar
-    Corner(b, 7)
-
-    b.MouseEnter:Connect(function()
-        if AbaAtual ~= pagina then b.BackgroundColor3 = Theme.card2 end
-    end)
-    b.MouseLeave:Connect(function()
-        if AbaAtual ~= pagina then b.BackgroundColor3 = Theme.sidebar end
-    end)
-
-    b.MouseButton1Click:Connect(function()
-        for nomePagina, framePagina in pairs(Pages) do
-            framePagina.Visible = (nomePagina == pagina)
-        end
-        for _, item in pairs(Tabs) do
-            item.BackgroundColor3 = Theme.sidebar
-            item.TextColor3 = Theme.subtext
-        end
-        b.BackgroundColor3 = Theme.card2
-        b.TextColor3 = Theme.text
-        AbaAtual = pagina
-    end)
-
-    Tabs[pagina] = b
-    return b
-end
-
-local PagInicio = CriarPagina("Início")
-local PagPets = CriarPagina("Pets")
-local PagOvos = CriarPagina("Ovos")
-local PagInventario = CriarPagina("Inventário")
-local PagRemotes = CriarPagina("Remotes")
-local PagConfig = CriarPagina("Config")
-
-CriarAba("Início", "◆", "Início")
-CriarAba("Pets", "◆", "Pets")
-CriarAba("Ovos", "◈", "Ovos")
-CriarAba("Inventário", "▦", "Inventário")
-CriarAba("Remotes", "⌁", "Remotes")
-CriarAba("Config", "⚙", "Config")
-
-Pages["Início"].Visible = true
-Tabs["Início"].BackgroundColor3 = Theme.card2
-Tabs["Início"].TextColor3 = Theme.text
-
--- =========================================================
--- REFERÊNCIAS DE STATUS
--- =========================================================
-local LblStatusGrande
-local LblMetricas
-local LblLog
-local LblRemotesResumo
-local LblInventarioResumo
-local ListaLog
-
--- =========================================================
--- ABA INÍCIO
--- =========================================================
-local CardHero = Card(PagInicio, UDim2.new(1, -4, 0, 92))
-Label(CardHero, "Laboratório de testes", UDim2.new(1, -24, 0, 24), UDim2.new(0, 12, 0, 9), 16, Theme.text)
-Label(CardHero, "Monter um Pet • diagnóstico + automação controlada", UDim2.new(1, -24, 0, 18), UDim2.new(0, 12, 0, 31), 10, Theme.subtext)
-LblStatusGrande = Label(CardHero, "Pronto.", UDim2.new(1, -24, 0, 24), UDim2.new(0, 12, 0, 54), 11, Theme.success)
-
-local CardMetricas = Card(PagInicio, UDim2.new(1, -4, 0, 88))
-Label(CardMetricas, "Métricas da sessão", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 8), 13, Theme.text)
-LblMetricas = Label(CardMetricas, "Remotes: 0  •  Ativos: 0  •  Cliques: 0  •  Ovos: 0  •  Fusões: 0", UDim2.new(1, -24, 0, 22), UDim2.new(0, 12, 0, 34), 10, Theme.text)
-Label(CardMetricas, "Erros: 0  •  Testes manuais: 0", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 57), 9, Theme.subtext)
-
-local CardQuick = Card(PagInicio, UDim2.new(1, -4, 0, 126))
-Label(CardQuick, "Atalhos", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 9), 13, Theme.text)
-local BtnQuickClick = Button(CardQuick, "Auto-Clique", UDim2.new(0.48, -7, 0, 34), UDim2.new(0, 10, 0, 37), nil, false)
-local BtnQuickEgg = Button(CardQuick, "Auto-Chocar", UDim2.new(0.48, -7, 0, 34), UDim2.new(0.52, -3, 0, 37), nil, false)
-local BtnQuickMerge = Button(CardQuick, "Auto-Fusão", UDim2.new(0.48, -7, 0, 34), UDim2.new(0, 10, 0, 77), nil, false)
-local BtnQuickStop = Button(CardQuick, "PARAR TUDO", UDim2.new(0.48, -7, 0, 34), UDim2.new(0.52, -3, 0, 77), nil, false)
-
-local CardLog = Card(PagInicio, UDim2.new(1, -4, 0, 174))
-Label(CardLog, "Log da sessão", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 9), 13, Theme.text)
-ListaLog = Instance.new("ScrollingFrame")
-ListaLog.Size = UDim2.new(1, -24, 0, 125)
-ListaLog.Position = UDim2.new(0, 12, 0, 36)
-ListaLog.BackgroundColor3 = Theme.field
-ListaLog.BorderSizePixel = 0
-ListaLog.ScrollBarThickness = 3
-ListaLog.ScrollBarImageColor3 = Theme.stroke
-ListaLog.Parent = CardLog
-Corner(ListaLog, 7)
-local LogLayout = Instance.new("UIListLayout")
-LogLayout.Padding = UDim.new(0, 2)
-LogLayout.Parent = ListaLog
-
-local function AtualizarLogVisual()
-    for _, c in ipairs(ListaLog:GetChildren()) do
-        if c:IsA("TextLabel") then c:Destroy() end
-    end
-    for i = math.max(1, #StatusLog - 25), #StatusLog do
-        local line = StatusLog[i]
-        if line then
-            local l = Label(ListaLog, line, UDim2.new(1, -10, 0, 19), UDim2.new(0, 5, 0, 0), 9, Theme.subtext)
-            l.TextWrapped = false
-        end
-    end
-    task.defer(function()
-        ListaLog.CanvasSize = UDim2.fromOffset(0, LogLayout.AbsoluteContentSize.Y + 8)
-        ListaLog.CanvasPosition = Vector2.new(0, math.max(0, ListaLog.CanvasSize.Y.Offset))
-    end)
-end
-
--- =========================================================
--- ABA PETS
--- =========================================================
-local CardMov = Card(PagPets, UDim2.new(1, -4, 0, 128))
-Label(CardMov, "Movimento", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 9), 13, Theme.text)
-Label(CardMov, "Velocidade", UDim2.new(0, 90, 0, 18), UDim2.new(0, 12, 0, 36), 10, Theme.subtext)
-local InputVel = Input(CardMov, tostring(Config.velocidade), "255", UDim2.new(0, 110, 0, 31), UDim2.new(0, 12, 0, 56))
-local BtnVel = Button(CardMov, "Ativar", UDim2.new(0, 112, 0, 31), UDim2.new(0, 130, 0, 56), nil, true)
-Label(CardMov, "Somente movimentação do personagem enquanto estiver andando.", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 96), 9, Theme.subtext)
-
-local CardClique = Card(PagPets, UDim2.new(1, -4, 0, 118))
-Label(CardClique, "Auto-Clique", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 9), 13, Theme.text)
-local BtnClique = Button(CardClique, "DESLIGADO", UDim2.new(0, 132, 0, 34), UDim2.new(0, 12, 0, 39), nil, false)
-Label(CardClique, "Candidatos: Click / ClickEvent / Tap / TapEvent", UDim2.new(1, -162, 0, 35), UDim2.new(0, 155, 0, 39), 9, Theme.subtext)
-
-local CardFusao = Card(PagPets, UDim2.new(1, -4, 0, 118))
-Label(CardFusao, "Auto-Fusão", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 9), 13, Theme.text)
-local BtnFusao = Button(CardFusao, "DESLIGADO", UDim2.new(0, 132, 0, 34), UDim2.new(0, 12, 0, 39), nil, false)
-Label(CardFusao, "Candidatos: CraftAll / MergePets / MergePet / Craft", UDim2.new(1, -162, 0, 35), UDim2.new(0, 155, 0, 39), 9, Theme.subtext)
-
--- =========================================================
--- ABA OVOS
--- =========================================================
-local CardOvo = Card(PagOvos, UDim2.new(1, -4, 0, 196))
-Label(CardOvo, "Auto-Chocar", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 9), 13, Theme.text)
-Label(CardOvo, "Nome do ovo", UDim2.new(0, 95, 0, 18), UDim2.new(0, 12, 0, 37), 10, Theme.subtext)
-local InputOvo = Input(CardOvo, Config.nomeOvo, "Common Egg", UDim2.new(0.59, -16, 0, 31), UDim2.new(0, 12, 0, 57))
-Label(CardOvo, "Qtd", UDim2.new(0, 35, 0, 18), UDim2.new(0.62, 0, 0, 37), 10, Theme.subtext)
-local InputQtd = Input(CardOvo, tostring(Config.quantidadeOvo), "1", UDim2.new(0.31, -10, 0, 31), UDim2.new(0.68, 0, 0, 57))
-local BtnOvo = Button(CardOvo, "DESLIGADO", UDim2.new(0.47, -10, 0, 34), UDim2.new(0, 12, 0, 104), nil, false)
-Label(CardOvo, "Intervalo", UDim2.new(0, 70, 0, 18), UDim2.new(0.51, 0, 0, 109), 10, Theme.subtext)
-local InputIntervaloOvo = Input(CardOvo, tostring(Config.ovoIntervalo), "0.30", UDim2.new(0.40, -12, 0, 31), UDim2.new(0.61, 0, 0, 104))
-Label(CardOvo, "Candidatos: BuyEgg / OpenEgg / HatchEgg / Egg", UDim2.new(1, -24, 0, 18), UDim2.new(0, 12, 0, 145), 9, Theme.subtext)
-Label(CardOvo, "Dica: use a aba Remotes para confirmar qual candidato existe no jogo.", UDim2.new(1, -24, 0, 18), UDim2.new(0, 12, 0, 164), 9, Theme.muted)
-
--- =========================================================
--- ABA INVENTÁRIO / ESTRUTURA
--- =========================================================
-local CardInvTopo = Card(PagInventario, UDim2.new(1, -4, 0, 102))
-Label(CardInvTopo, "Inventário / Estrutura", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 9), 13, Theme.text)
-LblInventarioResumo = Label(CardInvTopo, "Nenhuma inspeção executada.", UDim2.new(1, -24, 0, 36), UDim2.new(0, 12, 0, 37), 10, Theme.subtext)
-local BtnScanEstrutura = Button(CardInvTopo, "INSPECIONAR", UDim2.new(0, 120, 0, 30), UDim2.new(1, -132, 0, 35), nil, true)
-
-local ListaEstrutura = Instance.new("ScrollingFrame")
-ListaEstrutura.Size = UDim2.new(1, -4, 0, 350)
-ListaEstrutura.BackgroundColor3 = Theme.card
-ListaEstrutura.BorderSizePixel = 0
-ListaEstrutura.ScrollBarThickness = 4
-ListaEstrutura.ScrollBarImageColor3 = Theme.stroke
-ListaEstrutura.Parent = PagInventario
-Corner(ListaEstrutura, 9)
-Stroke(ListaEstrutura, Theme.stroke, 1)
-local EstruturaLayout = Instance.new("UIListLayout")
-EstruturaLayout.Padding = UDim.new(0, 4)
-EstruturaLayout.Parent = ListaEstrutura
-
-local function NomeInteressante(nome)
-    local t = string.lower(nome or "")
-    return string.find(t, "pet", 1, true) or string.find(t, "egg", 1, true)
-        or string.find(t, "inventory", 1, true) or string.find(t, "equip", 1, true)
-        or string.find(t, "merge", 1, true) or string.find(t, "craft", 1, true)
-        or string.find(t, "storage", 1, true) or string.find(t, "backpack", 1, true)
-end
-
-local function InspecionarEstrutura()
-    for _, c in ipairs(ListaEstrutura:GetChildren()) do
-        if c:IsA("TextLabel") then c:Destroy() end
-    end
-
-    local fontes = {
-        {nome = "ReplicatedStorage", obj = ReplicatedStorage},
-        {nome = "Workspace", obj = Workspace},
-        {nome = "LocalPlayer", obj = LocalPlayer},
-        {nome = "PlayerGui", obj = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")},
-    }
-
-    local resultados = {}
-    local vistos = {}
-
-    for _, fonte in ipairs(fontes) do
-        if fonte.obj then
-            local ok, descendants = pcall(function() return fonte.obj:GetDescendants() end)
-            if ok and descendants then
-                for _, obj in ipairs(descendants) do
-                    if NomeInteressante(obj.Name) then
-                        local path = GetFullPath(obj)
-                        if not vistos[path] then
-                            vistos[path] = true
-                            table.insert(resultados, {
-                                fonte = fonte.nome,
-                                nome = obj.Name,
-                                classe = obj.ClassName,
-                                caminho = path,
-                            })
-                        end
-                    end
-                    if #resultados >= 250 then break end
-                end
-            end
-        end
-        if #resultados >= 250 then break end
-    end
-
-    table.sort(resultados, function(a, b)
-        return string.lower(a.caminho) < string.lower(b.caminho)
-    end)
-
-    for _, item in ipairs(resultados) do
-        local l = Label(ListaEstrutura, string.format("[%s] %s • %s\n%s", item.fonte, item.nome, item.classe, item.caminho), UDim2.new(1, -12, 0, 46), UDim2.new(0, 6, 0, 0), 9, Theme.subtext)
-        l.TextYAlignment = Enum.TextYAlignment.Center
-        l.TextWrapped = true
-    end
-
-    LblInventarioResumo.Text = string.format("Encontrados %d objetos relacionados a Pet/Egg/Inventory/Equip/Merge.", #resultados)
-    LogStatus("Inspeção concluída: " .. tostring(#resultados) .. " objeto(s).")
-    task.defer(function()
-        ListaEstrutura.CanvasSize = UDim2.fromOffset(0, EstruturaLayout.AbsoluteContentSize.Y + 10)
-    end)
-end
-
--- =========================================================
--- ABA REMOTES
--- =========================================================
-local CardRemotesTopo = Card(PagRemotes, UDim2.new(1, -4, 0, 208))
-Label(CardRemotesTopo, "Diagnóstico de Remotes", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 8), 13, Theme.text)
-local InputBusca = Input(CardRemotesTopo, "", "Buscar nome, caminho ou categoria...", UDim2.new(1, -152, 0, 31), UDim2.new(0, 12, 0, 35))
-local BtnScan = Button(CardRemotesTopo, "ESCANEAR", UDim2.new(0, 122, 0, 31), UDim2.new(1, -134, 0, 35), nil, true)
-local LblScanResumo = Label(CardRemotesTopo, "0 remotes • monitoramento ativo", UDim2.new(1, -24, 0, 16), UDim2.new(0, 12, 1, -22), 8, Theme.muted)
-
-local Filtros = {"Todos", "Pet", "Egg", "Equip", "Unequip", "Merge", "Inventory", "Click", "Outro"}
-local BotoesFiltro = {}
-for i, nomeFiltro in ipairs(Filtros) do
-    local coluna = (i - 1) % 2
-    local linha = math.floor((i - 1) / 2)
-    local b = Button(CardRemotesTopo, nomeFiltro, UDim2.new(0, 84, 0, 25), UDim2.new(0, 12 + coluna * 92, 0, 76 + linha * 27), nil, false)
-    b.Size = UDim2.new(0, 84, 0, 25)
-    b.Position = UDim2.new(0, 12 + coluna * 92, 0, 76 + linha * 27)
-    b.TextSize = 9
-    BotoesFiltro[nomeFiltro] = b
-end
-
-local ListaRemotes = Instance.new("ScrollingFrame")
-ListaRemotes.Size = UDim2.new(1, -4, 0, 260)
-ListaRemotes.BackgroundColor3 = Theme.card
-ListaRemotes.BorderSizePixel = 0
-ListaRemotes.ScrollBarThickness = 4
-ListaRemotes.ScrollBarImageColor3 = Theme.stroke
-ListaRemotes.Parent = PagRemotes
-Corner(ListaRemotes, 9)
-Stroke(ListaRemotes, Theme.stroke, 1)
-local ListaLayout = Instance.new("UIListLayout")
-ListaLayout.Padding = UDim.new(0, 5)
-ListaLayout.Parent = ListaRemotes
-
-local CardSelecionado = Card(PagRemotes, UDim2.new(1, -4, 0, 184))
-Label(CardSelecionado, "Remote selecionado", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 8), 13, Theme.text)
-local LblRemoteSelecionado = Label(CardSelecionado, "Nenhum remote selecionado.", UDim2.new(1, -24, 0, 60), UDim2.new(0, 12, 0, 34), 9, Theme.subtext)
-LblRemoteSelecionado.TextYAlignment = Enum.TextYAlignment.Top
-local BtnTestarRemote = Button(CardSelecionado, "TESTAR 1X", UDim2.new(0.31, -8, 0, 32), UDim2.new(0, 12, 0, 116), nil, true)
-local BtnCopiarPath = Button(CardSelecionado, "COPIAR CAMINHO", UDim2.new(0.31, -8, 0, 32), UDim2.new(0.345, 0, 0, 116), nil, false)
-local BtnLimparSelecao = Button(CardSelecionado, "LIMPAR", UDim2.new(0.31, -8, 0, 32), UDim2.new(0.69, 0, 0, 116), nil, false)
-
-local function LimparListaRemotes()
-    for _, child in ipairs(ListaRemotes:GetChildren()) do
-        if child:IsA("TextButton") then child:Destroy() end
-    end
-end
-
-local function AtualizarFiltros()
-    for nome, b in pairs(BotoesFiltro) do
-        local ativo = nome == FiltroCategoria
-        b.BackgroundColor3 = ativo and Theme.accent or Theme.card2
-        b:SetAttribute("Active", ativo)
-    end
-end
-
-local function AtualizarListaRemotes()
-    LimparListaRemotes()
-
-    local busca = string.lower(InputBusca.Text or "")
-    local categorias = FiltroCategoria == "Todos" and {"Click", "Egg", "Pet", "Equip", "Unequip", "Merge", "Inventory", "Outro"} or {FiltroCategoria}
-    local totalVisiveis = 0
-
-    for _, categoria in ipairs(categorias) do
-        for _, item in ipairs(RemoteCache.porCategoria[categoria] or {}) do
-            local alvo = string.lower(item.nome .. " " .. item.caminho .. " " .. item.categoria)
-            if busca == "" or string.find(alvo, busca, 1, true) then
-                local b = Instance.new("TextButton")
-                b.Size = UDim2.new(1, -10, 0, 50)
-                b.BackgroundColor3 = Theme.card2
-                b.BorderSizePixel = 0
-                b.AutoButtonColor = false
-                b.Text = string.format("[%s]  %s  •  %s\n%s", item.categoria, item.nome, item.tipo, item.caminho)
-                b.TextColor3 = Theme.text
-                b.Font = Enum.Font.Code
-                b.TextSize = 9
-                b.TextWrapped = true
-                b.TextXAlignment = Enum.TextXAlignment.Left
-                b.TextYAlignment = Enum.TextYAlignment.Center
-                b.Parent = ListaRemotes
-                Corner(b, 6)
-                Stroke(b, Theme.stroke, 1)
-
-                b.MouseEnter:Connect(function() b.BackgroundColor3 = Theme.field end)
-                b.MouseLeave:Connect(function() b.BackgroundColor3 = Theme.card2 end)
-                b.MouseButton1Click:Connect(function()
-                    RemoteSelecionado = item
-                    LblRemoteSelecionado.Text = string.format(
-                        "%s\nNome: %s\nTipo: %s\nCategoria: %s",
-                        item.caminho, item.nome, item.tipo, item.categoria
-                    )
-                    LogStatus("Selecionado: " .. item.nome)
-                end)
-
-                totalVisiveis = totalVisiveis + 1
-                if totalVisiveis >= Config.limiteListaRemotes then break end
-            end
-        end
-        if totalVisiveis >= Config.limiteListaRemotes then break end
-    end
-
-    task.defer(function()
-        ListaRemotes.CanvasSize = UDim2.fromOffset(0, ListaLayout.AbsoluteContentSize.Y + 10)
-    end)
-end
-
-AtualizarFiltros()
-
--- =========================================================
--- ABA CONFIG
--- =========================================================
-local CardTaxas = Card(PagConfig, UDim2.new(1, -4, 0, 198))
-Label(CardTaxas, "Intervalos e desempenho", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 8), 13, Theme.text)
-Label(CardTaxas, "Clique (seg)", UDim2.new(0.28, 0, 0, 18), UDim2.new(0, 12, 0, 37), 10, Theme.subtext)
-local InputClickInterval = Input(CardTaxas, tostring(Config.clickIntervalo), "0.05", UDim2.new(0.25, -10, 0, 31), UDim2.new(0, 12, 0, 56))
-Label(CardTaxas, "Fusão (seg)", UDim2.new(0.28, 0, 0, 18), UDim2.new(0.34, 0, 0, 37), 10, Theme.subtext)
-local InputMergeInterval = Input(CardTaxas, tostring(Config.fusaoIntervalo), "2.0", UDim2.new(0.27, -10, 0, 31), UDim2.new(0.34, 0, 0, 56))
-Label(CardTaxas, "Ovo (seg)", UDim2.new(0.28, 0, 0, 18), UDim2.new(0.68, 0, 0, 37), 10, Theme.subtext)
-local InputOvoInterval2 = Input(CardTaxas, tostring(Config.ovoIntervalo), "0.30", UDim2.new(0.27, -10, 0, 31), UDim2.new(0.68, 0, 0, 56))
-local BtnAplicarConfig = Button(CardTaxas, "APLICAR CONFIGURAÇÃO", UDim2.new(1, -24, 0, 34), UDim2.new(0, 12, 0, 100), nil, true)
-Label(CardTaxas, "Clique: 0.01–5 • Ovo/Fusão: 0.05–10", UDim2.new(1, -24, 0, 18), UDim2.new(0, 12, 0, 143), 9, Theme.subtext)
-Label(CardTaxas, "As faixas são apenas limites do painel; o jogo ainda controla o que aceita.", UDim2.new(1, -24, 0, 18), UDim2.new(0, 12, 0, 161), 9, Theme.muted)
-
-local CardManutencao = Card(PagConfig, UDim2.new(1, -4, 0, 150))
-Label(CardManutencao, "Manutenção", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 8), 13, Theme.text)
-local BtnReScan = Button(CardManutencao, "REVARrer REMOTES", UDim2.new(0.48, -8, 0, 32), UDim2.new(0, 12, 0, 37), nil, false)
-local BtnResetConfig = Button(CardManutencao, "RESETAR CONFIG", UDim2.new(0.48, -8, 0, 32), UDim2.new(0.52, -4, 0, 37), nil, false)
-local BtnParar = Button(CardManutencao, "PARAR TUDO", UDim2.new(0.48, -8, 0, 32), UDim2.new(0, 12, 0, 82), nil, false)
-local BtnFecharConfig = Button(CardManutencao, "FECHAR LABORATÓRIO", UDim2.new(0.48, -8, 0, 32), UDim2.new(0.52, -4, 0, 82), nil, false)
-
-local CardAviso = Card(PagConfig, UDim2.new(1, -4, 0, 98))
-Label(CardAviso, "Diagnóstico", UDim2.new(1, -24, 0, 20), UDim2.new(0, 12, 0, 8), 13, Theme.text)
-Label(CardAviso, "Use a aba Remotes para confirmar nomes e caminhos antes de automatizar.", UDim2.new(1, -24, 0, 34), UDim2.new(0, 12, 0, 34), 9, Theme.subtext)
-
--- =========================================================
--- STATUS / UI
--- =========================================================
-local BottomBar = Instance.new("Frame")
-BottomBar.Size = UDim2.new(1, -18, 0, 25)
-BottomBar.Position = UDim2.new(0, 9, 1, -30)
-BottomBar.BackgroundTransparency = 1
-BottomBar.Parent = FramePainel
-LblLog = Label(BottomBar, UltimoStatus, UDim2.new(1, -10, 1, 0), UDim2.new(0, 4, 0, 0), 9, Theme.muted)
-
-local function AtualizarCabecalho()
-    local algoAtivo = AutoCliqueAtivado or AutoChocarAtivado or AutoFusaoAtivado or VelocidadeAtivada
-    HeaderStatus.Text = algoAtivo and "RODANDO" or "PRONTO"
-    HeaderStatus.TextColor3 = algoAtivo and Theme.success or Theme.subtext
-    StatusDot.BackgroundColor3 = algoAtivo and Theme.success or Theme.subtext
-end
-
-local function AtualizarUIStatus()
-    if LblStatusGrande then LblStatusGrande.Text = UltimoStatus end
-    if LblLog then LblLog.Text = UltimoStatus end
-    if LblScanResumo then
-        local estadoMonitor = RemoteWatchAtivo and "monitoramento ativo" or "monitoramento pausado"
-        LblScanResumo.Text = string.format("%d remotes • %s", RemoteCache.total, estadoMonitor)
-    end
-    if LblMetricas then
-        local ativos = 0
-        if AutoCliqueAtivado then ativos = ativos + 1 end
-        if AutoChocarAtivado then ativos = ativos + 1 end
-        if AutoFusaoAtivado then ativos = ativos + 1 end
-        if VelocidadeAtivada then ativos = ativos + 1 end
-        LblMetricas.Text = string.format(
-            "Remotes: %d  •  Ativos: %d  •  Cliques: %d  •  Ovos: %d  •  Fusões: %d",
-            RemoteCache.total, ativos, Metricas.clicks, Metricas.ovos, Metricas.fusoes
-        )
-    end
-    AtualizarCabecalho()
-end
-
--- =========================================================
--- AÇÕES
--- =========================================================
-local function PararTudo()
-    AutoCliqueAtivado = false
-    AutoChocarAtivado = false
-    AutoFusaoAtivado = false
-    VelocidadeAtivada = false
-
-    if ConexaoVelocidade then
-        pcall(function() ConexaoVelocidade:Disconnect() end)
-        ConexaoVelocidade = nil
-    end
-
-    EstadoBotao(BtnClique, false, "ATIVADO", "DESLIGADO")
-    EstadoBotao(BtnFusao, false, "ATIVADO", "DESLIGADO")
-    EstadoBotao(BtnOvo, false, "ATIVADO", "DESLIGADO")
-    EstadoBotao(BtnVel, false, "ATIVADO", "Ativar")
-    EstadoBotao(BtnQuickClick, false, "Auto-Clique: ON", "Auto-Clique")
-    EstadoBotao(BtnQuickEgg, false, "Auto-Chocar: ON", "Auto-Chocar")
-    EstadoBotao(BtnQuickMerge, false, "Auto-Fusão: ON", "Auto-Fusão")
-
-    LogStatus("Todas as automações foram paradas.")
-    AtualizarLogVisual()
-    AtualizarUIStatus()
-end
-
-local function AlternarVelocidade()
-    Config.velocidade = math.clamp(tonumber(InputVel.Text) or 255, 1, 5000)
-    InputVel.Text = tostring(Config.velocidade)
-    VelocidadeAtivada = not VelocidadeAtivada
-
-    if VelocidadeAtivada then
-        if ConexaoVelocidade then
-            pcall(function() ConexaoVelocidade:Disconnect() end)
-        end
-
-        ConexaoVelocidade = RunService.RenderStepped:Connect(function()
-            if not VelocidadeAtivada then return end
-            pcall(function()
-                local character = LocalPlayer.Character
-                local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-                if character and humanoid and humanoid.MoveDirection.Magnitude > 0 then
-                    character:TranslateBy(humanoid.MoveDirection * (Config.velocidade / 135))
-                end
-            end)
-        end)
-
-        EstadoBotao(BtnVel, true, "ATIVADO", "Ativar")
-        LogStatus("Movimento ativado: " .. tostring(Config.velocidade))
-    else
-        if ConexaoVelocidade then
-            pcall(function() ConexaoVelocidade:Disconnect() end)
-            ConexaoVelocidade = nil
-        end
-        EstadoBotao(BtnVel, false, "ATIVADO", "Ativar")
-        LogStatus("Movimento desativado.")
-    end
-    AtualizarLogVisual()
-    AtualizarUIStatus()
-end
-
-local function AlternarClick()
-    AutoCliqueAtivado = not AutoCliqueAtivado
-    EstadoBotao(BtnClique, AutoCliqueAtivado, "ATIVADO", "DESLIGADO")
-    EstadoBotao(BtnQuickClick, AutoCliqueAtivado, "Auto-Clique: ON", "Auto-Clique")
-    LogStatus(AutoCliqueAtivado and "Auto-Clique ativado." or "Auto-Clique desativado.")
-    AtualizarLogVisual()
-    AtualizarUIStatus()
-end
-
-local function AlternarOvo()
-    Config.nomeOvo = InputOvo.Text ~= "" and InputOvo.Text or "Common Egg"
-    Config.quantidadeOvo = math.max(1, math.floor(tonumber(InputQtd.Text) or 1))
-    Config.ovoIntervalo = NormalizarIntervalo(InputIntervaloOvo.Text, 0.30, 0.05, 10)
-
-    InputOvo.Text = Config.nomeOvo
-    InputQtd.Text = tostring(Config.quantidadeOvo)
-    InputIntervaloOvo.Text = tostring(Config.ovoIntervalo)
-
-    AutoChocarAtivado = not AutoChocarAtivado
-    EstadoBotao(BtnOvo, AutoChocarAtivado, "ATIVADO", "DESLIGADO")
-    EstadoBotao(BtnQuickEgg, AutoChocarAtivado, "Auto-Chocar: ON", "Auto-Chocar")
-    LogStatus((AutoChocarAtivado and "Auto-Chocar ativado: " or "Auto-Chocar desativado: ") .. Config.nomeOvo)
-    AtualizarLogVisual()
-    AtualizarUIStatus()
-end
-
-local function AlternarFusao()
-    AutoFusaoAtivado = not AutoFusaoAtivado
-    EstadoBotao(BtnFusao, AutoFusaoAtivado, "ATIVADO", "DESLIGADO")
-    EstadoBotao(BtnQuickMerge, AutoFusaoAtivado, "Auto-Fusão: ON", "Auto-Fusão")
-    LogStatus(AutoFusaoAtivado and "Auto-Fusão ativada." or "Auto-Fusão desativada.")
-    AtualizarLogVisual()
-    AtualizarUIStatus()
-end
-
--- =========================================================
--- EVENTOS DOS BOTÕES
--- =========================================================
-local function RestaurarConfiguracaoPadrao()
-    Config.velocidade = 255
-    Config.clickIntervalo = 0.05
-    Config.ovoIntervalo = 0.30
-    Config.fusaoIntervalo = 2.0
-    Config.nomeOvo = "Common Egg"
-    Config.quantidadeOvo = 1
-
-    InputVel.Text = tostring(Config.velocidade)
-    InputClickInterval.Text = tostring(Config.clickIntervalo)
-    InputOvoInterval2.Text = tostring(Config.ovoIntervalo)
-    InputIntervaloOvo.Text = tostring(Config.ovoIntervalo)
-    InputMergeInterval.Text = tostring(Config.fusaoIntervalo)
-    InputOvo.Text = Config.nomeOvo
-    InputQtd.Text = tostring(Config.quantidadeOvo)
-
-    LogStatus("Configuração restaurada para os valores padrão.")
-    AtualizarLogVisual()
-    AtualizarUIStatus()
-end
-
-BtnVel.MouseButton1Click:Connect(AlternarVelocidade)
-BtnClique.MouseButton1Click:Connect(AlternarClick)
-BtnOvo.MouseButton1Click:Connect(AlternarOvo)
-BtnFusao.MouseButton1Click:Connect(AlternarFusao)
-BtnQuickClick.MouseButton1Click:Connect(AlternarClick)
-BtnQuickEgg.MouseButton1Click:Connect(AlternarOvo)
-BtnQuickMerge.MouseButton1Click:Connect(AlternarFusao)
-BtnQuickStop.MouseButton1Click:Connect(PararTudo)
-BtnParar.MouseButton1Click:Connect(PararTudo)
-BtnScanEstrutura.MouseButton1Click:Connect(InspecionarEstrutura)
-
-BtnReScan.MouseButton1Click:Connect(function()
-    ScanRemotes(true)
-    AtualizarListaRemotes()
-    AtualizarFiltros()
-    AtualizarUIStatus()
-    AtualizarLogVisual()
-end)
-
-BtnResetConfig.MouseButton1Click:Connect(RestaurarConfiguracaoPadrao)
-
-BtnScan.MouseButton1Click:Connect(function()
-    ScanRemotes(true)
-    AtualizarListaRemotes()
-    AtualizarFiltros()
-    AtualizarUIStatus()
-    AtualizarLogVisual()
-end)
-
-InputBusca:GetPropertyChangedSignal("Text"):Connect(function()
-    AtualizarListaRemotes()
-end)
-
-for nomeFiltro, botao in pairs(BotoesFiltro) do
-    botao.MouseButton1Click:Connect(function()
-        FiltroCategoria = nomeFiltro
-        AtualizarFiltros()
-        AtualizarListaRemotes()
-    end)
-end
-
-BtnTestarRemote.MouseButton1Click:Connect(function()
-    if not RemoteSelecionado then
-        LogStatus("Selecione um remote primeiro.")
-        AtualizarLogVisual()
+    local ALLOWED_PLACE_ID = 124216119978534
+    if tonumber(game.PlaceId) ~= ALLOWED_PLACE_ID then
+        warn("[RideAPet v16] Bloqueado fora do Monter um Pet. PlaceId=" .. tostring(game.PlaceId))
         return
     end
 
-    local ok, resultado = ExecutarAcaoPorCategoria(RemoteSelecionado)
-    if ok then
-        LogStatus("Teste 1x OK: " .. RemoteSelecionado.nome)
-        if RemoteSelecionado.categoria == "Click" then
-            Metricas.clicks = Metricas.clicks + 1
-        elseif RemoteSelecionado.categoria == "Egg" then
-            Metricas.ovos = Metricas.ovos + 1
-        elseif RemoteSelecionado.categoria == "Merge" then
-            Metricas.fusoes = Metricas.fusoes + 1
+    local INSTANCE_KEY = "__RideAPet_COMPLETO_v16"
+    if type(Env[INSTANCE_KEY]) == "function" then
+        pcall(Env[INSTANCE_KEY])
+    end
+
+    local function GetService(name)
+        local ok, service = pcall(function() return game:GetService(name) end)
+        return ok and service or nil
+    end
+
+    local Players = GetService("Players")
+    local RunService = GetService("RunService")
+    local TweenService = GetService("TweenService")
+    local ReplicatedStorage = GetService("ReplicatedStorage")
+    local Workspace = GetService("Workspace")
+    local UserInputService = GetService("UserInputService")
+    local VirtualUser = GetService("VirtualUser")
+    if not Players or not RunService or not TweenService or not ReplicatedStorage or not Workspace then
+        warn("[RideAPet v16] Servicos essenciais indisponiveis neste cliente.")
+        return
+    end
+    local LocalPlayer = Players.LocalPlayer
+    if not LocalPlayer then
+        warn("[RideAPet v16] LocalPlayer indisponível.")
+        return
+    end
+
+    local Destroyed = false
+    local Connections = {}
+    local Rayfield, Window
+    local SpeedConnection
+    local EggESP = {}
+    local Busy = false
+    local JobToken = 0
+
+    local function Connect(signal, callback)
+        local ok, conn = pcall(function()
+            return signal:Connect(callback)
+        end)
+        if ok and conn then
+            table.insert(Connections, conn)
         end
-    else
-        LogStatus("Teste 1x falhou: " .. tostring(resultado))
+        return conn
     end
-    AtualizarLogVisual()
-    AtualizarUIStatus()
-end)
 
-BtnCopiarPath.MouseButton1Click:Connect(function()
-    if RemoteSelecionado then
-        CopiarTexto(RemoteSelecionado.caminho)
-    else
-        LogStatus("Nenhum remote selecionado.")
-        AtualizarLogVisual()
+    local function DisconnectAll()
+        for _, conn in ipairs(Connections) do
+            pcall(function() conn:Disconnect() end)
+        end
+        Connections = {}
+        if SpeedConnection then
+            pcall(function() SpeedConnection:Disconnect() end)
+            SpeedConnection = nil
+        end
     end
-end)
 
-BtnLimparSelecao.MouseButton1Click:Connect(function()
-    RemoteSelecionado = nil
-    LblRemoteSelecionado.Text = "Nenhum remote selecionado."
-    LogStatus("Seleção limpa.")
-    AtualizarLogVisual()
-end)
+    local State = {
+        status = "Inicializando...",
+        errors = 0,
+        collected = 0,
+        placed = 0,
+        hatched = 0,
+        claimed = 0,
+        fed = 0,
+        boughtFood = 0,
+        sold = 0,
+        favorited = 0,
+        manualTests = 0,
+        autoCollect = false,
+        autoPlace = false,
+        autoHatch = false,
+        autoBest = false,
+        autoIndex = false,
+        autoFeed = false,
+        autoBuyFood = false,
+        autoSell = false,
+        autoFavorites = false,
+        autoFarm = false,
+        antiAFK = true,
+        eggESP = false,
+        espDistance = 5000,
+        maxCollectDistance = 15000,
+        minLuck = 0,
+        minWeight = 0,
+        eggPriority = "Highest luck",
+        selectedEgg = "",
+        selectedPetKey = "",
+        selectedFood = "",
+        walkSpeed = 16,
+        fov = 70,
+        jumpPower = 50,
+        tweenSpeed = 180,
+        selectedRarities = {},
+        selectedTypes = {},
+        selectedMutations = {},
+        mutatedOnly = false,
+        feedPets = {},
+        buyFoods = {},
+        favoriteRarities = {},
+        favoriteTypes = {},
+        sellFavoritesProtected = true,
+        foodAmount = 1,
+        sellOneByOne = true,
+        autoServerHop = false,
+        serverHopInterval = 300,
+        startedAt = os.clock(),
+        failureStreak = {},
+        failurePaused = {},
+        lastRemoteFire = {},
+        failedEggs = {},
+        compatibility = {},
+    }
 
-BtnAplicarConfig.MouseButton1Click:Connect(function()
-    Config.clickIntervalo = NormalizarIntervalo(InputClickInterval.Text, 0.05, 0.01, 5)
-    Config.fusaoIntervalo = NormalizarIntervalo(InputMergeInterval.Text, 2.0, 0.05, 10)
-    Config.ovoIntervalo = NormalizarIntervalo(InputOvoInterval2.Text, 0.30, 0.05, 10)
+    local OriginalPlayer = {
+        walkSpeed = nil,
+        jumpPower = nil,
+        useJumpPower = nil,
+        fov = nil,
+    }
 
-    InputClickInterval.Text = tostring(Config.clickIntervalo)
-    InputMergeInterval.Text = tostring(Config.fusaoIntervalo)
-    InputOvoInterval2.Text = tostring(Config.ovoIntervalo)
-    InputIntervaloOvo.Text = tostring(Config.ovoIntervalo)
-
-    LogStatus("Configuração aplicada.")
-    AtualizarLogVisual()
-    AtualizarUIStatus()
-end)
-
-BtnFecharConfig.MouseButton1Click:Connect(function()
-    EncerrarInstanciaAtual()
-    if AmbienteGlobal[CHAVE_INSTANCIA] == EncerrarInstanciaAtual then
-        AmbienteGlobal[CHAVE_INSTANCIA] = nil
+    for _, r in ipairs({"Common","Rare","Epic","Legendary","Mythic","Divine","Ethereal"}) do
+        State.selectedRarities[r] = true
+        State.favoriteRarities[r] = true
     end
-end)
 
-BtnClose.MouseButton1Click:Connect(function()
-    EncerrarInstanciaAtual()
-    if AmbienteGlobal[CHAVE_INSTANCIA] == EncerrarInstanciaAtual then
-        AmbienteGlobal[CHAVE_INSTANCIA] = nil
+    local function Status(text)
+        State.status = tostring(text)
+        print("[RideAPet] " .. State.status)
     end
-end)
 
--- =========================================================
--- MINIMIZAR
--- =========================================================
-BtnMin.MouseButton1Click:Connect(function()
-    Minimizado = not Minimizado
-    Sidebar.Visible = not Minimizado
-    Conteudo.Visible = not Minimizado
-    BottomBar.Visible = not Minimizado
+    local function Error(context, err)
+        State.errors += 1
+        Status(context .. ": " .. tostring(err))
+        warn("[RideAPet v16] " .. context .. ": " .. tostring(err))
+    end
 
-    local alvo = Minimizado and UDim2.fromOffset(math.min(painelW, 280), 50) or UDim2.fromOffset(painelW, painelH)
-    pcall(function()
-        TweenService:Create(FramePainel, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = alvo}):Play()
+    local function Notify(title, content, duration)
+        if Rayfield then
+            pcall(function()
+                Rayfield:Notify({
+                    Title = title or "Ride A Pet",
+                    Content = content or "",
+                    Duration = duration or 3,
+                })
+            end)
+        end
+    end
+
+    local function SafeRequire(moduleScript)
+        if not moduleScript or not moduleScript:IsA("ModuleScript") then
+            return nil
+        end
+        local ok, result = pcall(require, moduleScript)
+        return ok and result or nil
+    end
+
+    local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    local GameRemotes = Remotes and Remotes:FindFirstChild("Game")
+    local ServerData = ReplicatedStorage:FindFirstChild("ServerData")
+    local ActiveEggs = ServerData and ServerData:FindFirstChild("ActiveEggs")
+    local SavedData = LocalPlayer:FindFirstChild("SavedData")
+
+    local GameDataFolder = ReplicatedStorage:FindFirstChild("GameData")
+    local GameServicesFolder = ReplicatedStorage:FindFirstChild("GameServices")
+    local Data = {
+        Eggs = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("Eggs")),
+        Pets = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("Pets")),
+        General = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("General")),
+        Mutations = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("Mutations")),
+        EggBaskets = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("EggBaskets")),
+        IndexRewards = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("IndexRewards")),
+        Foods = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("Foods")),
+        Shop = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("Shop")),
+    }
+    local Services = {
+        PetAging = SafeRequire(GameServicesFolder and GameServicesFolder:FindFirstChild("PetAging")),
+        DayNight = SafeRequire(GameServicesFolder and GameServicesFolder:FindFirstChild("DayNight")),
+    }
+    local Renderer = SafeRequire(
+        LocalPlayer:FindFirstChild("PlayerScripts")
+        and LocalPlayer.PlayerScripts:FindFirstChild("Game")
+        and LocalPlayer.PlayerScripts.Game:FindFirstChild("Pets")
+        and LocalPlayer.PlayerScripts.Game.Pets:FindFirstChild("PetRenderer")
+    )
+
+    local function RefreshGameReferences()
+        Remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        GameRemotes = Remotes and Remotes:FindFirstChild("Game")
+        ServerData = ReplicatedStorage:FindFirstChild("ServerData")
+        ActiveEggs = ServerData and ServerData:FindFirstChild("ActiveEggs")
+        SavedData = LocalPlayer:FindFirstChild("SavedData")
+        GameDataFolder = ReplicatedStorage:FindFirstChild("GameData")
+        GameServicesFolder = ReplicatedStorage:FindFirstChild("GameServices")
+        Data.Eggs = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("Eggs"))
+        Data.Pets = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("Pets"))
+        Data.General = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("General"))
+        Data.Mutations = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("Mutations"))
+        Data.EggBaskets = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("EggBaskets"))
+        Data.IndexRewards = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("IndexRewards"))
+        Data.Foods = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("Foods"))
+        Data.Shop = SafeRequire(GameDataFolder and GameDataFolder:FindFirstChild("Shop"))
+        Services.PetAging = SafeRequire(GameServicesFolder and GameServicesFolder:FindFirstChild("PetAging"))
+        Services.DayNight = SafeRequire(GameServicesFolder and GameServicesFolder:FindFirstChild("DayNight"))
+        Renderer = SafeRequire(
+            LocalPlayer:FindFirstChild("PlayerScripts")
+            and LocalPlayer.PlayerScripts:FindFirstChild("Game")
+            and LocalPlayer.PlayerScripts.Game:FindFirstChild("Pets")
+            and LocalPlayer.PlayerScripts.Game.Pets:FindFirstChild("PetRenderer")
+        )
+    end
+
+    local function InitializeFilterDefaults()
+        if Data.Eggs then
+            for name, data in pairs(Data.Eggs) do
+                if type(data) == "table" and not data.Premium then
+                    State.selectedTypes[name] = true
+                end
+            end
+        end
+        if Data.Mutations then
+            State.selectedMutations.None = true
+            for name, data in pairs(Data.Mutations) do
+                if type(data) == "table" then State.selectedMutations[name] = true end
+            end
+        else
+            State.selectedMutations.None = true
+        end
+    end
+
+    local function WaitForGameStructure(seconds)
+        local deadline = os.clock() + (seconds or 12)
+        repeat
+            RefreshGameReferences()
+            if GameRemotes and ActiveEggs and SavedData and Data.Eggs and Data.Pets then
+                return true
+            end
+            task.wait(0.25)
+        until os.clock() >= deadline or Destroyed
+        return GameRemotes ~= nil and ActiveEggs ~= nil
+    end
+
+    local function Value(name, default)
+        local obj = SavedData and SavedData:FindFirstChild(name)
+        if obj then
+            local ok, value = pcall(function() return obj.Value end)
+            if ok then return value end
+        end
+        return default
+    end
+
+    local function Character()
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if humanoid and root and humanoid.Health > 0 then
+            return character, humanoid, root
+        end
+    end
+
+    local function Tools()
+        local result = {}
+        for _, root in ipairs({
+            LocalPlayer:FindFirstChild("Backpack"),
+            LocalPlayer.Character,
+        }) do
+            if root then
+                for _, item in ipairs(root:GetChildren()) do
+                    if item:IsA("Tool") then
+                        table.insert(result, item)
+                    end
+                end
+            end
+        end
+        return result
+    end
+
+    local function Tool(name, key)
+        for _, tool in ipairs(Tools()) do
+            local matchesName = (not name or tool.Name == name)
+            local matchesKey = (not key or tool:GetAttribute("PetKey") == key)
+            if matchesName and matchesKey then
+                return tool
+            end
+        end
+    end
+
+    local function Equip(tool)
+        local _, humanoid = Character()
+        if humanoid and tool and tool.Parent then
+            local ok = pcall(function() humanoid:EquipTool(tool) end)
+            return ok
+        end
+        return false
+    end
+
+    local function GameRemote(name)
+        if not GameRemotes then return nil end
+        local remote = GameRemotes:FindFirstChild(name)
+        if remote and remote:IsA("RemoteEvent") then
+            return remote
+        end
+        return nil
+    end
+
+    local function Fire(name, ...)
+        if IsPaused(name) then return false end
+        if not RemoteCooldown(name, 0.12) then return false end
+        local remote = GameRemote(name)
+        if not remote then
+            RecordFailure("Remote " .. name, "ausente")
+            return false
+        end
+        local ok, err = pcall(function(...)
+            remote:FireServer(...)
+        end, ...)
+        if not ok then
+            RecordFailure(name, err)
+            return false
+        end
+        State.failureStreak[name] = {count = 0, at = os.clock()}
+        return true
+    end
+
+    local function WaitFor(predicate, seconds, token)
+        local deadline = os.clock() + seconds
+        repeat
+            if Destroyed then return false end
+            if token and token ~= JobToken then return false end
+            local ok, result = pcall(predicate)
+            if ok and result then return result end
+            task.wait(0.1)
+        until os.clock() >= deadline
+        return false
+    end
+
+    local function StartJob(label)
+        if Busy then return nil end
+        Busy = true
+        JobToken += 1
+        Status(label)
+        return JobToken
+    end
+
+    local function EndJob(token)
+        if token == JobToken then
+            Busy = false
+        end
+    end
+
+    local function StopMovement()
+        if SpeedConnection then
+            pcall(function() SpeedConnection:Disconnect() end)
+            SpeedConnection = nil
+        end
+        local _, humanoid, root = Character()
+        if humanoid then
+            humanoid.PlatformStand = false
+            humanoid.AutoRotate = true
+        end
+        if root then
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+
+    local function MoveTo(position, token, radius)
+        if token ~= JobToken or Destroyed then return false end
+        local character, humanoid, root = Character()
+        if not character or not humanoid or not root then return false end
+
+        local target = position + Vector3.new(0, math.max(3, humanoid.HipHeight + root.Size.Y / 2), 0)
+        local duration = math.max(0.1, (root.Position - target).Magnitude / math.clamp(State.tweenSpeed, 40, 350))
+
+        local originalPlatformStand = humanoid.PlatformStand
+        local originalAutoRotate = humanoid.AutoRotate
+        local collisionBackup = {}
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                collisionBackup[part] = part.CanCollide
+            end
+        end
+
+        humanoid.PlatformStand = true
+        humanoid.AutoRotate = false
+
+        local tween
+        local okCreate, tweenResult = pcall(function()
+            return TweenService:Create(
+                root,
+                TweenInfo.new(duration, Enum.EasingStyle.Linear),
+                {CFrame = CFrame.new(target) * root.CFrame.Rotation}
+            )
+        end)
+        if not okCreate or not tweenResult then
+            humanoid.PlatformStand = originalPlatformStand
+            humanoid.AutoRotate = originalAutoRotate
+            return false
+        end
+        tween = tweenResult
+        local collisionConnection
+        collisionConnection = Connect(RunService.Stepped, function()
+            if root.Parent and humanoid.Health > 0 then
+                for part in pairs(collisionBackup) do
+                    if part.Parent then part.CanCollide = false end
+                end
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end
+        end)
+
+        tween:Play()
+        local deadline = os.clock() + duration + 3
+        while token == JobToken and root.Parent and humanoid.Health > 0
+            and os.clock() < deadline
+            and tween.PlaybackState == Enum.PlaybackState.Playing do
+            task.wait(0.05)
+        end
+        local completed = tween.PlaybackState == Enum.PlaybackState.Completed
+        pcall(function() tween:Cancel() end)
+        pcall(function() tween:Destroy() end)
+        if collisionConnection then
+            pcall(function() collisionConnection:Disconnect() end)
+            for i, conn in ipairs(Connections) do
+                if conn == collisionConnection then table.remove(Connections, i) break end
+            end
+        end
+        for part, value in pairs(collisionBackup) do
+            if part.Parent then part.CanCollide = value end
+        end
+        if humanoid.Parent then
+            humanoid.PlatformStand = originalPlatformStand
+            humanoid.AutoRotate = originalAutoRotate
+        end
+        if root.Parent then
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end
+        if not completed or token ~= JobToken then return false end
+        task.wait(0.2)
+        local _, _, currentRoot = Character()
+        return currentRoot == root and (root.Position - target).Magnitude <= math.max(radius or 10, 12)
+    end
+
+    local function Plot()
+        local plots = Workspace:FindFirstChild("Plots")
+        if not plots then return nil end
+        for _, plot in ipairs(plots:GetChildren()) do
+            local data = plot:FindFirstChild("Data")
+            local owner = data and data:FindFirstChild("Owner")
+            if owner and owner.Value == LocalPlayer then
+                return plot
+            end
+        end
+    end
+
+    local function Home(token)
+        local _, _, root = Character()
+        local plot = Plot()
+        local base = plot and plot:FindFirstChild("Baseplate")
+        if not root or not plot or not base then return false end
+        local point = base.CFrame:PointToObjectSpace(root.Position)
+        local onPlot = math.abs(point.X) < base.Size.X / 2
+            and math.abs(point.Z) < base.Size.Z / 2
+            and math.abs(point.Y) < 35
+        if onPlot then return true end
+        return MoveTo(base.Position + Vector3.new(0, 3, 0), token, 12)
+    end
+
+    local function Basket()
+        local basket = LocalPlayer:FindFirstChild("Basket")
+        return basket and basket:GetChildren() or {}
+    end
+
+    local function EggCapacity()
+        if not Data.EggBaskets then return 1 end
+        local config = Data.EggBaskets[Value("EquippedEggBasket", "Wooden")]
+        return config and config.Capacity or 1
+    end
+
+    local function EggTools()
+        local result = {}
+        for _, tool in ipairs(Tools()) do
+            if Data.Eggs and Data.Eggs[tool.Name] and not tool:GetAttribute("PetKey") then
+                table.insert(result, tool)
+            end
+        end
+        table.sort(result, function(a, b)
+            local al = Data.Eggs[a.Name].Luck or 0
+            local bl = Data.Eggs[b.Name].Luck or 0
+            return al > bl
+        end)
+        return result
+    end
+
+    local function FormatNumber(value)
+        value = tonumber(value)
+        if not value then return "?" end
+        local units = {{1e12,"T"},{1e9,"B"},{1e6,"M"},{1e3,"K"}}
+        for _, item in ipairs(units) do
+            if math.abs(value) >= item[1] then
+                return string.format("%.2f%s", value / item[1], item[2])
+            end
+        end
+        return string.format("%.2f", value):gsub("%.?0+$","")
+    end
+
+    local RarityOrder = {
+        Common = 1, Rare = 2, Epic = 3, Legendary = 4,
+        Mythic = 5, Divine = 6, Ethereal = 7,
+    }
+
+    local function EggRowFromObject(obj)
+        if not obj or not Data.Eggs then return nil end
+        local name = obj:GetAttribute("Egg")
+        local data = name and Data.Eggs[name]
+        local position = obj:GetAttribute("Position")
+        if not data or typeof(position) ~= "Vector3" then return nil end
+        local privateTo = obj:GetAttribute("PrivateTo")
+        if privateTo and privateTo ~= LocalPlayer.UserId then return nil end
+        local collectedText = "," .. tostring(LocalPlayer:GetAttribute("CollectedEggs") or "") .. ","
+        if string.find(collectedText, "," .. tostring(obj.Name) .. ",", 1, true) then return nil end
+
+        local mutation = obj:GetAttribute("Mutation")
+        local spawnMutation = obj:GetAttribute("SpawnMutation")
+        local rawWeight = tonumber(obj:GetAttribute("Weight") or 1) or 1
+        local kg = rawWeight
+        if Data.General and type(Data.General.ShownEggKG) == "function" then
+            local okKG, shown = pcall(Data.General.ShownEggKG, rawWeight)
+            if okKG and tonumber(shown) then kg = tonumber(shown) end
+        end
+        local luck = tonumber(data.Luck or 0) or 0
+        local rarity = data.Rarity or "Common"
+        local row = {
+            ID = obj.Name,
+            Object = obj,
+            Name = name,
+            Position = position,
+            Rarity = rarity,
+            Luck = luck,
+            Weight = kg,
+            Mutation = mutation,
+            SpawnMutation = spawnMutation,
+            Distance = math.huge,
+        }
+        local _, _, root = Character()
+        if root then
+            row.Distance = (root.Position - position).Magnitude
+        end
+        local label = {}
+        if mutation and mutation ~= "" then table.insert(label, mutation) end
+        if spawnMutation and spawnMutation ~= "" and spawnMutation ~= mutation then table.insert(label, spawnMutation) end
+        row.MutationLabel = #label > 0 and table.concat(label, " + ") or "None"
+        return row
+    end
+
+    local function MatchesEgg(row)
+        if not row then return false end
+        if next(State.selectedRarities) and not State.selectedRarities[row.Rarity] then return false end
+        if next(State.selectedTypes) and not State.selectedTypes[row.Name] then return false end
+
+        local mutationCount = 0
+        local mutationOK = false
+        for _, mutation in ipairs({row.Mutation, row.SpawnMutation}) do
+            if mutation and mutation ~= "" then
+                mutationCount += 1
+                if next(State.selectedMutations) == nil or State.selectedMutations[mutation] then
+                    mutationOK = true
+                end
+            end
+        end
+        if mutationCount == 0 then
+            mutationOK = next(State.selectedMutations) == nil or State.selectedMutations.None == true
+        end
+        if next(State.selectedMutations) == nil then mutationOK = true end
+        if not mutationOK then return false end
+        if State.mutatedOnly and mutationCount == 0 then return false end
+        if row.Luck < State.minLuck then return false end
+        if row.Weight < State.minWeight then return false end
+        if row.Distance > State.maxCollectDistance then return false end
+        return true
+    end
+
+    local function EggList()
+        local result = {}
+        if not ActiveEggs then return result end
+        for _, obj in ipairs(ActiveEggs:GetChildren()) do
+            local row = EggRowFromObject(obj)
+            if row and os.clock() >= (State.failedEggs[row.ID] or 0) and MatchesEgg(row) then
+                table.insert(result, row)
+            end
+        end
+        table.sort(result, function(a, b)
+            if State.eggPriority == "Highest luck" and a.Luck ~= b.Luck then
+                return a.Luck > b.Luck
+            elseif State.eggPriority == "Rarest" and a.Rarity ~= b.Rarity then
+                return (RarityOrder[a.Rarity] or 0) > (RarityOrder[b.Rarity] or 0)
+            elseif State.eggPriority == "Heaviest" and a.Weight ~= b.Weight then
+                return a.Weight > b.Weight
+            end
+            return a.Distance < b.Distance
+        end)
+        return result
+    end
+
+    local function EggNameList()
+        local names = {}
+        if not Data.Eggs then return names end
+        for name, data in pairs(Data.Eggs) do
+            if type(data) == "table" and not data.Premium then
+                table.insert(names, name)
+            end
+        end
+        table.sort(names, function(a, b)
+            return (Data.Eggs[a].Luck or 0) < (Data.Eggs[b].Luck or 0)
+        end)
+        return names
+    end
+
+    local function FreeNests()
+        local result = {}
+        local plot = Plot()
+        local nests = plot and plot:FindFirstChild("Nests")
+        if nests then
+            for _, nest in ipairs(nests:GetChildren()) do
+                if nest:GetAttribute("Unlocked") and not nest:GetAttribute("Occupied") then
+                    table.insert(result, nest)
+                end
+            end
+        end
+        table.sort(result, function(a, b)
+            return (tonumber(a.Name) or 0) < (tonumber(b.Name) or 0)
+        end)
+        return result
+    end
+
+    local function PetList()
+        local result, seen = {}, {}
+        local renderer = Renderer
+
+        local function AddPet(obj, stateData, placed)
+            if not obj then return end
+            local key = obj:GetAttribute("PetKey")
+            local name = obj:GetAttribute("PetName") or obj.Name
+            local data = Data.Pets and Data.Pets[name]
+            if not key or not data or seen[key] then return end
+            seen[key] = true
+            local age = tonumber(obj:GetAttribute("Age") or (stateData and stateData.CurrentAge) or 1) or 1
+            local weight = tonumber(obj:GetAttribute("Weight") or 10) or 10
+            local mutation = obj:GetAttribute("Mutation")
+            local spawnMutation = obj:GetAttribute("SpawnMutation")
+            local factor = 1
+            if Data.Mutations and type(Data.Mutations.CombinedFactor) == "function" then
+                local ok, value = pcall(Data.Mutations.CombinedFactor, mutation, spawnMutation)
+                if ok and tonumber(value) then factor = value end
+            end
+            local income = stateData and (stateData.DisplayIncome or stateData.Income)
+            if not income then
+                income = (data.Income or 0) * weight / 10 * factor
+            end
+            local speed = (data.Speed or 0) * factor
+            if Services.PetAging and type(Services.PetAging.DisplaySpeedFor) == "function" then
+                local ok, value = pcall(Services.PetAging.DisplaySpeedFor, data.Speed or 0, weight)
+                if ok and tonumber(value) then speed = value * factor end
+            end
+            table.insert(result, {
+                Key = key,
+                Name = name,
+                Object = obj,
+                State = stateData,
+                Placed = placed,
+                Age = age,
+                Weight = weight,
+                Income = tonumber(income) or 0,
+                Speed = tonumber(speed) or 0,
+                Rarity = data.Rarity or "Common",
+                Mutation = mutation,
+                SpawnMutation = spawnMutation,
+                Favorite = obj:GetAttribute("Favorited") == true,
+            })
+        end
+
+        if renderer and type(renderer.GetAll) == "function" then
+            local ok, all = pcall(renderer.GetAll)
+            if ok and type(all) == "table" then
+                for _, stateData in pairs(all) do
+                    if stateData.OwnerUserId == LocalPlayer.UserId and stateData.Model and stateData.Model.Parent then
+                        AddPet(stateData.Model, stateData, true)
+                    end
+                end
+            end
+        end
+
+        local plot = Plot()
+        local placedPets = plot and plot:FindFirstChild("Pets")
+        if placedPets then
+            for _, pet in ipairs(placedPets:GetChildren()) do
+                AddPet(pet, nil, true)
+            end
+        end
+
+        local _, _, root = Character()
+        local mountJoint = root and root:FindFirstChild("PetMountJoint")
+        if mountJoint and mountJoint.Part1 and mountJoint.Part1.Parent then
+            AddPet(mountJoint.Part1.Parent, nil, false)
+        end
+
+        for _, tool in ipairs(Tools()) do
+            AddPet(tool, nil, false)
+        end
+
+        table.sort(result, function(a, b)
+            return a.Income > b.Income
+        end)
+        return result
+    end
+
+    local function InventoryPets()
+        local placed = {}
+        local result, seen = {}, {}
+        for _, pet in ipairs(PetList()) do
+            if pet.Placed then placed[pet.Key] = true end
+        end
+        local _, _, root = Character()
+        local joint = root and root:FindFirstChild("PetMountJoint")
+        local mounted = joint and joint.Part1 and joint.Part1.Parent
+        local mountedKey = mounted and mounted:GetAttribute("PetKey")
+        local backpack = LocalPlayer:FindFirstChild("Backpack")
+        local character = LocalPlayer.Character
+
+        for _, tool in ipairs(Tools()) do
+            local key = tool:GetAttribute("PetKey")
+            local name = tool:GetAttribute("PetName") or tool.Name
+            local data = Data.Pets and Data.Pets[name]
+            if key and data and not seen[key] and not placed[key] and key ~= mountedKey
+                and (tool.Parent == backpack or tool.Parent == character) then
+                seen[key] = true
+                table.insert(result, {
+                    Key = key,
+                    Name = name,
+                    Rarity = data.Rarity or "Common",
+                    Tool = tool,
+                    Favorite = tool:GetAttribute("Favorited") == true,
+                })
+            end
+        end
+        table.sort(result, function(a, b) return a.Name < b.Name end)
+        return result
+    end
+
+    local function EggTimers()
+        local rows = {}
+        local plot = Plot()
+        local eggs = plot and plot:FindFirstChild("Eggs")
+        if not eggs or not Data.Eggs or not Data.General or not Services.DayNight then return rows end
+
+        for _, egg in ipairs(eggs:GetChildren()) do
+            local info = egg:FindFirstChild("EggData", true)
+            local data = Data.Eggs[egg.Name]
+            local start = info and info:FindFirstChild("PlaceTime")
+            local weight = info and info:FindFirstChild("Weight")
+            if data and start and type(Data.General.GrowthTimeFor) == "function"
+                and type(Services.DayNight.GrowthRealRemaining) == "function" then
+                local ok1, total = pcall(Data.General.GrowthTimeFor, data.GrowthTime or 0, weight and weight.Value or 1)
+                local ok2, remaining = pcall(Services.DayNight.GrowthRealRemaining, start.Value, total)
+                if ok1 and ok2 then
+                    table.insert(rows, {
+                        Object = egg,
+                        Key = egg:GetAttribute("EggKey"),
+                        Name = egg.Name,
+                        Remaining = tonumber(remaining) or 0,
+                    })
+                end
+            end
+        end
+        table.sort(rows, function(a, b) return a.Remaining < b.Remaining end)
+        return rows
+    end
+
+    local function CollectEgg(egg)
+        local token = StartJob("Coletando " .. egg.Name)
+        if not token then return false end
+
+        local ok = false
+        if not egg.Object or not egg.Object.Parent then
+            EndJob(token)
+            return false
+        end
+
+        if #Basket() >= EggCapacity() then
+            if not Home(token) then
+                EndJob(token)
+                return false
+            end
+        end
+
+        local _, _, root = Character()
+        if not root then
+            EndJob(token)
+            return false
+        end
+        if (root.Position - egg.Position).Magnitude > 10 then
+            if not MoveTo(egg.Position, token, 10) then
+                EndJob(token)
+                return false
+            end
+        end
+        if token ~= JobToken or not egg.Object.Parent then
+            EndJob(token)
+            return false
+        end
+
+        local before = #Basket()
+        if not Fire("EggPickup", egg.ID) then
+            EndJob(token)
+            return false
+        end
+
+        if not WaitFor(function()
+            return #Basket() > before
+        end, 3, token) then
+            State.failedEggs[egg.ID] = os.clock() + 30
+            Status("Coleta não confirmada: " .. egg.Name .. " | ignorando por 30s")
+            EndJob(token)
+            return false
+        end
+
+        State.collected += 1
+        Status("Coletado: " .. egg.Name)
+        if Home(token) then
+            Status("Ovo entregue ao plot.")
+        end
+        EndJob(token)
+        return true
+    end
+
+    local function PlaceEggs()
+        local token = StartJob("Colocando ovos")
+        if not token then return false end
+        local plot = Plot()
+        if not plot or not Home(token) then
+            EndJob(token)
+            return false
+        end
+        local nests = FreeNests()
+        if #nests == 0 then
+            Status("Sem ninhos livres.")
+            EndJob(token)
+            return false
+        end
+
+        for _, nest in ipairs(nests) do
+            local tools = EggTools()
+            local tool = tools[1]
+            if not tool or token ~= JobToken then break end
+            if Equip(tool) then
+                task.wait(0.12)
+                if Fire("EggPlaced", {NestId = nest.Name}) then
+                    if WaitFor(function()
+                        return nest:GetAttribute("Occupied") == true
+                    end, 3, token) then
+                        State.placed += 1
+                    end
+                end
+            end
+        end
+
+        EndJob(token)
+        return true
+    end
+
+    local function HatchReady()
+        local token = StartJob("Abrindo ovos prontos")
+        if not token then return false end
+        for _, egg in ipairs(EggTimers()) do
+            if token ~= JobToken then break end
+            if egg.Remaining <= 0 and egg.Key then
+                local _, _, root = Character()
+                if root and (root.Position - egg.Object:GetPivot().Position).Magnitude > 12 then
+                    if not MoveTo(egg.Object:GetPivot().Position, token, 12) then break end
+                end
+                if Fire("Hatch", {EggKey = egg.Key}) then
+                    if WaitFor(function() return not egg.Object.Parent end, 8, token) then
+                        State.hatched += 1
+                        Status("Hatch: " .. egg.Name)
+                    end
+                end
+            end
+        end
+        EndJob(token)
+        return true
+    end
+
+    local function PlaceBestPets()
+        local token = StartJob("Organizando melhores pets")
+        if not token then return false end
+        if not Home(token) then
+            EndJob(token)
+            return false
+        end
+
+        local pets = PetList()
+        local capacity = tonumber(LocalPlayer:GetAttribute("MaxPets")) or tonumber(Value("MaxPets", 5)) or 5
+        table.sort(pets, function(a, b) return a.Income > b.Income end)
+
+        local desired = {}
+        for i = 1, math.min(capacity, #pets) do
+            desired[pets[i].Key] = true
+        end
+
+        for _, pet in ipairs(pets) do
+            if token ~= JobToken then break end
+            if pet.Placed and not desired[pet.Key] then
+                Fire("PickupPet", pet.Key)
+                WaitFor(function()
+                    return Tool(nil, pet.Key) ~= nil
+                end, 3, token)
+            end
+        end
+
+        local plot = Plot()
+        local base = plot and plot:FindFirstChild("Baseplate")
+        if not base then
+            EndJob(token)
+            return false
+        end
+
+        local count = math.min(capacity, #pets)
+        local cols = math.max(1, math.ceil(math.sqrt(math.max(count, 1))))
+        local spacing = math.min(9, (math.min(base.Size.X, base.Size.Z) - 12) / cols)
+
+        for i = 1, count do
+            local pet = pets[i]
+            local tool = Tool(nil, pet.Key)
+            if tool and Equip(tool) then
+                task.wait(0.12)
+                local pos = (
+                    base.CFrame
+                    * CFrame.new(
+                        ((i - 1) % cols - (cols - 1) / 2) * spacing,
+                        4,
+                        math.floor((i - 1) / cols) * spacing
+                    )
+                ).Position
+                if Fire("PlacePet", pet.Key, pos) then
+                    WaitFor(function()
+                        for _, p in ipairs(PetList()) do
+                            if p.Key == pet.Key and p.Placed then
+                                return true
+                            end
+                        end
+                        return false
+                    end, 3, token)
+                end
+            end
+        end
+
+        Status("Melhores pets organizados.")
+        EndJob(token)
+        return true
+    end
+
+    local function ClaimIndex()
+        if not Data.IndexRewards then return false end
+        if type(Data.IndexRewards.StageAt) ~= "function"
+            or type(Data.IndexRewards.DiscoveredCount) ~= "function" then
+            return false
+        end
+
+        local stage = tonumber(Value("IndexRewardStage", 0)) or 0
+        local reward = Data.IndexRewards.StageAt(stage)
+        local owned = Value("OwnedPets", "")
+        local discovered = Data.IndexRewards.DiscoveredCount(owned)
+
+        if reward and discovered >= reward.Goal then
+            local token = StartJob("Resgatando recompensa do Index")
+            if not token then return false end
+            if Fire("ClaimIndexReward") then
+                if WaitFor(function()
+                    return tonumber(Value("IndexRewardStage", 0)) ~= stage
+                end, 2, token) then
+                    State.claimed += 1
+                    Status("Recompensa do Index resgatada.")
+                end
+            end
+            EndJob(token)
+            return true
+        end
+        return false
+    end
+
+    local function FoodCount(name)
+        local count = 0
+        for _, tool in ipairs(Tools()) do
+            if tool.Name == name then
+                local data = tool:FindFirstChild("Data")
+                local amount = data and data:FindFirstChild("Amount")
+                if amount and amount:IsA("ValueBase") then
+                    count += math.max(0, math.floor(tonumber(amount.Value) or 0))
+                else
+                    count += 1
+                end
+            end
+        end
+        return count
+    end
+
+    local function BuyFood(name, amount)
+        amount = math.clamp(math.floor(tonumber(amount) or 1), 1, 100)
+        for _ = 1, amount do
+            if not Data.Shop or not Data.Shop.Food then break end
+            local def = Data.Shop.Food[name]
+            if not def or type(def.Price) ~= "number" then break end
+            local cash = tonumber(Value("Cash", 0)) or 0
+            if cash < def.Price then break end
+            local before = FoodCount(name)
+            if not Fire("BuyWithCash", "Food", name) then break end
+            if WaitFor(function()
+                return FoodCount(name) > before
+            end, 3) then
+                State.boughtFood += 1
+            else
+                break
+            end
+        end
+    end
+
+    local function FeedPet(petKey, foodName)
+        local pet
+        for _, item in ipairs(PetList()) do
+            if item.Key == petKey then pet = item break end
+        end
+        if not pet then return false end
+        if FoodCount(foodName) <= 0 then return false end
+
+        local token = StartJob("Alimentando " .. pet.Name)
+        if not token then return false end
+
+        local _, _, root = Character()
+        if pet.Placed and pet.Object and pet.Object:IsA("Model") and root then
+            local pos = pet.Object:GetPivot().Position
+            if (root.Position - pos).Magnitude > 18 then
+                if not MoveTo(pos, token, 12) then
+                    EndJob(token)
+                    return false
+                end
+            end
+        end
+
+        local foodTool = Tool(foodName)
+        if not Equip(foodTool) then
+            EndJob(token)
+            return false
+        end
+
+        task.wait(0.15)
+        local before = FoodCount(foodName)
+        if Fire("FeedPet", petKey, foodName)
+            and WaitFor(function()
+                return FoodCount(foodName) < before
+            end, 3, token) then
+            State.fed += 1
+            Status("Alimentado: " .. pet.Name)
+            EndJob(token)
+            return true
+        end
+
+        EndJob(token)
+        return false
+    end
+
+    local SellAPI
+    local SellDialogue
+    local SellDialogueRevision = 0
+
+    local function InitSell()
+        local dialogue = ReplicatedStorage:FindFirstChild("Dialogue")
+        local modules = dialogue and dialogue:FindFirstChild("Modules")
+        local remotes = dialogue and dialogue:FindFirstChild("Remotes")
+        local module = modules and modules:FindFirstChild("DialogueModule")
+        local api = SafeRequire(module)
+        if type(api) ~= "table" or type(api.SelectOption) ~= "function" or not remotes then
+            return false
+        end
+
+        SellAPI = api
+        for _, name in ipairs({"DialogueSend","DialogueUpdate"}) do
+            local remote = remotes:FindFirstChild(name)
+            if remote and remote:IsA("RemoteEvent") then
+                Connect(remote.OnClientEvent, function(data)
+                    if type(data) == "table" then
+                        SellDialogue = data
+                        SellDialogueRevision += 1
+                    end
+                end)
+            end
+        end
+        return true
+    end
+
+    local function SellVendor()
+        local stalls = Workspace:FindFirstChild("Stalls")
+        local stall = stalls and stalls:FindFirstChild("Sell")
+        local npc = stall and stall:FindFirstChild("Richie")
+        local root = npc and npc:FindFirstChild("HumanoidRootPart")
+        local prompt = root and root:FindFirstChildOfClass("ProximityPrompt")
+        return npc, root, prompt
+    end
+
+    local function SellOptionReady(npc)
+        if not SellDialogue or SellDialogue.Model ~= npc then return false end
+        local offered = false
+        for _, option in ipairs(SellDialogue.Options or {}) do
+            if option.Text == "I would like to sell this" then
+                offered = true
+                break
+            end
+        end
+        if not offered then return false end
+
+        local options = LocalPlayer.PlayerGui:FindFirstChild("Options")
+        local button = options and options:FindFirstChild("I would like to sell this")
+        return button and button:IsA("GuiButton") and button.Visible and button.Active and options.Enabled
+    end
+
+    local function OpenSellDialogue(npc, prompt, token)
+        if SellOptionReady(npc) then return true end
+        if type(fireproximityprompt) ~= "function" then
+            Status("Delta/executor não expõe fireproximityprompt.")
+            return false
+        end
+        local revision = SellDialogueRevision
+        if not pcall(fireproximityprompt, prompt) then return false end
+        return WaitFor(function()
+            return SellDialogueRevision > revision and SellOptionReady(npc)
+        end, 5, token)
+    end
+
+    local function SellOne(petKey)
+        local pet
+        for _, item in ipairs(InventoryPets()) do
+            if item.Key == petKey then pet = item break end
+        end
+        if not pet or (State.sellFavoritesProtected and pet.Favorite) then
+            return false
+        end
+        local npc, vendorRoot, prompt = SellVendor()
+        if not npc or not vendorRoot or not prompt or not SellAPI then
+            Status("Venda indisponível neste cliente.")
+            return false
+        end
+
+        local token = StartJob("Vendendo " .. pet.Name)
+        if not token then return false end
+
+        local _, _, root = Character()
+        if not root then
+            EndJob(token)
+            return false
+        end
+
+        local range = math.max(5, math.min(18, prompt.MaxActivationDistance - 3))
+        if (root.Position - vendorRoot.Position).Magnitude > range then
+            if not MoveTo(vendorRoot.Position + vendorRoot.CFrame.LookVector * 8, token, 12) then
+                EndJob(token)
+                return false
+            end
+        end
+
+        pet = nil
+        for _, item in ipairs(InventoryPets()) do
+            if item.Key == petKey then pet = item break end
+        end
+        if not pet or not Equip(pet.Tool) then
+            EndJob(token)
+            return false
+        end
+
+        task.wait(0.2)
+        if not OpenSellDialogue(npc, prompt, token) then
+            EndJob(token)
+            return false
+        end
+
+        if not pcall(SellAPI.SelectOption, "I would like to sell this") then
+            EndJob(token)
+            return false
+        end
+
+        local confirmed = WaitFor(function()
+            return Tool(nil, petKey) == nil
+        end, 5, token)
+
+        if confirmed then
+            State.sold += 1
+            Status("Vendido: " .. pet.Name)
+        end
+
+        EndJob(token)
+        return confirmed
+    end
+
+    local function FavoritePet(petKey)
+        if not petKey then return false end
+        if Fire("FavoritePet", petKey) then
+            State.favorited += 1
+            return true
+        end
+        return false
+    end
+
+    local function Dismount()
+        if LocalPlayer:GetAttribute("IsRiding") then
+            return Fire("PetDismount")
+        end
+        return true
+    end
+
+    local function ApplyPlayerSettings()
+        local _, humanoid = Character()
+        if humanoid then
+            if OriginalPlayer.walkSpeed == nil then OriginalPlayer.walkSpeed = humanoid.WalkSpeed end
+            if OriginalPlayer.useJumpPower == nil then OriginalPlayer.useJumpPower = humanoid.UseJumpPower end
+            local jp = humanoid.JumpPower
+            if OriginalPlayer.jumpPower == nil then OriginalPlayer.jumpPower = jp end
+            humanoid.WalkSpeed = State.walkSpeed
+            pcall(function()
+                humanoid.UseJumpPower = true
+                humanoid.JumpPower = State.jumpPower
+            end)
+        end
+        local camera = Workspace.CurrentCamera
+        if camera then
+            if OriginalPlayer.fov == nil then OriginalPlayer.fov = camera.FieldOfView end
+            camera.FieldOfView = State.fov
+        end
+    end
+
+    local function RestorePlayerSettings()
+        local _, humanoid = Character()
+        if humanoid then
+            if OriginalPlayer.walkSpeed ~= nil then humanoid.WalkSpeed = OriginalPlayer.walkSpeed end
+            if OriginalPlayer.useJumpPower ~= nil then
+                pcall(function() humanoid.UseJumpPower = OriginalPlayer.useJumpPower end)
+            end
+            if OriginalPlayer.jumpPower ~= nil then
+                pcall(function() humanoid.JumpPower = OriginalPlayer.jumpPower end)
+            end
+        end
+        local camera = Workspace.CurrentCamera
+        if camera and OriginalPlayer.fov ~= nil then camera.FieldOfView = OriginalPlayer.fov end
+    end
+
+    local function ToggleSpeedBoost(enabled)
+        if SpeedConnection then
+            pcall(function() SpeedConnection:Disconnect() end)
+            SpeedConnection = nil
+        end
+        if not enabled then return end
+        SpeedConnection = Connect(RunService.Heartbeat, function()
+            local _, humanoid = Character()
+            if humanoid then
+                humanoid.WalkSpeed = State.walkSpeed
+            end
+        end)
+    end
+
+    local function SetAntiAFK(enabled)
+        State.antiAFK = enabled
+        if State.afkConnection then
+            pcall(function() State.afkConnection:Disconnect() end)
+            State.afkConnection = nil
+        end
+        if not enabled then return end
+        if not VirtualUser then
+            Status("Anti-AFK indisponivel neste cliente.")
+            return
+        end
+        if State.afkConnection then
+            pcall(function() State.afkConnection:Disconnect() end)
+            State.afkConnection = nil
+        end
+        State.afkConnection = Connect(LocalPlayer.Idled, function()
+            pcall(function()
+                VirtualUser:CaptureController()
+                VirtualUser:Button2Down(Vector2.zero, Workspace.CurrentCamera.CFrame)
+                task.wait(0.15)
+                VirtualUser:Button2Up(Vector2.zero, Workspace.CurrentCamera.CFrame)
+            end)
+        end)
+    end
+
+    local function CreateEggESP(row)
+        if not row or EggESP[row.ID] then return end
+        local model = Workspace:FindFirstChild("RenderedEggs")
+        local target
+        if model then
+            for _, obj in ipairs(model:GetChildren()) do
+                if obj:IsA("Model") and obj.Name == row.Name then
+                    local ok, pos = pcall(function() return obj:GetPivot().Position end)
+                    if ok and (pos - row.Position).Magnitude < 30 then
+                        target = obj
+                        break
+                    end
+                end
+            end
+        end
+        if not target then return end
+        local part = target.PrimaryPart or target:FindFirstChildWhichIsA("BasePart", true)
+        if not part then return end
+
+        local billboard = Instance.new("BillboardGui")
+        billboard.Name = "RideAPet_v16_EggESP"
+        billboard.AlwaysOnTop = true
+        billboard.Size = UDim2.fromOffset(240, 70)
+        billboard.StudsOffset = Vector3.new(0, 3, 0)
+        billboard.Parent = part
+
+        local label = Instance.new("TextLabel")
+        label.BackgroundTransparency = 1
+        label.Size = UDim2.fromScale(1, 1)
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 12
+        label.TextColor3 = Color3.new(1,1,1)
+        label.TextStrokeTransparency = 0
+        label.Parent = billboard
+
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "RideAPet_v16_EggHighlight"
+        highlight.Adornee = target
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlight.FillTransparency = 0.82
+        highlight.Parent = target
+
+        EggESP[row.ID] = {model = target, billboard = billboard, label = label, highlight = highlight}
+    end
+
+    local function ClearEggESP()
+        for id, item in pairs(EggESP) do
+            pcall(function() item.billboard:Destroy() end)
+            pcall(function() item.highlight:Destroy() end)
+            EggESP[id] = nil
+        end
+    end
+
+    local function RefreshEggESP()
+        if not State.eggESP then
+            ClearEggESP()
+            return
+        end
+        ClearEggESP()
+        local rows = EggList()
+        for i = 1, math.min(#rows, 60) do
+            CreateEggESP(rows[i])
+        end
+    end
+
+    local function UpdateEggESPText()
+        if not State.eggESP then return end
+        local _, _, root = Character()
+        if not root then return end
+        for id, item in pairs(EggESP) do
+            if not item.model or not item.model.Parent then
+                pcall(function() item.billboard:Destroy() end)
+                pcall(function() item.highlight:Destroy() end)
+                EggESP[id] = nil
+            else
+                local pos = item.model:GetPivot().Position
+                local dist = (root.Position - pos).Magnitude
+                local row
+                if ActiveEggs then
+                    local object = ActiveEggs:FindFirstChild(id)
+                    if object then row = EggRowFromObject(object) end
+                end
+                if row and dist <= State.espDistance then
+                    local extra = string.format(
+                        "%s\n%s | %.0fx | %.2f KG\nMutation: %s\n%d studs",
+                        row.Name,
+                        row.Rarity,
+                        row.Luck,
+                        row.Weight,
+                        row.MutationLabel,
+                        math.floor(dist)
+                    )
+                    item.label.Text = extra
+                    item.billboard.Enabled = true
+                    item.highlight.Enabled = true
+                else
+                    item.billboard.Enabled = false
+                    item.highlight.Enabled = false
+                end
+            end
+        end
+    end
+
+    local function ResetVisuals()
+        ClearEggESP()
+        ApplyPlayerSettings()
+    end
+
+    local function ScanDiagnostics()
+        local rows = {}
+        local function add(name, ok, extra)
+            table.insert(rows, string.format("%s %s%s", ok and "✓" or "✗", name, extra and (" • " .. extra) or ""))
+        end
+
+        add("Remotes/Game", GameRemotes ~= nil)
+        add("ServerData/ActiveEggs", ActiveEggs ~= nil)
+        add("SavedData", SavedData ~= nil)
+        add("GameData/Eggs", Data.Eggs ~= nil)
+        add("GameData/Pets", Data.Pets ~= nil)
+        add("GameData/General", Data.General ~= nil)
+        add("GameData/Mutations", Data.Mutations ~= nil)
+        add("GameData/EggBaskets", Data.EggBaskets ~= nil)
+        add("GameData/IndexRewards", Data.IndexRewards ~= nil)
+        add("GameServices/PetAging", Services.PetAging ~= nil)
+        add("GameServices/DayNight", Services.DayNight ~= nil)
+        add("Dialogue/Sell", SellAPI ~= nil)
+        add("Executor/cliente HttpGet", State.compatibility.HttpGet == "OK")
+        add("Executor/cliente loader", State.compatibility.Loadstring == "OK" or State.compatibility.Load == "OK")
+        add("Executor/cliente fireproximityprompt", State.compatibility.FireProximityPrompt == "OK")
+        add("Executor/cliente VirtualUser", State.compatibility.VirtualUser == "OK")
+        add("Executor/cliente Drawing", State.compatibility.Drawing == "OK")
+        add("Executor/cliente Request", State.compatibility.Request == "OK")
+
+        local known = {
+            "EggPickup","EggPlaced","Hatch","PickupPet","PlacePet",
+            "ClaimIndexReward","FeedPet","FavoritePet","BuyWithCash","PetDismount"
+        }
+        for _, name in ipairs(known) do
+            add("Remote " .. name, GameRemote(name) ~= nil)
+        end
+
+        return table.concat(rows, "\n")
+    end
+
+    local function StopAll()
+        JobToken += 1
+        Busy = false
+        State.autoCollect = false
+        State.autoPlace = false
+        State.autoHatch = false
+        State.autoBest = false
+        State.autoIndex = false
+        State.autoFeed = false
+        State.autoBuyFood = false
+        State.autoSell = false
+        State.autoFavorites = false
+        State.autoFarm = false
+        ToggleSpeedBoost(false)
+        StopMovement()
+        Status("Todas as automações paradas.")
+    end
+
+    local function Destroy()
+        if Destroyed then return end
+        Destroyed = true
+        StopAll()
+        if State.afkConnection then
+            pcall(function() State.afkConnection:Disconnect() end)
+        end
+        DisconnectAll()
+        ClearEggESP()
+        RestorePlayerSettings()
+        if Window then
+            pcall(function() Window:Destroy() end)
+        end
+        Env[INSTANCE_KEY] = nil
+    end
+
+    Env[INSTANCE_KEY] = Destroy
+
+    local function ProbeCompatibility()
+        local function yes(v) return v and "OK" or "N/A" end
+        State.compatibility = {
+            HttpGet = yes(type(game.HttpGet) == "function"),
+            Loadstring = yes(type(loadstring) == "function"),
+            Load = yes(type(load) == "function"),
+            GetGenv = yes(type(getgenv) == "function"),
+            FireProximityPrompt = yes(type(fireproximityprompt) == "function"),
+            VirtualUser = yes(VirtualUser ~= nil),
+            Drawing = yes(type(Drawing) == "table" and type(Drawing.new) == "function"),
+            Request = yes((type(request) == "function") or (type(http_request) == "function")),
+        }
+    end
+
+    local function RecordFailure(label, err)
+        local data = State.failureStreak[label] or {count = 0, at = 0}
+        if os.clock() - data.at > 20 then data.count = 0 end
+        data.count += 1
+        data.at = os.clock()
+        State.failureStreak[label] = data
+        if data.count >= 5 then
+            State.failurePaused[label] = true
+            Status(label .. " pausado apos falhas repetidas")
+            Notify("Protecao", label .. " foi pausado automaticamente apos 5 falhas.", 5)
+        end
+        Error(label, err)
+    end
+
+    local function IsPaused(label)
+        return State.failurePaused[label] == true
+    end
+
+    local function RemoteCooldown(name, seconds)
+        local now = os.clock()
+        local last = State.lastRemoteFire[name] or 0
+        if now - last < seconds then return false end
+        State.lastRemoteFire[name] = now
+        return true
+    end
+
+    -- Carrega Rayfield
+    local function LoadRayfield()
+        local urls = {
+            "https://sirius.menu/rayfield",
+            "https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua",
+        }
+        local compiler = loadstring or load
+        if type(game.HttpGet) ~= "function" or type(compiler) ~= "function" then
+            return nil, "HttpGet/loadstring (ou load) indisponivel"
+        end
+        for _, url in ipairs(urls) do
+            local okHttp, source = pcall(function() return game:HttpGet(url) end)
+            if okHttp and type(source) == "string" and #source > 1000 then
+                local okCompile, chunk = pcall(function() return compiler(source) end)
+                if okCompile and type(chunk) == "function" then
+                    local okRun, library = pcall(chunk)
+                    if okRun and library then
+                        return library
+                    end
+                end
+            end
+        end
+        return nil, "falha ao baixar/executar Rayfield"
+    end
+
+    WaitForGameStructure(12)
+    InitializeFilterDefaults()
+    ProbeCompatibility()
+    local rayfieldError
+    Rayfield, rayfieldError = LoadRayfield()
+    if not Rayfield then
+        warn("[RideAPet v16] Rayfield não carregou: " .. tostring(rayfieldError))
+        return
+    end
+
+    local okWindow, createdWindow = pcall(function()
+        return Rayfield:CreateWindow({
+            Name = "Ride A Pet • LAB v16",
+            Icon = 0,
+            LoadingTitle = "Ride A Pet",
+            LoadingSubtitle = "LAB v16 • estrutura real do jogo",
+            Theme = "Default",
+            DisableRayfieldPrompts = true,
+            DisableBuildWarnings = true,
+            ConfigurationSaving = {
+                Enabled = true,
+                FolderName = "RideAPetLab",
+                FileName = "RideAPet_v16",
+            },
+            Discord = {Enabled = false},
+            KeySystem = false,
+        })
+    end)
+    if not okWindow or not createdWindow then
+        warn("[RideAPet v16] Falha criando janela.")
+        return
+    end
+    Window = createdWindow
+
+    local Dashboard = Window:CreateTab("Dashboard", 4483362458)
+    local Farm = Window:CreateTab("Farm", 4483362458)
+    local Eggs = Window:CreateTab("Ovos", 4483362458)
+    local Pets = Window:CreateTab("Pets", 4483362458)
+    local Food = Window:CreateTab("Food", 4483362458)
+    local Sell = Window:CreateTab("Sell", 4483362458)
+    local ESP = Window:CreateTab("ESP", 4483362458)
+    local Diagnostics = Window:CreateTab("Diagnóstico", 4483362458)
+    local Player = Window:CreateTab("Jogador", 4483362458)
+    local Config = Window:CreateTab("Config", 4483362458)
+
+    local DashboardInfo = Dashboard:CreateParagraph({
+        Title = "Status",
+        Content = "Carregando...",
+    })
+
+    Dashboard:CreateParagraph({
+        Title = "Compatibilidade do cliente",
+        Content = string.format("HttpGet: %s • Loader: %s • fireproximityprompt: %s • VirtualUser: %s",
+            State.compatibility.HttpGet or "?",
+            (State.compatibility.Loadstring == "OK" or State.compatibility.Load == "OK") and "OK" or "N/A",
+            State.compatibility.FireProximityPrompt or "?",
+            State.compatibility.VirtualUser or "?"),
+    })
+
+    Dashboard:CreateButton({
+        Name = "PARAR TUDO",
+        Callback = StopAll,
+    })
+
+    Dashboard:CreateButton({
+        Name = "ESCANEAR ESTRUTURA",
+        Callback = function()
+            Notify("Diagnóstico", ScanDiagnostics(), 6)
+        end,
+    })
+
+    Dashboard:CreateButton({
+        Name = "REFRESH EGG CACHE",
+        Callback = function()
+            RefreshEggESP()
+            Status("Egg cache atualizado.")
+        end,
+    })
+
+    Dashboard:CreateParagraph({
+        Title = "Funções com assinatura confirmada",
+        Content = "EggPickup • EggPlaced • Hatch • PickupPet • PlacePet • ClaimIndexReward • FeedPet • FavoritePet • BuyWithCash • PetDismount",
+    })
+
+    Farm:CreateSection("Loop principal")
+    Farm:CreateToggle({
+        Name = "Auto Farm",
+        CurrentValue = false,
+        Flag = "AutoFarm",
+        Callback = function(v)
+            State.autoFarm = v
+            State.autoCollect = v
+            State.autoPlace = v
+            State.autoHatch = v
+            State.autoBest = v
+            State.autoIndex = v
+        end,
+    })
+
+    Farm:CreateToggle({
+        Name = "Auto Coletar Ovos",
+        CurrentValue = false,
+        Flag = "AutoCollect",
+        Callback = function(v) State.autoCollect = v end,
+    })
+    Farm:CreateToggle({
+        Name = "Auto Colocar Ovos",
+        CurrentValue = false,
+        Flag = "AutoPlace",
+        Callback = function(v) State.autoPlace = v end,
+    })
+    Farm:CreateToggle({
+        Name = "Auto Hatch",
+        CurrentValue = false,
+        Flag = "AutoHatch",
+        Callback = function(v) State.autoHatch = v end,
+    })
+    Farm:CreateToggle({
+        Name = "Auto Equip/Place Best",
+        CurrentValue = false,
+        Flag = "AutoBest",
+        Callback = function(v) State.autoBest = v end,
+    })
+    Farm:CreateToggle({
+        Name = "Auto Claim Index",
+        CurrentValue = false,
+        Flag = "AutoIndex",
+        Callback = function(v) State.autoIndex = v end,
+    })
+
+    Farm:CreateDropdown({
+        Name = "Prioridade do ovo",
+        Options = {"Highest luck","Rarest","Heaviest","Nearest"},
+        CurrentOption = {"Highest luck"},
+        Flag = "EggPriority",
+        Callback = function(v) State.eggPriority = type(v) == "table" and v[1] or v end,
+    })
+
+    Farm:CreateSlider({
+        Name = "Velocidade do voo",
+        Range = {40, 350},
+        Increment = 5,
+        CurrentValue = State.tweenSpeed,
+        Flag = "TweenSpeed",
+        Callback = function(v) State.tweenSpeed = v end,
+    })
+
+    Farm:CreateButton({
+        Name = "COLETAR MELHOR OVO AGORA",
+        Callback = function()
+            local list = EggList()
+            if list[1] then
+                CollectEgg(list[1])
+            else
+                Notify("Farm", "Nenhum ovo corresponde aos filtros.")
+            end
+        end,
+    })
+
+    Farm:CreateButton({
+        Name = "VOLTAR PARA O PLOT",
+        Callback = function()
+            local token = StartJob("Voltando para o plot")
+            if token then
+                Home(token)
+                EndJob(token)
+            end
+        end,
+    })
+
+    local EggStatus = Eggs:CreateParagraph({
+        Title = "Egg Tracker",
+        Content = "Lendo...",
+    })
+
+    local EggDropdown
+    local eggNames = EggNameList()
+    if #eggNames == 0 then eggNames = {"Nenhum"} end
+
+    EggDropdown = Eggs:CreateDropdown({
+        Name = "Ovo selecionado",
+        Options = eggNames,
+        CurrentOption = {eggNames[1]},
+        MultipleOptions = false,
+        Flag = "SelectedEgg",
+        Callback = function(v)
+            State.selectedEgg = tostring(type(v) == "table" and v[1] or v or "")
+        end,
+    })
+
+    Eggs:CreateButton({
+        Name = "TP PARA OVO SELECIONADO",
+        Callback = function()
+            local row
+            for _, item in ipairs(EggList()) do
+                if item.Name == State.selectedEgg then
+                    row = item
+                    break
+                end
+            end
+            if row then
+                local token = StartJob("Indo para " .. row.Name)
+                if token then
+                    MoveTo(row.Position, token, 12)
+                    EndJob(token)
+                end
+            else
+                Notify("Ovos", "Ovo selecionado não está ativo agora.")
+            end
+        end,
+    })
+
+    Eggs:CreateSlider({
+        Name = "Luck mínima",
+        Range = {0, 1000000},
+        Increment = 1,
+        CurrentValue = 0,
+        Flag = "MinLuck",
+        Callback = function(v) State.minLuck = v end,
+    })
+
+    Eggs:CreateSlider({
+        Name = "Peso mínimo",
+        Range = {0, 1000},
+        Increment = 0.1,
+        CurrentValue = 0,
+        Flag = "MinWeight",
+        Callback = function(v) State.minWeight = v end,
+    })
+
+    Eggs:CreateSlider({
+        Name = "Distância máxima",
+        Range = {50, 15000},
+        Increment = 50,
+        CurrentValue = State.maxCollectDistance,
+        Flag = "MaxCollectDistance",
+        Callback = function(v) State.maxCollectDistance = v end,
+    })
+
+    Eggs:CreateButton({
+        Name = "ATUALIZAR LISTA DE OVOS",
+        Callback = function()
+            local options = EggNameList()
+            if #options == 0 then options = {"Nenhum"} end
+            pcall(function() EggDropdown:Refresh(options) end)
+            Notify("Ovos", tostring(#EggList()) .. " ovos compatíveis encontrados.")
+        end,
+    })
+
+    local typeOptions = EggNameList()
+    if #typeOptions == 0 then typeOptions = {"Nenhum"} end
+    Eggs:CreateDropdown({
+        Name = "Tipos de ovo",
+        Options = typeOptions,
+        CurrentOption = typeOptions,
+        MultipleOptions = true,
+        Callback = function(values)
+            State.selectedTypes = {}
+            for _, value in ipairs(values or {}) do if value ~= "Nenhum" then State.selectedTypes[value] = true end end
+        end,
+    })
+
+    local mutationOptions = {"None"}
+    if Data.Mutations then
+        for name, data in pairs(Data.Mutations) do
+            if type(data) == "table" then table.insert(mutationOptions, name) end
+        end
+        table.sort(mutationOptions)
+    end
+    Eggs:CreateDropdown({
+        Name = "Mutações",
+        Options = mutationOptions,
+        CurrentOption = mutationOptions,
+        MultipleOptions = true,
+        Callback = function(values)
+            State.selectedMutations = {}
+            for _, value in ipairs(values or {}) do State.selectedMutations[value] = true end
+        end,
+    })
+
+    Eggs:CreateToggle({
+        Name = "Somente ovos com mutação",
+        CurrentValue = false,
+        Flag = "MutatedOnly",
+        Callback = function(v) State.mutatedOnly = v end,
+    })
+
+    Eggs:CreateSection("Filtros de raridade")
+    Eggs:CreateDropdown({
+        Name = "Raridades",
+        Options = {"Common","Rare","Epic","Legendary","Mythic","Divine","Ethereal"},
+        CurrentOption = {"Common","Rare","Epic","Legendary","Mythic","Divine","Ethereal"},
+        MultipleOptions = true,
+        Flag = "RarityFilter",
+        Callback = function(values)
+            State.selectedRarities = {}
+            for _, value in ipairs(values or {}) do State.selectedRarities[value] = true end
+        end,
+    })
+
+    Pets:CreateParagraph({
+        Title = "Pets detectados",
+        Content = "Atualizando...",
+    })
+
+    local PetDropdown = Pets:CreateDropdown({
+        Name = "Pet para ação",
+        Options = {"Nenhum"},
+        CurrentOption = {"Nenhum"},
+        MultipleOptions = false,
+        Callback = function(v)
+            State.selectedPetKey = tostring(type(v) == "table" and v[1] or v or "")
+        end,
+    })
+
+    Pets:CreateButton({
+        Name = "REFRESH PETS",
+        Callback = function()
+            local options = {"Nenhum"}
+            for _, pet in ipairs(PetList()) do
+                table.insert(options, pet.Name .. " | " .. tostring(pet.Key))
+            end
+            pcall(function() PetDropdown:Refresh(options) end)
+            Notify("Pets", tostring(#PetList()) .. " pets encontrados.")
+        end,
+    })
+
+    Pets:CreateToggle({
+        Name = "Auto Organizar Best",
+        CurrentValue = false,
+        Flag = "AutoBest",
+        Callback = function(v) State.autoBest = v end,
+    })
+
+    Pets:CreateButton({
+        Name = "ORGANIZAR BEST 1X",
+        Callback = PlaceBestPets,
+    })
+
+    Pets:CreateButton({
+        Name = "DESEQUIPAR / DISMOUNT",
+        Callback = function()
+            if Dismount() then Notify("Pets", "Dismount enviado.") else Notify("Pets", "Dismount não enviado.") end
+        end,
+    })
+
+    Pets:CreateToggle({
+        Name = "Auto Favoritar selecionados",
+        CurrentValue = false,
+        Flag = "AutoFavorites",
+        Callback = function(v) State.autoFavorites = v end,
+    })
+
+    Food:CreateParagraph({
+        Title = "Food",
+        Content = "Funções baseadas em GameData/Foods + Shop e remotes confirmados.",
+    })
+
+    local foodNames = {}
+    if Data.Shop and Data.Shop.Food then
+        for name, def in pairs(Data.Shop.Food) do
+            if type(def) == "table" and (not Data.Foods or Data.Foods[name]) then
+                table.insert(foodNames, name)
+            end
+        end
+        table.sort(foodNames)
+    end
+    if #foodNames == 0 then foodNames = {"Nenhum"} end
+
+    Food:CreateDropdown({
+        Name = "Comida",
+        Options = foodNames,
+        CurrentOption = {foodNames[1]},
+        MultipleOptions = false,
+        Callback = function(v) State.selectedFood = tostring(type(v) == "table" and v[1] or v or "") end,
+    })
+
+    Food:CreateSlider({
+        Name = "Quantidade por compra/ação",
+        Range = {1, 20},
+        Increment = 1,
+        CurrentValue = State.foodAmount,
+        Flag = "FoodAmount",
+        Callback = function(v) State.foodAmount = math.floor(v) end,
+    })
+
+    Food:CreateToggle({
+        Name = "Auto Comprar Food",
+        CurrentValue = false,
+        Flag = "AutoBuyFood",
+        Callback = function(v) State.autoBuyFood = v end,
+    })
+
+    Food:CreateToggle({
+        Name = "Auto Alimentar",
+        CurrentValue = false,
+        Flag = "AutoFeed",
+        Callback = function(v) State.autoFeed = v end,
+    })
+
+    Food:CreateButton({
+        Name = "COMPRAR FOOD 1X",
+        Callback = function()
+            if State.selectedFood ~= "" and State.selectedFood ~= "Nenhum" then
+                BuyFood(State.selectedFood, State.foodAmount)
+            end
+        end,
+    })
+
+    Food:CreateButton({
+        Name = "ALIMENTAR PET SELECIONADO",
+        Callback = function()
+            if State.selectedPetKey ~= "" and State.selectedFood ~= "" then
+                FeedPet(State.selectedPetKey, State.selectedFood)
+            else
+                Notify("Food", "Selecione pet e comida.")
+            end
+        end,
+    })
+
+    Sell:CreateParagraph({
+        Title = "Venda",
+        Content = "A venda usa o diálogo do Richie. Se a estrutura não estiver disponível, a função fica desativada e informa o motivo.",
+    })
+
+    local sellReady = InitSell()
+    Sell:CreateLabel("Sistema de venda: " .. (sellReady and "disponível" or "não detectado"))
+
+    Sell:CreateToggle({
+        Name = "Auto Sell (não-favoritos)",
+        CurrentValue = false,
+        Flag = "AutoSell",
+        Callback = function(v) State.autoSell = v end,
+    })
+
+    Sell:CreateButton({
+        Name = "VENDER 1 PET SELECIONADO",
+        Callback = function()
+            if State.selectedPetKey ~= "" then
+                SellOne(State.selectedPetKey)
+            else
+                Notify("Sell", "Selecione um pet primeiro.")
+            end
+        end,
+    })
+
+    Sell:CreateButton({
+        Name = "TELEPORTAR PARA RICHIE",
+        Callback = function()
+            local _, root = SellVendor()
+            local _, _, playerRoot = Character()
+            if root and playerRoot then
+                local token = StartJob("Indo para Richie")
+                if token then
+                    MoveTo(root.Position + root.CFrame.LookVector * 8, token, 12)
+                    EndJob(token)
+                end
+            else
+                Notify("Sell", "Richie não encontrado.")
+            end
+        end,
+    })
+
+    ESP:CreateToggle({
+        Name = "Egg ESP",
+        CurrentValue = false,
+        Flag = "EggESP",
+        Callback = function(v)
+            State.eggESP = v
+            RefreshEggESP()
+        end,
+    })
+
+    ESP:CreateSlider({
+        Name = "Distância ESP",
+        Range = {100, 10000},
+        Increment = 100,
+        CurrentValue = State.espDistance,
+        Flag = "ESPDistance",
+        Callback = function(v) State.espDistance = v end,
+    })
+
+    ESP:CreateButton({
+        Name = "ATUALIZAR ESP",
+        Callback = RefreshEggESP,
+    })
+
+    ESP:CreateParagraph({
+        Title = "Legenda",
+        Content = "Nome • Raridade • Luck • KG • Mutation • distância",
+    })
+
+    local DiagnosticParagraph = Diagnostics:CreateParagraph({
+        Title = "Estrutura",
+        Content = ScanDiagnostics(),
+    })
+
+    Diagnostics:CreateButton({
+        Name = "ATUALIZAR DIAGNÓSTICO",
+        Callback = function()
+            DiagnosticParagraph:Set({
+                Title = "Estrutura",
+                Content = ScanDiagnostics(),
+            })
+        end,
+    })
+
+    Diagnostics:CreateButton({
+        Name = "MOSTRAR REMOTES CONHECIDOS",
+        Callback = function()
+            local known = {"EggPickup","EggPlaced","Hatch","PickupPet","PlacePet","ClaimIndexReward","FeedPet","FavoritePet","BuyWithCash","PetDismount"}
+            local lines = {}
+            for _, name in ipairs(known) do
+                table.insert(lines, string.format("%s = %s", name, GameRemote(name) and "FOUND" or "MISSING"))
+            end
+            Notify("Remotes", table.concat(lines, "\n"), 8)
+        end,
+    })
+
+    Player:CreateSlider({
+        Name = "WalkSpeed",
+        Range = {1, 300},
+        Increment = 1,
+        CurrentValue = State.walkSpeed,
+        Flag = "WalkSpeed",
+        Callback = function(v)
+            State.walkSpeed = v
+            ApplyPlayerSettings()
+        end,
+    })
+
+    Player:CreateSlider({
+        Name = "JumpPower",
+        Range = {1, 250},
+        Increment = 1,
+        CurrentValue = State.jumpPower,
+        Flag = "JumpPower",
+        Callback = function(v)
+            State.jumpPower = v
+            ApplyPlayerSettings()
+        end,
+    })
+
+    Player:CreateSlider({
+        Name = "FOV",
+        Range = {30, 120},
+        Increment = 1,
+        CurrentValue = State.fov,
+        Flag = "FOV",
+        Callback = function(v)
+            State.fov = v
+            ApplyPlayerSettings()
+        end,
+    })
+
+    Config:CreateToggle({
+        Name = "Anti-AFK",
+        CurrentValue = true,
+        Flag = "AntiAFK",
+        Callback = SetAntiAFK,
+    })
+
+    Config:CreateToggle({
+        Name = "Proteger favoritos ao vender",
+        CurrentValue = true,
+        Flag = "ProtectFavorites",
+        Callback = function(v) State.sellFavoritesProtected = v end,
+    })
+
+    Config:CreateButton({
+        Name = "PARAR TUDO",
+        Callback = StopAll,
+    })
+
+    Config:CreateButton({
+        Name = "RESTAURAR JOGADOR",
+        Callback = function()
+            State.walkSpeed = 16
+            State.jumpPower = 50
+            State.fov = 70
+            ToggleSpeedBoost(false)
+            ApplyPlayerSettings()
+        end,
+    })
+
+    Config:CreateButton({
+        Name = "SALVAR CONFIG",
+        Callback = function()
+            pcall(function() Rayfield:SaveConfiguration() end)
+            Notify("Config", "Salvo.")
+        end,
+    })
+
+    Config:CreateButton({
+        Name = "RESETAR PROTECOES / FALHAS",
+        Callback = function()
+            State.failureStreak = {}
+            State.failurePaused = {}
+            State.lastRemoteFire = {}
+            Status("Protecoes de falha resetadas.")
+            Notify("Protecao", "Contadores e pausas de falha resetados.", 3)
+        end,
+    })
+
+    Config:CreateButton({
+        Name = "CARREGAR CONFIG",
+        Callback = function()
+            pcall(function() Rayfield:LoadConfiguration() end)
+            Notify("Config", "Carregado.")
+        end,
+    })
+
+    Config:CreateButton({
+        Name = "FECHAR",
+        Callback = Destroy,
+    })
+
+    -- Respawn
+    Connect(LocalPlayer.CharacterAdded, function()
+        task.wait(0.8)
+        ApplyPlayerSettings()
     end)
 
-    BtnMin.Text = Minimizado and "+" or "—"
-    Subtitle.Visible = not Minimizado
-end)
-
--- =========================================================
--- LOOPS DE AUTOMAÇÃO
--- =========================================================
-task.spawn(function()
-    while InterfaceRideAPet and InterfaceRideAPet.Parent and not InstanciaEncerrada do
-        task.wait(Config.clickIntervalo)
-        if AutoCliqueAtivado then
-            pcall(function()
-                local evento = FindRemoteByNames({"Click", "ClickEvent", "Tap", "TapEvent"}, "Click")
-                if evento then
-                    local ok = ExecutarRemote(evento)
-                    if ok then Metricas.clicks = Metricas.clicks + 1 end
+    -- Loop principal único para reduzir conflitos.
+    task.spawn(function()
+        while not Destroyed do
+            if not Busy then
+                local ok, err = pcall(function()
+                    if State.autoIndex then
+                        ClaimIndex()
+                    elseif State.autoHatch and #EggTimers() > 0 and EggTimers()[1].Remaining <= 0 then
+                        HatchReady()
+                    elseif State.autoPlace and #Basket() > 0 then
+                        PlaceEggs()
+                    elseif State.autoBest then
+                        PlaceBestPets()
+                    elseif State.autoFeed and State.selectedPetKey ~= "" and State.selectedFood ~= "" then
+                        FeedPet(State.selectedPetKey, State.selectedFood)
+                    elseif State.autoBuyFood and State.selectedFood ~= "" then
+                        BuyFood(State.selectedFood, State.foodAmount)
+                    elseif State.autoSell then
+                        local candidates = InventoryPets()
+                        for _, pet in ipairs(candidates) do
+                            if not State.sellFavoritesProtected or not pet.Favorite then
+                                if SellOne(pet.Key) then break end
+                            end
+                        end
+                    elseif State.autoCollect then
+                        local list = EggList()
+                        if list[1] then
+                            CollectEgg(list[1])
+                        else
+                            Status("Aguardando ovo compatível com os filtros.")
+                        end
+                    elseif State.autoFavorites and State.selectedPetKey ~= "" then
+                        FavoritePet(State.selectedPetKey)
+                    end
+                end)
+                if not ok then
+                    Error("Loop", err)
                 end
-            end)
+            end
+            task.wait(0.35)
         end
-    end
-end)
+    end)
 
-task.spawn(function()
-    while InterfaceRideAPet and InterfaceRideAPet.Parent and not InstanciaEncerrada do
-        task.wait(Config.ovoIntervalo)
-        if AutoChocarAtivado then
+    -- Reparo leve de referencias do jogo, sem reinicializar a interface.
+    task.spawn(function()
+        while not Destroyed do
+            pcall(RefreshGameReferences)
+            task.wait(5)
+        end
+    end)
+
+    -- ESP refresh
+    task.spawn(function()
+        while not Destroyed do
+            if State.eggESP then
+                pcall(function()
+                    RefreshEggESP()
+                    UpdateEggESPText()
+                end)
+            end
+            task.wait(0.7)
+        end
+    end)
+
+    -- Status dashboard
+    task.spawn(function()
+        while not Destroyed do
             pcall(function()
-                local remoteOvo = FindRemoteByNames({"BuyEgg", "OpenEgg", "HatchEgg", "Egg"}, "Egg")
-                if remoteOvo then
-                    local ok = ExecutarRemote(remoteOvo, Config.nomeOvo, Config.quantidadeOvo)
-                    if ok then Metricas.ovos = Metricas.ovos + 1 end
-                end
+                RefreshGameReferences()
+                if not SellAPI then InitSell() end
             end)
+            local rows = EggList()
+            local pets = PetList()
+            local timers = EggTimers()
+            local cash = Value("Cash", 0)
+            DashboardInfo:Set({
+                Title = "Ride A Pet • LAB v16",
+                Content = string.format(
+                    "Status: %s\nCash: %s\nOvos compatíveis: %d\nPets detectados: %d\nOvos no basket: %d\nNinhos livres: %d\nOvos no plot: %d\n\nColetados: %d • Colocados: %d • Hatch: %d\nIndex: %d • Food: %d • Feed: %d • Sold: %d • Fav: %d\nErros: %d\n\nEstrutura: %s",
+                    State.status,
+                    FormatNumber(cash),
+                    #rows,
+                    #pets,
+                    #Basket(),
+                    #FreeNests(),
+                    #timers,
+                    State.collected,
+                    State.placed,
+                    State.hatched,
+                    State.claimed,
+                    State.boughtFood,
+                    State.fed,
+                    State.sold,
+                    State.favorited,
+                    State.errors,
+                    (GameRemotes and ActiveEggs and SavedData) and "OK" or "INCOMPLETA"
+                )
+            })
+
+            task.wait(1)
         end
-    end
-end)
+    end)
 
-task.spawn(function()
-    while InterfaceRideAPet and InterfaceRideAPet.Parent and not InstanciaEncerrada do
-        task.wait(Config.fusaoIntervalo)
-        if AutoFusaoAtivado then
-            pcall(function()
-                local remoteCraft = FindRemoteByNames({"CraftAll", "MergePets", "MergePet", "Craft"}, "Merge")
-                if remoteCraft then
-                    local ok = ExecutarRemote(remoteCraft)
-                    if ok then Metricas.fusoes = Metricas.fusoes + 1 end
-                end
-            end)
-        end
-    end
-end)
+    Status("LAB v16 carregado.")
+    SetAntiAFK(State.antiAFK)
+    ApplyPlayerSettings()
+    Notify("Ride A Pet", "LAB v16 carregado com estrutura real do jogo.", 4)
+end
 
--- Atualização leve da interface.
-task.spawn(function()
-    while InterfaceRideAPet and InterfaceRideAPet.Parent and not InstanciaEncerrada do
-        task.wait(0.35)
-        AtualizarUIStatus()
-        if RemoteWatchAtivo and (os.clock() * 1000 - UltimoScanMs) > 2500 then
-            ScanRemotes(false)
-            AtualizarListaRemotes()
-        end
-        if #StatusLog > 0 then
-            AtualizarLogVisual()
-        end
-    end
-end)
-
--- =========================================================
--- RESPAWN
--- =========================================================
-CharacterConnection = RegistrarConexao(LocalPlayer.CharacterAdded:Connect(function()
-    if VelocidadeAtivada then
-        LogStatus("Personagem renascido; modificador de movimento continua pronto.")
-        AtualizarLogVisual()
-    end
-end))
-
--- =========================================================
--- INICIALIZAÇÃO
--- =========================================================
-AtualizarFiltros()
-AtualizarListaRemotes()
-LogStatus("Laboratório v8 carregado com sucesso.")
-AtualizarLogVisual()
-AtualizarUIStatus()
-
-print("[RideAPet] LAB MAX v8 carregado. Instância única ativa.")
+local ok, err = xpcall(Main, debug.traceback)
+if not ok then
+    warn("[RideAPet v16] Erro fatal:\n" .. tostring(err))
+end
