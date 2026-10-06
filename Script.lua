@@ -1,9 +1,9 @@
 --============================================================--
--- MONTAR UM PET - MASTER v23.3 • UI ORIGINAL v15 • DELTA STABLE
+-- MONTAR UM PET - MASTER v24 • UI ORIGINAL v15 • DELTA STABLE
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
--- Foco: Delta Mobile + Auto Farm por estados + voo sem colisão + retorno/entrega robustos + cleanup robusto
+-- Foco: Delta Mobile + Auto Farm 2026 verificado + coleta/retorno/ninho + UI v15 estável
 --
 -- Pesquisa usada para esta versão:
 --   * VintHub / Ride a Pet.lua
@@ -234,7 +234,7 @@ local function LooksLikeOurRayfieldGui(gui)
                 or t:find("MASTER v6", 1, true)
                 or t:find("MASTER v7", 1, true)
                 or t:find("MASTER v14", 1, true)
-                or t:find("MASTER v15", 1, true) then
+                or t:find("MASTER v24 • Auto Farm 2026", 1, true) then
                 hasHubSubtitle = true
             end
 
@@ -333,6 +333,9 @@ local State = {
     FarmPickupRetryApproach = true,
     FarmBasePause = 2.50,
     FarmDepositWait = 3.50,
+    FarmNestWait = 8.0,
+    FarmNestPoll = 0.25,
+    FarmPendingEggs = {},
 
     -- Auto Farm state machine
     FarmPhase = "Idle",
@@ -482,6 +485,11 @@ end
 local function GetMountRemote()
     local gameRemotes = GetGameRemotes()
     return gameRemotes and gameRemotes:FindFirstChild("Mounting")
+end
+
+local function GetEggPlacedRemote()
+    local gameRemotes = GetGameRemotes()
+    return gameRemotes and gameRemotes:FindFirstChild("EggPlaced")
 end
 
 local EggData = {}
@@ -665,6 +673,7 @@ local function GetGameFeatureStatus()
     return {
         EggPickup = (GetEggPickupRemote() and GetEggPickupRemote():IsA("RemoteEvent")) or false,
         Mounting = (GetMountRemote() and GetMountRemote():IsA("RemoteEvent")) or false,
+        EggPlaced = (GetEggPlacedRemote() and GetEggPlacedRemote():IsA("RemoteEvent")) or false,
         EggData = next(EggData) ~= nil,
         ActiveEggs = ReplicatedStorage:FindFirstChild("ServerData")
             and ReplicatedStorage.ServerData:FindFirstChild("ActiveEggs") ~= nil,
@@ -1029,8 +1038,15 @@ local function GetFarmCandidates()
     for _, egg in ipairs(activeEggs:GetChildren()) do
         if egg:IsA("Configuration") then
             local eggName = egg:GetAttribute("Egg")
+            local privateTo = egg:GetAttribute("PrivateTo")
+            local collected = tostring(LocalPlayer:GetAttribute("CollectedEggs") or "")
+            local alreadyCollected = string.find("," .. collected .. ",", "," .. tostring(egg.Name) .. ",", 1, true) ~= nil
+            local privateMismatch = privateTo ~= nil and tostring(privateTo) ~= tostring(LocalPlayer.UserId)
 
-            if type(eggName) == "string" and MeetsFilters(egg, eggName) then
+            if type(eggName) == "string"
+                and not alreadyCollected
+                and not privateMismatch
+                and MeetsFilters(egg, eggName) then
                 local position = egg:GetAttribute("Position")
 
                 if typeof(position) == "CFrame" then
@@ -1139,13 +1155,148 @@ local function GetMyPlot()
         return nil
     end
 
+    -- Prefer the same owner representation used by current public scripts.
     for _, plot in ipairs(plots:GetChildren()) do
-        if plot:GetAttribute("NestsOwnerLoaded") == LocalPlayer.UserId then
+        local data = plot:FindFirstChild("Data")
+        local owner = data and data:FindFirstChild("Owner")
+        if owner and owner:IsA("ObjectValue") and owner.Value == LocalPlayer then
+            return plot
+        end
+    end
+
+    -- Fallback for builds exposing only the loaded-owner attribute.
+    for _, plot in ipairs(plots:GetChildren()) do
+        local loaded = plot:GetAttribute("NestsOwnerLoaded")
+        if loaded == LocalPlayer.UserId then
             return plot
         end
     end
 
     return nil
+end
+
+local FarmUtil = {}
+
+function FarmUtil.GetFreeNests()
+    local plot = GetMyPlot()
+    local nests = plot and plot:FindFirstChild("Nests")
+    if not nests then
+        return {}
+    end
+
+    local result = {}
+
+    for _, nest in ipairs(nests:GetChildren()) do
+        local unlocked = nest:GetAttribute("Unlocked")
+        local occupied = nest:GetAttribute("Occupied")
+
+        -- Different builds have used either an explicit Unlocked flag or a
+        -- nest that is immediately usable when the attribute is absent.
+        if unlocked ~= false and occupied ~= true then
+            table.insert(result, nest)
+        end
+    end
+
+    table.sort(result, function(a, b)
+        local an = tonumber(a.Name) or math.huge
+        local bn = tonumber(b.Name) or math.huge
+        if an == bn then
+            return tostring(a.Name) < tostring(b.Name)
+        end
+        return an < bn
+    end)
+
+    return result
+end
+
+function FarmUtil.GetEggTools()
+    local result = {}
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    local character = LocalPlayer.Character
+
+    for _, container in ipairs({backpack, character}) do
+        if container then
+            for _, tool in ipairs(container:GetChildren()) do
+                if tool:IsA("Tool") and EggData[tool.Name] and not tool:GetAttribute("PetKey") then
+                    table.insert(result, tool)
+                end
+            end
+        end
+    end
+
+    table.sort(result, function(a, b)
+        local al = KnownEggLuck[a.Name] or 0
+        local bl = KnownEggLuck[b.Name] or 0
+        if al == bl then
+            return tostring(a.Name) < tostring(b.Name)
+        end
+        return al > bl
+    end)
+
+    return result
+end
+
+function FarmUtil.GetBasketEggNames()
+    local basket = LocalPlayer:FindFirstChild("Basket")
+    if not basket then
+        return {}
+    end
+
+    local expected = {}
+    for _, egg in ipairs(basket:GetChildren()) do
+        local name = egg:GetAttribute("Egg")
+        if type(name) == "string" and name ~= "" then
+            expected[name] = (expected[name] or 0) + 1
+        end
+    end
+    return expected
+end
+
+function FarmUtil.SnapshotEggTools()
+    local snapshot = {}
+    for _, tool in ipairs(FarmUtil.GetEggTools()) do
+        snapshot[tool] = true
+    end
+    return snapshot
+end
+
+function FarmUtil.GetBasketCount()
+    local basket = LocalPlayer:FindFirstChild("Basket")
+    return basket and #basket:GetChildren() or 0
+end
+
+function FarmUtil.WaitForReturnedEggTools(expected, beforeTools, timeout)
+    local deadline = os.clock() + (timeout or 5)
+
+    while FarmIsRunning() and os.clock() < deadline do
+        local basketCount = FarmUtil.GetBasketCount()
+        local currentTools = FarmUtil.GetEggTools()
+        local received = {}
+
+        for _, tool in ipairs(currentTools) do
+            if not beforeTools[tool] then
+                received[tool.Name] = (received[tool.Name] or 0) + 1
+            end
+        end
+
+        local enough = basketCount <= 0
+        if enough then
+            for name, count in pairs(expected) do
+                if (received[name] or 0) < count then
+                    enough = false
+                    break
+                end
+            end
+        end
+
+        if enough then
+            return true
+        end
+
+        task.wait(0.10)
+    end
+
+    return false
 end
 
 local function IsInVolcano()
@@ -2328,6 +2479,161 @@ local function FailCurrentFarmTarget(message, cooldown)
     SetFarmPhase(message or "Changing target")
 end
 
+function FarmUtil.FireEggPlaced(nestName)
+    local remote = GetEggPlacedRemote()
+    if not remote or not remote:IsA("RemoteEvent") then
+        return false
+    end
+
+    return pcall(function()
+        remote:FireServer({NestId = tostring(nestName)})
+    end)
+end
+
+function FarmUtil.EquipEggTool(tool)
+    local character, humanoid = GetCharacter()
+    if not character or not humanoid or not tool or not tool.Parent then
+        return false
+    end
+
+    return pcall(function()
+        humanoid:EquipTool(tool)
+    end)
+end
+
+function FarmUtil.CopyCountMap(source)
+    local copy = {}
+    if type(source) ~= "table" then
+        return copy
+    end
+    for name, count in pairs(source) do
+        local n = tonumber(count) or 0
+        if n > 0 then
+            copy[name] = math.floor(n)
+        end
+    end
+    return copy
+end
+
+function FarmUtil.CountPendingTools(expected, beforeTools)
+    local found = {}
+    for _, tool in ipairs(FarmUtil.GetEggTools()) do
+        if (not beforeTools or not beforeTools[tool]) and expected[tool.Name] then
+            found[tool.Name] = (found[tool.Name] or 0) + 1
+        end
+    end
+    return found
+end
+
+function FarmUtil.PlaceEggToolsInNests(expected, beforeTools)
+    local remaining = FarmUtil.CopyCountMap(expected)
+    local deadline = os.clock() + math.clamp(
+        tonumber(State.FarmNestWait) or 8.0,
+        2.0,
+        20.0
+    )
+
+    while FarmIsRunning() and os.clock() < deadline do
+        local nests = FarmUtil.GetFreeNests()
+        local available = FarmUtil.CountPendingTools(remaining, beforeTools)
+
+        local hasRemaining = false
+        for _, count in pairs(remaining) do
+            if count > 0 then
+                hasRemaining = true
+                break
+            end
+        end
+
+        if not hasRemaining then
+            State.FarmPendingEggs = {}
+            return true
+        end
+
+        if #nests > 0 then
+            for _, nest in ipairs(nests) do
+                if not FarmIsRunning() then
+                    return false
+                end
+
+                local tool = nil
+                for _, candidate in ipairs(FarmUtil.GetEggTools()) do
+                    if (not beforeTools or not beforeTools[candidate]) and remaining[candidate.Name]
+                        and remaining[candidate.Name] > 0 then
+                        tool = candidate
+                        break
+                    end
+                end
+
+                if not tool then
+                    break
+                end
+
+                SetFarmPhase("Equipando " .. tostring(tool.Name) .. " no ninho " .. tostring(nest.Name))
+
+                if not FarmUtil.EquipEggTool(tool) then
+                    return false
+                end
+
+                task.wait(0.15)
+
+                if not FarmIsRunning() then
+                    return false
+                end
+
+                if not FarmUtil.FireEggPlaced(nest.Name) then
+                    return false
+                end
+
+                local placed = false
+                local confirmDeadline = os.clock() + 4
+
+                while FarmIsRunning() and os.clock() < confirmDeadline do
+                    local occupied = nest:GetAttribute("Occupied") == true
+                    local stillInTools = false
+
+                    for _, currentTool in ipairs(FarmUtil.GetEggTools()) do
+                        if currentTool == tool then
+                            stillInTools = true
+                            break
+                        end
+                    end
+
+                    if occupied or not stillInTools then
+                        placed = true
+                        break
+                    end
+
+                    task.wait(0.10)
+                end
+
+                if not placed then
+                    State.FarmPendingEggs = FarmUtil.CopyCountMap(remaining)
+                    SetFarmPhase("Depósito não confirmado")
+                    return false
+                end
+
+                remaining[tool.Name] = math.max(0, (remaining[tool.Name] or 1) - 1)
+                if remaining[tool.Name] <= 0 then
+                    remaining[tool.Name] = nil
+                end
+
+                task.wait(math.clamp(
+                    tonumber(State.FarmBasePause) or 2.50,
+                    0.50,
+                    5.0
+                ))
+            end
+        end
+
+        State.FarmPendingEggs = FarmUtil.CopyCountMap(remaining)
+        task.wait(math.clamp(tonumber(State.FarmNestPoll) or 0.25, 0.10, 0.75))
+    end
+
+    State.FarmPendingEggs = FarmUtil.CopyCountMap(remaining)
+    return next(remaining) == nil
+end
+
 local function FarmDeposit()
     if not FarmIsRunning() then
         return false
@@ -2339,30 +2645,33 @@ local function FarmDeposit()
         return false
     end
 
-    local okPivot, pivot = pcall(function()
-        return plot:GetPivot()
-    end)
-
-    if not okPivot or not pivot then
-        SetFarmPhase("Posição da base indisponível")
+    local baseplate = plot:FindFirstChild("Baseplate")
+    if not baseplate or not baseplate:IsA("BasePart") then
+        SetFarmPhase("Baseplate não encontrada")
         return false
     end
 
-    local basePosition = pivot.Position
+    local expected = FarmUtil.GetBasketEggNames()
+    if next(expected) == nil then
+        expected = FarmUtil.CopyCountMap(State.FarmPendingEggs)
+    end
+
+    if next(expected) == nil then
+        return GetBasketCount() <= 0
+    end
+
+    local beforeTools = FarmUtil.SnapshotEggTools()
+
+    local basePosition = baseplate.Position
     local hoverHeight = math.clamp(
         tonumber(State.FarmHoverHeight) or 55,
         25,
         150
     )
-
     local hoverPosition = basePosition + Vector3.new(0, hoverHeight, 0)
-    local _, root = GetCharacter()
-    if not root then
-        return false
-    end
 
-    -- CHECKPOINT 1: sobe antes do retorno para nunca cortar o terreno.
-    SetFarmPhase("Subindo para voltar")
+    -- Phase 1: return above the ranch.
+    SetFarmPhase("Voltando para a base")
     if not FarmFlyTo(
         hoverPosition,
         State.FarmFlightSpeed,
@@ -2375,41 +2684,17 @@ local function FarmDeposit()
         return false
     end
 
-    -- CHECKPOINT 2: chega sobre a base em altitude.
-    local _, latestRoot = GetCharacter()
-    if not latestRoot then
-        return false
-    end
-
-    if (latestRoot.Position - hoverPosition).Magnitude > 20 then
-        SetFarmPhase("Posicionando sobre a base")
-        if not FarmFlyTo(
-            hoverPosition,
-            State.FarmFlightSpeed,
-            false
-        ) then
-            return false
-        end
-    end
-
-    if not FarmIsRunning() then
-        return false
-    end
-
-    -- CHECKPOINT 3: desce apenas até uma altura segura do piso.
-    SetFarmPhase("Descendo na base")
+    -- Phase 2: descend inside the plot, then pause exactly as requested.
     local depositPoint = GetSafeDescentPosition(
         basePosition,
-        math.max(
-            tonumber(State.FarmFlightDescendHeight) or 6,
-            6
-        )
+        math.max(tonumber(State.FarmFlightDescendHeight) or 6, 5)
     )
 
     if not depositPoint then
         return false
     end
 
+    SetFarmPhase("Entrando na base")
     if not FarmFlyTo(
         depositPoint,
         math.min(State.FarmFlightSpeed, 180),
@@ -2418,28 +2703,11 @@ local function FarmDeposit()
         return false
     end
 
-    -- CHECKPOINT 4: parada intencional. Dá tempo para o servidor registrar
-    -- a entrega antes de iniciar o próximo alvo.
-    SetFarmPhase("Estabilizando na base")
-
-    local settleDeadline = os.clock() + math.clamp(
-        tonumber(State.FarmDepositWait) or 3.5,
-        1.5,
-        6
-    )
-
-    while FarmIsRunning()
-        and os.clock() < settleDeadline
-        and GetBasketCount() > 0 do
-        EnforceFarmNoclip()
-        task.wait(0.08)
-    end
-
     if not FarmIsRunning() then
         return false
     end
 
-    -- Mesmo que a cesta já esteja vazia, mantém a parada configurada.
+    SetFarmPhase("Parando na base")
     task.wait(math.clamp(
         tonumber(State.FarmBasePause) or 2.50,
         1.0,
@@ -2450,33 +2718,52 @@ local function FarmDeposit()
         return false
     end
 
-    -- Última confirmação. Se ainda estiver carregando, faz uma única
-    -- reaproximação curta em baixa velocidade e espera novamente.
-    if GetBasketCount() > 0 then
-        SetFarmPhase("Confirmando entrega")
+    -- Phase 3: wait for the server to move basket eggs into egg tools.
+    SetFarmPhase("Confirmando ovo na base")
+    local returned = FarmUtil.WaitForReturnedEggTools(
+        expected,
+        beforeTools,
+        math.clamp(tonumber(State.FarmDepositWait) or 3.50, 2.0, 8.0)
+    )
 
-        local retryPoint = GetSafeDescentPosition(
-            basePosition,
-            6
-        )
-
-        if retryPoint and not FarmFlyTo(
-            retryPoint,
-            120,
-            true
-        ) then
+    if not returned and GetBasketCount() > 0 then
+        -- One controlled re-approach, never a remote spam loop.
+        SetFarmPhase("Reaproximando da base")
+        if not FarmFlyTo(depositPoint, 120, true) then
             return false
         end
-
         task.wait(math.clamp(
             tonumber(State.FarmBasePause) or 2.50,
             1.0,
             5.0
         ))
+
+        returned = FarmUtil.WaitForReturnedEggTools(
+            expected,
+            beforeTools,
+            math.clamp(tonumber(State.FarmDepositWait) or 3.50, 2.0, 8.0)
+        )
     end
 
-    if GetBasketCount() <= 0 then
-        SetFarmPhase("Entregue - procurando próximo ovo")
+    if not returned and GetBasketCount() > 0 then
+        SetFarmPhase("Ovo ainda não chegou à base")
+        return false
+    end
+
+    State.FarmPendingEggs = FarmUtil.CopyCountMap(expected)
+
+    -- Phase 4: actual placement. This was the missing step in the old engine.
+    SetFarmPhase("Procurando ninho livre")
+    local placed = FarmUtil.PlaceEggToolsInNests(expected, beforeTools)
+
+    if not placed then
+        SetFarmPhase("Aguardando ninho livre")
+        return false
+    end
+
+    -- Final confirmation: basket empty and no pending eggs remain.
+    if GetBasketCount() <= 0 and next(State.FarmPendingEggs) == nil then
+        SetFarmPhase("Ovo entregue - procurando próximo")
         return true
     end
 
@@ -2496,9 +2783,9 @@ local function FarmOnce()
             return
         end
 
-        -- HOLDING
-        if GetBasketCount() > 0 then
-            SetFarmPhase("Carrying egg")
+        -- HOLDING / PENDING DELIVERY
+        if GetBasketCount() > 0 or next(State.FarmPendingEggs) ~= nil then
+            SetFarmPhase(GetBasketCount() > 0 and "Carrying egg" or "Pending egg delivery")
 
             if State.ReturnToPlot then
                 FarmDeposit()
@@ -3995,15 +4282,15 @@ TabFarm:CreateSection({name = "Voo do Auto Farm"})
 TabFarm:CreateSlider({
     name = "Velocidade do voo",
     flag = "FarmFlightSpeed",
-    range = {50, 1200},
-    increment = 25,
+    range = {50, 350},
+    increment = 10,
     value = State.FarmFlightSpeed,
     suffix = " studs/s",
     callback = function(value)
         State.FarmFlightSpeed = math.clamp(
             math.floor(tonumber(value) or 300),
             50,
-            1200
+            350
         )
     end,
 })
@@ -4122,6 +4409,18 @@ TabFarm:CreateSlider({
     suffix = " s",
     callback = function(value)
         State.FarmDepositWait = math.clamp(tonumber(value) or 3.50, 1.5, 6.0)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Espera por ninho livre",
+    flag = "FarmNestWait",
+    range = {2.0, 20.0},
+    increment = 0.5,
+    value = State.FarmNestWait,
+    suffix = " s",
+    callback = function(value)
+        State.FarmNestWait = math.clamp(tonumber(value) or 8.0, 2.0, 20.0)
     end,
 })
 
