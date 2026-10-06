@@ -1,9 +1,9 @@
 --============================================================--
--- MONTAR UM PET - MASTER v22.2026 • UI ORIGINAL v15 • DELTA STABLE
+-- MONTAR UM PET - MASTER v22.2026 • RECOVERY STABLE • BASE FUNCIONAL V15
 -- PlaceId: 124216119978534
--- UI: Rayfield Gen2 (stable) • interface preservada
+-- UI: Rayfield Gen2 (stable)
 -- Config: salvamento manual + persistência do Rayfield + flags 2026
--- Foco: Delta Mobile + Auto Farm por estados + camada 2026 dinâmica + cleanup robusto + runtime discovery
+-- Foco: Delta Mobile + Auto Farm por estados + camada 2026 dinâmica + cleanup robusto
 --
 -- Pesquisa usada para esta versão:
 --   * VintHub / Ride a Pet.lua
@@ -137,27 +137,19 @@ local MY_GENERATION = generation
 
 local Running = true
 local StopHandler = nil
-local StopRequested = false
-local Stopped = false
 
-local function RequestStop()
-    if StopRequested then
+local ReplaceConnection = ReplaceEvent.Event:Connect(function()
+    if not Running then
         return
     end
 
-    StopRequested = true
+    Running = false
 
     if StopHandler then
         task.spawn(function()
             pcall(StopHandler)
         end)
-    else
-        Running = false
     end
-end
-
-local ReplaceConnection = ReplaceEvent.Event:Connect(function()
-    RequestStop()
 end)
 
 -- Safety net contra corridas/execuções que perderem o evento.
@@ -171,7 +163,14 @@ task.spawn(function()
 
         local currentGeneration = tonumber(ControlFolder:GetAttribute("Generation")) or 0
         if currentGeneration ~= MY_GENERATION then
-            RequestStop()
+            Running = false
+
+            if StopHandler then
+                task.spawn(function()
+                    pcall(StopHandler)
+                end)
+            end
+
             break
         end
     end
@@ -187,7 +186,17 @@ GuardEvent.Name = "Shutdown"
 GuardEvent.Parent = Guard
 
 local GuardConnection = GuardEvent.Event:Connect(function()
-    RequestStop()
+    if not Running then
+        return
+    end
+
+    Running = false
+
+    if StopHandler then
+        task.spawn(function()
+            pcall(StopHandler)
+        end)
+    end
 end)
 
 if not Running then
@@ -496,11 +505,9 @@ local FallbackEggNames = {
     "Cracked Egg",
     "Crystal Egg",
     "Diamond Egg",
-    "Dragon Egg",
     "Dominus Egg",
     "Easter Egg",
     "Flaming Egg",
-    "Flame Egg",
     "Flower Egg",
     "Galaxy Egg",
     "Glass Egg",
@@ -609,12 +616,8 @@ local RarityPriority = {
 }
 
 local KnownEggLuck = {
-    -- Fallback only; runtime GameData/attributes always have priority.
-    ["Volcanic Egg"] = 2.5e12,
     ["Cherub Egg"] = 1e12,
-    ["Solaris Egg"] = 3e11,
     ["Blackhole Egg"] = 1e11,
-    ["Bloom Egg"] = 2e9,
     ["Galaxy Egg"] = 1.5e9,
     ["Aurora Egg"] = 3e8,
     ["Soul Egg"] = 7e6,
@@ -723,7 +726,7 @@ local function GetEggMutation(instance)
         return nil
     end
 
-    for _, attributeName in ipairs({"Mutation", "SpawnMutation", "MutationType", "WeatherMutation"}) do
+    for _, attributeName in ipairs({"Mutation", "SpawnMutation", "MutationType"}) do
         local value = instance:GetAttribute(attributeName)
 
         if type(value) == "string" and value ~= "" then
@@ -735,43 +738,7 @@ local function GetEggMutation(instance)
         end
     end
 
-    local child = instance:FindFirstChild("EggData")
-    if child then
-        for _, attributeName in ipairs({"Mutation", "SpawnMutation", "MutationType", "WeatherMutation"}) do
-            local value = child:GetAttribute(attributeName)
-            if type(value) == "string" and value ~= "" then
-                return value
-            end
-            if value == true then
-                return "Mutated"
-            end
-        end
-    end
-
     return nil
-end
-
-local function ParseCompactNumber(value)
-    if type(value) == "number" then
-        return value
-    end
-    if type(value) ~= "string" then
-        return nil
-    end
-
-    local normalized = value:gsub(",", ""):gsub("%s+", "")
-    local number = tonumber(normalized)
-    if number then
-        return number
-    end
-
-    local n, suffix = normalized:match("^([%+%-]?[%d%.]+)([KMBTQ])$")
-    if not n or not suffix then
-        return nil
-    end
-
-    local multipliers = {K = 1e3, M = 1e6, B = 1e9, T = 1e12, Q = 1e15}
-    return tonumber(n) * multipliers[suffix]
 end
 
 local function GetEggWeight(instance)
@@ -788,29 +755,17 @@ local function GetEggLuck(instance)
         return nil
     end
 
-    for _, attributeName in ipairs({"Luck", "HatchLuck", "EggLuck"}) do
-        local parsed = ParseCompactNumber(instance:GetAttribute(attributeName))
-        if parsed then
-            return parsed
-        end
+    local value = instance:GetAttribute("Luck")
+    if type(value) == "number" then
+        return value
     end
 
     local eggName = instance:GetAttribute("Egg")
-    if type(eggName) ~= "string" or eggName == "" then
-        eggName = instance.Name
+    if type(eggName) == "string" then
+        return KnownEggLuck[eggName]
     end
 
-    local definition = EggData[eggName]
-    if type(definition) == "table" then
-        for _, key in ipairs({"Luck", "HatchLuck", "EggLuck", "luck", "hatchLuck"}) do
-            local parsed = ParseCompactNumber(definition[key])
-            if parsed then
-                return parsed
-            end
-        end
-    end
-
-    return KnownEggLuck[eggName]
+    return KnownEggLuck[instance.Name]
 end
 
 local function GetRealRenderedEggName(model)
@@ -1989,6 +1944,15 @@ local function TryRemotePickup(candidate)
     end
 
     return ConfirmFarmPickup(candidate, beforeBasket, 2)
+end
+
+local function FindPromptOnEgg(candidate)
+    local model = candidate and candidate.Rendered
+    if not model or not model.Parent then
+        return nil
+    end
+
+    return model:FindFirstChildWhichIsA("ProximityPrompt", true)
 end
 
 local function TryPromptPickup(candidate)
@@ -3804,15 +3768,6 @@ end
 
 AdvancedLoadData()
 
-task.delay(2, function()
-    if Running then
-        pcall(function()
-            LoadEggData()
-            AdvancedLoadData()
-        end)
-    end
-end)
-
 function Advanced:GetRemotes()
     return GetGameRemotes()
 end
@@ -3820,7 +3775,7 @@ end
 function Advanced:GetRemote(name)
     local remotes = self:GetRemotes()
     local remote = remotes and remotes:FindFirstChild(name)
-    if remote and (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) then
+    if remote and remote:IsA("RemoteEvent") then
         return remote
     end
     return nil
@@ -3831,23 +3786,12 @@ function Advanced:Fire(name, ...)
     if not remote then
         return false, "Remote não encontrado: " .. tostring(name)
     end
-
-    local ok, result = pcall(function()
-        if remote:IsA("RemoteFunction") then
-            return true, remote:InvokeServer(...)
-        end
+    local ok, err = pcall(function()
         remote:FireServer(...)
-        return true, nil
     end)
-
     if not ok then
-        return false, tostring(result)
+        return false, tostring(err)
     end
-
-    if type(result) == "boolean" then
-        return result
-    end
-
     return true
 end
 
@@ -4162,21 +4106,17 @@ function Advanced:PlaceBestPets()
     for i, pet in ipairs(pets) do
         if i > capacity then break end
         local tool = pet.Tool
-        if pet.Placed then
-            continue
-        end
         if tool and tool.Parent then
-            if self:Equip(tool) then
-                task.wait(0.12)
-                local pos = (base.CFrame * CFrame.new(
-                    ((i - 1) % cols - (cols - 1) / 2) * spacing,
-                    4,
-                    math.floor((i - 1) / cols) * spacing
-                )).Position
-                local ok = self:Fire("PlacePet", pet.Key, pos)
-                if ok then placed += 1 end
-                task.wait(0.12)
-            end
+            self:Equip(tool)
+            task.wait(0.12)
+            local pos = (base.CFrame * CFrame.new(
+                ((i - 1) % cols - (cols - 1) / 2) * spacing,
+                4,
+                math.floor((i - 1) / cols) * spacing
+            )).Position
+            local ok = self:Fire("PlacePet", pet.Key, pos)
+            if ok then placed += 1 end
+            task.wait(0.12)
         end
     end
 
@@ -4260,16 +4200,9 @@ function Advanced:InitSell()
     self.SellAPI = api
 
     if not self.SellConnected then
-        local dialogueRemotes = {}
         for _, remoteName in ipairs({"DialogueSend", "DialogueUpdate"}) do
             local remote = remotes:FindFirstChild(remoteName)
-            if not remote or not remote:IsA("RemoteEvent") then
-                return false
-            end
-            dialogueRemotes[#dialogueRemotes + 1] = remote
-        end
-
-        for _, remote in ipairs(dialogueRemotes) do
+            if not remote or not remote:IsA("RemoteEvent") then return false end
             Track(remote.OnClientEvent:Connect(function(data)
                 self.SellDialogue = type(data) == "table" and data or nil
                 self.SellDialogueRevision += 1
@@ -4349,7 +4282,7 @@ function Advanced:CollectOne()
         end
         if not ReturnToPlotForFarm() then return false end
     end
-    return GetBasketCount() > start or start > 0
+    return GetBasketCount() > start or true
 end
 
 function Advanced:RunCycle()
@@ -4426,82 +4359,24 @@ function Advanced:Rejoin()
     end)
 end
 
--- 2026: prioriza Speed, usa Income como desempate e cai para atributos do Tool
--- somente quando a GameData/Pets ainda não estiver disponível.
+-- A versão dinâmica deve vencer a lógica antiga de "menor peso".
 MountBestPet = function()
-    local remote = GetMountRemote()
-    if not remote then
-        return false
-    end
-
     local pets = Advanced:PetList()
-
-    if #pets > 0 then
-        table.sort(pets, function(a, b)
-            local as = tonumber(a.Speed) or 0
-            local bs = tonumber(b.Speed) or 0
-            if as ~= bs then return as > bs end
-
-            local ai = tonumber(a.Income) or 0
-            local bi = tonumber(b.Income) or 0
-            if ai ~= bi then return ai > bi end
-
-            local aw = tonumber(a.Weight) or 0
-            local bw = tonumber(b.Weight) or 0
-            if aw ~= bw then return aw > bw end
-
-            return tostring(a.Key) < tostring(b.Key)
-        end)
-
-        local pet = pets[1]
-        if pet and pet.Tool and Advanced:Equip(pet.Tool) then
-            task.wait(0.12)
-            return pcall(function()
-                if remote:IsA("RemoteFunction") then
-                    remote:InvokeServer()
-                else
-                    remote:FireServer()
-                end
-            end)
+    table.sort(pets, function(a,b)
+        if a.Speed == b.Speed then
+            if a.Income == b.Income then return a.Key < b.Key end
+            return a.Income > b.Income
         end
-    end
-
-    local character = LocalPlayer.Character
-    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-    local selectedPet
-    local bestSpeed = -math.huge
-    local bestWeight = -math.huge
-
-    local function consider(container)
-        if not container then return end
-        for _, item in ipairs(container:GetChildren()) do
-            if item:IsA("Tool") and item:GetAttribute("PetName") ~= nil then
-                local speed = ParseCompactNumber(item:GetAttribute("Speed")) or 0
-                local weight = tonumber(item:GetAttribute("Weight")) or 0
-                if speed > bestSpeed or (speed == bestSpeed and weight > bestWeight) then
-                    selectedPet = item
-                    bestSpeed = speed
-                    bestWeight = weight
-                end
-            end
-        end
-    end
-
-    consider(backpack)
-    consider(character)
-
-    if not selectedPet or not Advanced:Equip(selectedPet) then
-        return false
-    end
-
-    task.wait(0.12)
-    return pcall(function()
-        if remote:IsA("RemoteFunction") then
-            remote:InvokeServer()
-        else
-            remote:FireServer()
-        end
+        return a.Speed > b.Speed
     end)
+
+    local pet = pets[1]
+    local remote = GetMountRemote()
+    if not pet or not remote then return false end
+    if not Advanced:Equip(pet.Tool) then return false end
+    task.wait(0.12)
+    local ok = pcall(function() remote:FireServer() end)
+    return ok
 end
 
 local AdvancedLoop = task.spawn(function()
@@ -4523,29 +4398,12 @@ end)
 -- GUI: RAYFIELD GEN2
 --============================================================--
 
-local okRayfield, Rayfield = false, nil
-
-for attempt = 1, 3 do
-    if not Running then
-        break
-    end
-
-    local ok, result = pcall(function()
-        local source = game:HttpGet("https://sirius.menu/gen2")
-        assert(type(source) == "string" and #source > 0, "Rayfield Gen2 source vazio")
-        local loader = loadstring(source)
-        assert(type(loader) == "function", "Rayfield Gen2 loader inválido")
-        return loader()
-    end)
-
-    if ok and type(result) == "table" then
-        okRayfield = true
-        Rayfield = result
-        break
-    end
-
-    task.wait(0.35 * attempt)
-end
+local okRayfield, Rayfield = pcall(function()
+    local source = game:HttpGet("https://sirius.menu/gen2")
+    local loader = loadstring(source)
+    assert(type(loader) == "function", "Rayfield Gen2 loader inválido")
+    return loader()
+end)
 
 -- Outra execução pode ter assumido o singleton enquanto o loader carregava.
 if not Running or (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
@@ -4604,13 +4462,13 @@ end
 local okWindow, Window = pcall(function()
     return Rayfield:CreateWindow({
         name = "Montar um Pet",
-        subtitle = "MASTER v15 • Delta Mobile",
+        subtitle = "MASTER v15.2026 • Delta Mobile • Dynamic API",
         sidebarLayout = true,
         toggleUIKeybind = "K",
         configuration = {
             autoSave = true,
             autoLoad = true,
-            fileName = "MontarUmPet_Master_v15",
+            fileName = "MontarUmPet_Master_v15_2026",
         },
     })
 end)
@@ -5310,8 +5168,7 @@ TabVisual:CreateToggle({
     flag = "PlayerESP",
     value = false,
     callback = function(value)
-        State.PlayerESP = value
-        RefreshPlayerESP()
+        RefreshPlayerESP(value)
     end,
 })
 
@@ -5863,12 +5720,10 @@ end)
 --============================================================--
 
 StopHandler = function()
-    if Stopped then
+    if not Running then
         return
     end
 
-    Stopped = true
-    StopRequested = true
     CancelGlide()
     DestroyFarmFlightMovers()
     ClearFarmTarget()
@@ -5957,9 +5812,6 @@ StopHandler = function()
     end)
 end
 
--- MASTER v22.2026: interface/UI preservada; núcleo com runtime discovery,
--- cleanup idempotente, mount por Speed/Income, metadata dinâmica de ovos
--- e loader Rayfield com retry.
 ENV[TOKEN_NAMES[1]] = {
     Stop = StopHandler,
 }
