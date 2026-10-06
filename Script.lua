@@ -3819,7 +3819,6 @@ TabFarm:CreateToggle({
         State.AutoFarm = value
 
         if value then
-            StartFarmNoclip()
             ClearFarmTarget()
             State.FarmPhase = "Starting"
             LastFarmStatus = "Starting Auto Farm"
@@ -4764,6 +4763,848 @@ TabConfig:CreateButton({
 })
 
 --============================================================--
+-- AUTO FARM V42 • CAMADA PÓS-UI / CICLO COMPLETO
+-- Regra: esta camada só é definida DEPOIS que a interface existe.
+-- Se alguma parte falhar, a UI já está viva.
+--============================================================--
+
+local AdvancedFarmReady = false
+
+task.defer(function()
+    -- defaults somente para campos que o v41 pode não ter
+    State.FarmBaseSideOffset = State.FarmBaseSideOffset or 26
+    State.FarmBaseSideHeight = State.FarmBaseSideHeight or 6
+    State.FarmBaseEntryInset = State.FarmBaseEntryInset or 14
+    State.FarmBaseSidePause = State.FarmBaseSidePause or 0.60
+    State.FarmBaseEntryPause = State.FarmBaseEntryPause or 0.80
+    State.FarmBaseEntrySpeed = State.FarmBaseEntrySpeed or 110
+    State.FarmNestApproachSpeed = State.FarmNestApproachSpeed or 100
+    State.FarmBaseConfirmTimeout = State.FarmBaseConfirmTimeout or 2.5
+    State.FarmNestWait = State.FarmNestWait or 8
+    State.FarmNestApproachHeight = State.FarmNestApproachHeight or 6
+    State.FarmNestPoll = State.FarmNestPoll or 0.25
+    State.FarmPickupMode = State.FarmPickupMode or "Auto"
+    State.FarmPickupRetries = State.FarmPickupRetries or 5
+    State.FarmPickupWait = State.FarmPickupWait or 0.25
+    State.FarmPendingEggs = State.FarmPendingEggs or {}
+    State.FarmCycleDelay = State.FarmCycleDelay or 1.5
+    State.FarmNoTargetDelay = State.FarmNoTargetDelay or 1.0
+
+    local function advRunning()
+        return Running and State.AutoFarm
+    end
+
+    local function advSetPhase(text)
+        State.FarmPhase = tostring(text)
+        LastFarmStatus = tostring(text)
+    end
+
+    local function advBasketCount()
+        local basket = LocalPlayer:FindFirstChild("Basket")
+        return basket and #basket:GetChildren() or 0
+    end
+
+    local function advEggRemote(name)
+        local remotes = GetGameRemotes()
+        if remotes then
+            local direct = remotes:FindFirstChild(name)
+            if direct then
+                return direct
+            end
+        end
+
+        local root = ReplicatedStorage:FindFirstChild("Remotes")
+        if root then
+            for _, obj in ipairs(root:GetDescendants()) do
+                if obj.Name == name and (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction")) then
+                    return obj
+                end
+            end
+        end
+        return nil
+    end
+
+    local function advSnapshotTools()
+        local seen = {}
+        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+        local character = LocalPlayer.Character
+        for _, container in ipairs({backpack, character}) do
+            if container then
+                for _, obj in ipairs(container:GetChildren()) do
+                    if obj:IsA("Tool") then
+                        seen[obj] = true
+                    end
+                end
+            end
+        end
+        return seen
+    end
+
+    local function advEggTools()
+        local result = {}
+        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+        local character = LocalPlayer.Character
+        for _, container in ipairs({backpack, character}) do
+            if container then
+                for _, tool in ipairs(container:GetChildren()) do
+                    if tool:IsA("Tool") then
+                        local isEgg = EggData[tool.Name] ~= nil
+                            or type(tool:GetAttribute("Egg")) == "string"
+                            or tool:GetAttribute("IsEgg") == true
+                        if isEgg and not tool:GetAttribute("PetKey") then
+                            result[#result + 1] = tool
+                        end
+                    end
+                end
+            end
+        end
+        return result
+    end
+
+    local function advBasketEggs()
+        local basket = LocalPlayer:FindFirstChild("Basket")
+        local expected = {}
+        if not basket then
+            return expected
+        end
+        for _, obj in ipairs(basket:GetChildren()) do
+            local name = obj:GetAttribute("Egg")
+                or obj:GetAttribute("EggName")
+                or obj.Name
+            if type(name) == "string" and name ~= "" then
+                expected[name] = (expected[name] or 0) + 1
+            end
+        end
+        return expected
+    end
+
+    local function advFreeNests()
+        local plot = GetMyPlot()
+        local nestsFolder = plot and plot:FindFirstChild("Nests")
+        if not nestsFolder then
+            return {}
+        end
+
+        local result = {}
+        for _, nest in ipairs(nestsFolder:GetChildren()) do
+            local unlocked = nest:GetAttribute("Unlocked")
+            local occupied = nest:GetAttribute("Occupied")
+            if unlocked ~= false and occupied ~= true then
+                result[#result + 1] = nest
+            end
+        end
+
+        table.sort(result, function(a, b)
+            local an = tonumber(a.Name) or math.huge
+            local bn = tonumber(b.Name) or math.huge
+            if an == bn then
+                return tostring(a.Name) < tostring(b.Name)
+            end
+            return an < bn
+        end)
+        return result
+    end
+
+    local function advNestPosition(nest)
+        if not nest or not nest.Parent then
+            return nil
+        end
+        local ok, pivot = pcall(function()
+            return nest:GetPivot()
+        end)
+        if ok and pivot then
+            return pivot.Position
+        end
+        if nest:IsA("BasePart") then
+            return nest.Position
+        end
+        local part = nest:FindFirstChildWhichIsA("BasePart", true)
+        return part and part.Position or nil
+    end
+
+    local function advEquipTool(tool)
+        local character, humanoid = GetCharacter()
+        if not character or not humanoid or not tool or not tool.Parent then
+            return false
+        end
+        return pcall(function()
+            humanoid:EquipTool(tool)
+        end)
+    end
+
+    local function advFirePlaced(nest)
+        local remote = advEggRemote("EggPlaced")
+        if not remote or not remote:IsA("RemoteEvent") then
+            return false
+        end
+
+        local nestId = nest.Name
+        local ok = pcall(function()
+            remote:FireServer({NestId = tostring(nestId)})
+        end)
+        if ok then
+            return true
+        end
+
+        -- fallback para builds em que o argumento é o nome direto
+        return pcall(function()
+            remote:FireServer(tostring(nestId))
+        end)
+    end
+
+    local function advRestoreCollision(saved)
+        for part, value in pairs(saved) do
+            if part and part.Parent then
+                pcall(function()
+                    part.CanCollide = value
+                end)
+            end
+        end
+        table.clear(saved)
+    end
+
+    local function advFly(target, speed, descend)
+        local character, root = GetCharacter()
+        if not character or not root or typeof(target) ~= "Vector3" or not advRunning() then
+            return false
+        end
+
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid then
+            return false
+        end
+
+        local saved = {}
+        for _, obj in ipairs(character:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                saved[obj] = obj.CanCollide
+                obj.CanCollide = false
+            end
+        end
+
+        local oldStand = humanoid.PlatformStand
+        local oldRotate = humanoid.AutoRotate
+        humanoid.PlatformStand = true
+        humanoid.AutoRotate = false
+
+        local velocity = Instance.new("BodyVelocity")
+        velocity.Name = "MUP_V42_Flight"
+        velocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+        velocity.P = 30000
+        velocity.Parent = root
+
+        local gyro = Instance.new("BodyGyro")
+        gyro.Name = "MUP_V42_FlightGyro"
+        gyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+        gyro.P = 60000
+        gyro.D = 1800
+        gyro.Parent = root
+
+        local token = (MovementToken or 0) + 1
+        MovementToken = token
+
+        local flightSpeed = math.clamp(tonumber(speed) or State.FarmFlightSpeed or 300, 50, 400)
+        local arrive = math.clamp(tonumber(State.FarmFlightArriveRadius) or 4, 2, 10)
+        local started = os.clock()
+        local distance = (target - root.Position).Magnitude
+        local timeout = math.clamp(distance / flightSpeed * 3 + 3, 4, 35)
+        local ok = false
+
+        while advRunning() and token == MovementToken and root.Parent and os.clock() - started < timeout do
+            for part in pairs(saved) do
+                if part and part.Parent then
+                    part.CanCollide = false
+                end
+            end
+
+            local delta = target - root.Position
+            local remaining = delta.Magnitude
+            if remaining <= arrive then
+                ok = true
+                break
+            end
+
+            local direction = delta.Unit
+            local current = math.clamp(remaining * 5, 45, flightSpeed)
+            velocity.Velocity = direction * current
+            gyro.CFrame = CFrame.lookAt(root.Position, root.Position + direction)
+
+            pcall(function()
+                root.AssemblyLinearVelocity = direction * current
+            end)
+
+            RunService.Heartbeat:Wait()
+        end
+
+        pcall(function()
+            velocity.Velocity = Vector3.zero
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+
+        pcall(function() velocity:Destroy() end)
+        pcall(function() gyro:Destroy() end)
+
+        -- A colisão volta NORMAL sempre que termina um trecho de voo.
+        advRestoreCollision(saved)
+        pcall(function()
+            humanoid.PlatformStand = oldStand
+            humanoid.AutoRotate = oldRotate
+        end)
+
+        if not ok or not advRunning() then
+            return false
+        end
+
+        if descend then
+            task.wait(math.clamp(tonumber(State.FarmArrivalPause) or 0.35, 0.10, 0.80))
+        end
+
+        return true
+    end
+
+    local function advBaseRoute()
+        local plot = GetMyPlot()
+        local baseplate = plot and plot:FindFirstChild("Baseplate")
+        local _, root = GetCharacter()
+        if not plot or not baseplate or not baseplate:IsA("BasePart") or not root then
+            return nil
+        end
+
+        local cf = baseplate.CFrame
+        local size = baseplate.Size
+        local halfX = math.max(4, size.X * 0.5)
+        local halfZ = math.max(4, size.Z * 0.5)
+        local topY = baseplate.Position.Y + size.Y * 0.5
+        local localRoot = cf:PointToObjectSpace(root.Position)
+        local useX = math.abs(localRoot.X) >= math.abs(localRoot.Z)
+        local sign = useX and (localRoot.X >= 0 and 1 or -1) or (localRoot.Z >= 0 and 1 or -1)
+        local axis = useX and halfX or halfZ
+
+        local sideOffset = math.clamp(tonumber(State.FarmBaseSideOffset) or 26, 8, 60)
+        local sideHeight = math.clamp(tonumber(State.FarmBaseSideHeight) or 6, 3, 15)
+        local inset = math.clamp(tonumber(State.FarmBaseEntryInset) or 14, 4, math.max(4, axis - 3))
+        local entryHeight = math.clamp(tonumber(State.FarmBaseEntryHeight) or 7, 3, 15)
+        local hoverHeight = math.clamp(tonumber(State.FarmHoverHeight) or 55, 20, 150)
+
+        local sideLocal, entryLocal
+        if useX then
+            sideLocal = Vector3.new(sign * (halfX + sideOffset), 0, 0)
+            entryLocal = Vector3.new(sign * math.max(0, halfX - inset), 0, 0)
+        else
+            sideLocal = Vector3.new(0, 0, sign * (halfZ + sideOffset))
+            entryLocal = Vector3.new(0, 0, sign * math.max(0, halfZ - inset))
+        end
+
+        local sideGround = cf:PointToWorldSpace(sideLocal + Vector3.new(0, topY - cf.Position.Y + sideHeight, 0))
+        local sideAir = Vector3.new(sideGround.X, topY + hoverHeight, sideGround.Z)
+        local entryPoint = cf:PointToWorldSpace(entryLocal + Vector3.new(0, topY - cf.Position.Y + entryHeight, 0))
+
+        return {
+            Plot = plot,
+            Baseplate = baseplate,
+            SideAir = sideAir,
+            SideGround = sideGround,
+            EntryPoint = entryPoint,
+            BasePosition = baseplate.Position,
+        }
+    end
+
+    local function advInsidePlot(position)
+        local route = advBaseRoute()
+        if not route or typeof(position) ~= "Vector3" then
+            return false
+        end
+        local p = route.Baseplate.CFrame:PointToObjectSpace(position)
+        local margin = 2.5
+        return math.abs(p.X) <= route.Baseplate.Size.X * 0.5 - margin
+            and math.abs(p.Z) <= route.Baseplate.Size.Z * 0.5 - margin
+    end
+
+    local function advConfirmPlot(timeout)
+        local deadline = os.clock() + math.clamp(tonumber(timeout) or 2.5, 0.5, 5)
+        while advRunning() and os.clock() < deadline do
+            local _, root = GetCharacter()
+            if root and advInsidePlot(root.Position) then
+                return true
+            end
+            task.wait(0.08)
+        end
+        local _, root = GetCharacter()
+        return root and advInsidePlot(root.Position) or false
+    end
+
+    local function advWaitReturnedEggs(expected, beforeTools, timeout)
+        local deadline = os.clock() + math.clamp(tonumber(timeout) or 4, 2, 10)
+        while advRunning() and os.clock() < deadline do
+            local received = {}
+            for _, tool in ipairs(advEggTools()) do
+                if not beforeTools[tool] then
+                    received[tool.Name] = (received[tool.Name] or 0) + 1
+                end
+            end
+
+            local enough = advBasketCount() <= 0
+            if enough then
+                for name, count in pairs(expected) do
+                    if (received[name] or 0) < count then
+                        enough = false
+                        break
+                    end
+                end
+            end
+
+            if enough then
+                return true
+            end
+            task.wait(0.10)
+        end
+        return false
+    end
+
+    local function advPlaceEggs(expected, beforeTools)
+        local remaining = {}
+        for name, count in pairs(expected) do
+            remaining[name] = math.max(0, math.floor(tonumber(count) or 0))
+        end
+
+        local deadline = os.clock() + math.clamp(tonumber(State.FarmNestWait) or 8, 2, 20)
+        while advRunning() and os.clock() < deadline do
+            local complete = true
+            for _, count in pairs(remaining) do
+                if count > 0 then complete = false break end
+            end
+            if complete then
+                State.FarmPendingEggs = {}
+                return true
+            end
+
+            local nests = advFreeNests()
+            if #nests == 0 then
+                task.wait(math.clamp(tonumber(State.FarmNestPoll) or 0.25, 0.10, 0.75))
+                continue
+            end
+
+            local tools = advEggTools()
+            for _, nest in ipairs(nests) do
+                if not advRunning() then return false end
+
+                local tool = nil
+                for _, candidate in ipairs(tools) do
+                    if not beforeTools[candidate] and (remaining[candidate.Name] or 0) > 0 then
+                        tool = candidate
+                        break
+                    end
+                end
+                if not tool then break end
+
+                local nestPosition = advNestPosition(nest)
+                if not nestPosition then continue end
+
+                local safe = GetSafeDescentPosition(
+                    nestPosition,
+                    math.max(3, tonumber(State.FarmNestApproachHeight) or 6)
+                ) or nestPosition
+
+                advSetPhase("Voando até ninho " .. tostring(nest.Name))
+                if not advFly(safe, math.min(tonumber(State.FarmNestApproachSpeed) or 100, 180), true) then
+                    return false
+                end
+
+                if not advRunning() then return false end
+
+                -- Agora o personagem está parado e com colisão normal.
+                if not advEquipTool(tool) then
+                    return false
+                end
+                task.wait(0.15)
+
+                if not advFirePlaced(nest) then
+                    return false
+                end
+
+                local placed = false
+                local confirm = os.clock() + 4
+                while advRunning() and os.clock() < confirm do
+                    local occupied = nest:GetAttribute("Occupied") == true
+                    local stillThere = false
+                    for _, current in ipairs(advEggTools()) do
+                        if current == tool then stillThere = true break end
+                    end
+                    if occupied or not stillThere then
+                        placed = true
+                        break
+                    end
+                    task.wait(0.10)
+                end
+
+                if not placed then
+                    State.FarmPendingEggs = remaining
+                    advSetPhase("Depósito não confirmado")
+                    return false
+                end
+
+                remaining[tool.Name] = math.max(0, (remaining[tool.Name] or 1) - 1)
+                task.wait(math.clamp(tonumber(State.FarmBasePause) or 2.5, 0.5, 5))
+            end
+        end
+
+        State.FarmPendingEggs = remaining
+        for _, count in pairs(remaining) do
+            if count > 0 then return false end
+        end
+        return true
+    end
+
+    local function advMountBestPet()
+        if not State.AutoMountPet or IsRidingPet() then
+            return true
+        end
+
+        local remote = GetMountRemote()
+        local character = LocalPlayer.Character
+        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+        if not remote or not remote:IsA("RemoteEvent") or not character then
+            return false
+        end
+
+        local best = nil
+        local bestScore = -math.huge
+        for _, container in ipairs({backpack, character}) do
+            if container then
+                for _, tool in ipairs(container:GetChildren()) do
+                    if tool:IsA("Tool") and not tool:GetAttribute("Egg") then
+                        local petName = tool:GetAttribute("PetName")
+                        local petKey = tool:GetAttribute("PetKey")
+                        local weight = tonumber(tool:GetAttribute("Weight")) or 0
+                        local income = tonumber(tool:GetAttribute("Income"))
+                            or tonumber(tool:GetAttribute("CashPerSecond")) or 0
+                        if petName ~= nil or petKey ~= nil then
+                            local score = weight * 1000 + income
+                            if score > bestScore then
+                                bestScore = score
+                                best = tool
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if not best then
+            return false
+        end
+
+        local ok = pcall(function()
+            character.Humanoid:EquipTool(best)
+        end)
+        if not ok then
+            return false
+        end
+
+        task.wait(0.12)
+        pcall(function()
+            remote:FireServer()
+        end)
+
+        local deadline = os.clock() + 2
+        while advRunning() and os.clock() < deadline do
+            if IsRidingPet() then
+                return true
+            end
+            task.wait(0.05)
+        end
+        return IsRidingPet()
+    end
+
+    local function advResolveTarget()
+        -- Primeiro respeita o alvo já travado. Isso impede o Auto Farm de
+        -- trocar de ovo no meio do voo.
+        if State.FarmTargetUID then
+            local activeFolder = GetActiveEggFolder()
+            local active = activeFolder and activeFolder:FindFirstChild(State.FarmTargetUID)
+            if active then
+                local pos = GetEggPosition(active)
+                if pos then
+                    return {
+                        Instance = active,
+                        UID = active.Name,
+                        ID = active.Name,
+                        Name = active:GetAttribute("Egg") or State.FarmTargetName or active.Name,
+                        Position = pos,
+                        Distance = 0,
+                        Weight = GetEggWeight(active) or 0,
+                        Luck = GetEggLuck(active) or 0,
+                        Rarity = GetEggRarity(active:GetAttribute("Egg") or State.FarmTargetName or active.Name, active),
+                        RarityScore = RarityPriority[GetEggRarity(active:GetAttribute("Egg") or State.FarmTargetName or active.Name, active)] or 0,
+                        Mutation = GetEggMutation(active),
+                    }
+                end
+            end
+            ClearFarmTarget()
+        end
+
+        local candidates = GetCandidates()
+        if type(candidates) ~= "table" then
+            return nil
+        end
+
+        local target = nil
+        if type(SelectBestCandidate) == "function" then
+            target = SelectBestCandidate(candidates)
+        end
+        if not target then
+            target = SelectBestFarmCandidate(candidates)
+        end
+        if not target then
+            return nil
+        end
+
+        -- RenderedEggs pode aparecer antes do ActiveEggs; recupera o UID real.
+        if target.Synthetic or not target.UID then
+            local active = FindActiveEggNear(target.Position, 15)
+            if active then
+                target.Instance = active
+                target.UID = active.Name
+                target.ID = active.Name
+                target.Synthetic = false
+            end
+        end
+
+        return target
+    end
+
+    local function advPickup(target)
+        if not target then return false end
+
+        local remote = GetEggPickupRemote()
+        local prompt = nil
+        if target.Rendered and target.Rendered.Parent then
+            prompt = target.Rendered:FindFirstChildWhichIsA("ProximityPrompt", true)
+        end
+
+        local retries = math.clamp(math.floor(tonumber(State.FarmPickupRetries) or 5), 1, 10)
+        local before = advBasketCount()
+
+        for _ = 1, retries do
+            if not advRunning() then return false end
+
+            if remote and remote:IsA("RemoteEvent") and target.UID then
+                pcall(function() remote:FireServer(target.UID) end)
+            elseif prompt and type(fireproximityprompt) == "function" then
+                pcall(function() fireproximityprompt(prompt) end)
+            end
+
+            local deadline = os.clock() + 1.5
+            while advRunning() and os.clock() < deadline do
+                if advBasketCount() > before then return true end
+                if target.UID and not GetActiveEggFolder():FindFirstChild(target.UID) then return true end
+                if target.Rendered and not target.Rendered.Parent then return true end
+                task.wait(0.05)
+            end
+
+            task.wait(math.max(0.08, tonumber(State.FarmPickupWait) or 0.25))
+        end
+        return false
+    end
+
+    local function advFarmDeposit()
+        if not advRunning() then return false end
+        local route = advBaseRoute()
+        if not route then
+            advSetPhase("Base não encontrada")
+            return false
+        end
+
+        local expected = advBasketEggs()
+        if next(expected) == nil and next(State.FarmPendingEggs or {}) ~= nil then
+            expected = State.FarmPendingEggs
+        end
+        if next(expected) == nil then
+            return advBasketCount() <= 0
+        end
+
+        local beforeTools = advSnapshotTools()
+
+        advSetPhase("Voltando para base")
+        if not advFly(route.SideAir, State.FarmFlightSpeed or 300, false) then return false end
+        advSetPhase("Descendo ao lado da base")
+        if not advFly(route.SideGround, math.min(State.FarmBaseApproachSpeed or 140, 220), true) then return false end
+        task.wait(math.clamp(tonumber(State.FarmBaseSidePause) or 0.60, 0.2, 2))
+        if not advFly(route.EntryPoint, math.min(State.FarmBaseEntrySpeed or 110, 180), true) then return false end
+
+        if not advConfirmPlot(State.FarmBaseConfirmTimeout or 2.5) then
+            if not advFly(route.EntryPoint, 100, true) then return false end
+            if not advConfirmPlot(1.5) then
+                advSetPhase("Entrada do plot não confirmada")
+                return false
+            end
+        end
+
+        advSetPhase("Dentro do plot • aguardando ovo")
+        if not advWaitReturnedEggs(expected, beforeTools, State.FarmDepositWait or 4) then
+            if advBasketCount() > 0 then
+                advSetPhase("Ovo ainda no Basket")
+                return false
+            end
+        end
+
+        if not advPlaceEggs(expected, beforeTools) then
+            return false
+        end
+
+        local clean = advBasketCount() <= 0 and next(State.FarmPendingEggs or {}) == nil
+        if clean then
+            advSetPhase("Ovo entregue • próximo ciclo")
+        end
+        return clean
+    end
+
+    local function advFarmOnce()
+        if not advRunning() or FarmBusy then return end
+        FarmBusy = true
+        local ok, result = pcall(function()
+            if advBasketCount() > 0 then
+                return advFarmDeposit()
+            end
+
+            -- Não mantém Noclip ativo enquanto procura ovo.
+            if State.AutoMountPet and not IsRidingPet() then
+                advSetPhase("Preparando melhor pet")
+                local mounted = advMountBestPet()
+                if not mounted and State.FarmRequireMountedPet then
+                    return false
+                end
+            end
+
+            local target = advResolveTarget()
+            if not target then
+                advSetPhase("Sem alvo • aguardando scanner")
+                task.wait(math.clamp(tonumber(State.FarmNoTargetDelay) or 1, 0.25, 5))
+                return false
+            end
+
+            State.FarmTargetUID = target.UID or target.ID
+            State.FarmTargetName = target.Name
+            State.FarmTargetPosition = target.Position
+            State.FarmTargetRetries = 0
+
+            -- Área especial: o suporte do vulcão usa a mesma máquina de voo.
+            if State.VolcanicSupport and string.find(string.lower(tostring(target.Name)), "volcan") then
+                if not IsInVolcano() and type(EnterVolcano) == "function" then
+                    advSetPhase("Entrando no vulcão")
+                    if not EnterVolcano() then
+                        ClearFarmTarget()
+                        return false
+                    end
+                    return false
+                end
+            elseif IsInVolcano() and type(ReturnFromVolcanoToPlot) == "function" then
+                advSetPhase("Saindo do vulcão")
+                ReturnFromVolcanoToPlot()
+                return false
+            end
+
+            local pickupRadius = math.clamp(tonumber(State.FarmPickupRadius) or 12, 6, 30)
+            local _, root = GetCharacter()
+            if not root then return false end
+
+            local distance = (target.Position - root.Position).Magnitude
+            if distance > pickupRadius then
+                advSetPhase("Voando até " .. tostring(target.Name))
+                local safe = GetSafeDescentPosition(
+                    target.Position,
+                    math.max(tonumber(State.FarmPickupApproachHeight) or 6, 6)
+                ) or target.Position
+                if not advFly(safe, State.FarmFlightSpeed or 300, true) then
+                    State.FarmTargetRetries = State.FarmTargetRetries + 1
+                    if State.FarmTargetRetries >= 3 then
+                        ClearFarmTarget()
+                    end
+                    return false
+                end
+            end
+
+            if not advRunning() then return false end
+
+            -- O voo terminou e a colisão já foi restaurada.
+            target = advResolveTarget() or target
+            advSetPhase("Coletando " .. tostring(target.Name))
+            task.wait(math.clamp(tonumber(State.FarmPickupPause) or 0.35, 0.15, 1))
+
+            if not advPickup(target) then
+                State.FarmTargetRetries = (State.FarmTargetRetries or 0) + 1
+                if State.FarmTargetRetries >= 3 then
+                    FailedFarmTargets[target.UID or target.ID] = os.clock() + 5
+                    ClearFarmTarget()
+                end
+                return false
+            end
+
+            local deadline = os.clock() + 2
+            while advRunning() and os.clock() < deadline and advBasketCount() <= 0 do
+                task.wait(0.05)
+            end
+
+            if advBasketCount() <= 0 then
+                ClearFarmTarget()
+                return false
+            end
+
+            FailedFarmTargets[target.UID or target.ID] = nil
+            ClearFarmTarget()
+            task.wait(math.clamp(tonumber(State.FarmPickupPause) or 0.30, 0.10, 0.80))
+            return advFarmDeposit()
+        end)
+
+        FarmBusy = false
+
+        if not ok and advRunning() then
+            ClearFarmTarget()
+            advSetPhase("Farm recuperado de erro")
+            task.wait(math.max(0.15, tonumber(State.FarmRetryDelay) or 0.30))
+        end
+
+        return result == true
+    end
+
+    -- Substituições feitas SOMENTE depois da UI estar pronta.
+    FarmFlyTo = advFly
+    FarmDeposit = advFarmDeposit
+    FarmOnce = advFarmOnce
+    AdvancedFarmReady = true
+
+    -- O watchdog apenas limpa estado físico; não cria um segundo worker.
+    task.spawn(function()
+        local lastPhase = State.FarmPhase
+        local phaseStarted = os.clock()
+        while Running do
+            task.wait(0.50)
+            if not State.AutoFarm then
+                phaseStarted = os.clock()
+                lastPhase = State.FarmPhase
+                continue
+            end
+
+            if State.FarmPhase ~= lastPhase then
+                lastPhase = State.FarmPhase
+                phaseStarted = os.clock()
+            end
+
+            if FarmBusy and os.clock() - phaseStarted > 45 then
+                -- Só sinaliza recuperação. O worker atual continua com segurança.
+                CancelGlide()
+                DestroyFarmFlightMovers()
+                StopFarmNoclip()
+                FailedFarmTargets[State.FarmTargetUID or "__none"] = os.clock() + 3
+                ClearFarmTarget()
+                advSetPhase("Watchdog: recuperando")
+            end
+        end
+    end)
+end)
+
+--============================================================--
 -- LOOPS CENTRALIZADOS
 --============================================================--
 
@@ -4777,7 +5618,7 @@ local FarmLoop = task.spawn(function()
             )
         )
 
-        if Running and State.AutoFarm and not FarmBusy then
+        if Running and State.AutoFarm and AdvancedFarmReady and not FarmBusy then
             FarmOnce()
         end
     end
