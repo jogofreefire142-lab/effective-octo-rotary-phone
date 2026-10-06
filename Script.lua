@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v30 • UI ORIGINAL v15 • DELTA STABLE
+-- MONTAR UM PET - MASTER v31 • UI ORIGINAL v15 • DELTA STABLE
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
@@ -327,9 +327,16 @@ local State = {
 
     -- Auto Farm engine
     FarmMoveMode = "Instant",      -- Instant or Tween
-    FarmPickupMode = "Remote",     -- Auto, Prompt, Remote
+    FarmPickupMode = "Auto",       -- Auto, Prompt, Remote
     FarmPickupRadius = 12,
     FarmReturnInstant = true,
+    -- Perfis 2026: combina scanner, coleta remota/prompt e glide.
+    FarmEngineProfile = "Hybrid 2026",
+    FarmRenderedFallback = true,
+    FarmRemoteFallback = true,
+    FarmPromptFallback = true,
+    FarmAutoRecover = true,
+    FarmRetryAfterError = 1.0,
 
     -- Auto Farm Flight
     FarmFlightSpeed = 300,
@@ -1074,57 +1081,99 @@ end
 
 local function GetFarmCandidates()
     local _, root = GetCharacter()
-    local activeEggs = GetActiveEggFolder()
-
-    if not root or not activeEggs then
+    if not root then
         return {}
     end
 
     local result = {}
+    local seen = {}
+    local activeEggs = GetActiveEggFolder()
+    local activeCount = 0
 
-    for _, egg in ipairs(activeEggs:GetChildren()) do
-        if egg:IsA("Configuration") then
-            local eggName = egg:GetAttribute("Egg")
-            local privateTo = egg:GetAttribute("PrivateTo")
-            local collected = tostring(LocalPlayer:GetAttribute("CollectedEggs") or "")
-            local alreadyCollected = string.find("," .. collected .. ",", "," .. tostring(egg.Name) .. ",", 1, true) ~= nil
-            local privateMismatch = privateTo ~= nil and tostring(privateTo) ~= tostring(LocalPlayer.UserId)
+    -- Caminho principal: ServerData.ActiveEggs (UID real do servidor).
+    if activeEggs then
+        for _, egg in ipairs(activeEggs:GetChildren()) do
+            if egg:IsA("Configuration") then
+                local eggName = egg:GetAttribute("Egg")
+                local privateTo = egg:GetAttribute("PrivateTo")
+                local collected = tostring(LocalPlayer:GetAttribute("CollectedEggs") or "")
+                local alreadyCollected = string.find("," .. collected .. ",", "," .. tostring(egg.Name) .. ",", 1, true) ~= nil
+                local privateMismatch = privateTo ~= nil and tostring(privateTo) ~= tostring(LocalPlayer.UserId)
 
-            if type(eggName) == "string"
-                and not alreadyCollected
-                and not privateMismatch
-                and MeetsFilters(egg, eggName) then
-                local position = egg:GetAttribute("Position")
+                if type(eggName) == "string"
+                    and not alreadyCollected
+                    and not privateMismatch
+                    and MeetsFilters(egg, eggName) then
 
-                if typeof(position) == "CFrame" then
-                    position = position.Position
+                    local position = egg:GetAttribute("Position")
+                    if typeof(position) == "CFrame" then
+                        position = position.Position
+                    end
+                    if typeof(position) ~= "Vector3" then
+                        position = GetEggPosition(egg)
+                    end
+
+                    if position then
+                        local uid = egg.Name
+                        if not FailedFarmTargets[uid] or os.clock() >= FailedFarmTargets[uid] then
+                            activeCount = activeCount + 1
+                            seen[uid] = true
+                            local rarity = GetEggRarity(eggName, egg)
+                            result[#result + 1] = {
+                                Instance = egg,
+                                UID = uid,
+                                ID = uid,
+                                Name = eggName,
+                                Position = position,
+                                Distance = (position - root.Position).Magnitude,
+                                Weight = GetEggWeight(egg) or 0,
+                                Luck = GetEggLuck(egg) or 0,
+                                Rarity = rarity,
+                                RarityScore = RarityPriority[rarity] or 0,
+                                Mutation = GetEggMutation(egg),
+                                Synthetic = false,
+                            }
+                        end
+                    end
                 end
+            end
+        end
+    end
 
-                if typeof(position) ~= "Vector3" then
-                    position = GetEggPosition(egg)
-                end
+    -- Fallback importante: alguns carregamentos/executores expõem RenderedEggs
+    -- antes de ActiveEggs. Os hubs públicos de 2026 usam este caminho para
+    -- localizar ovos visuais; aqui tentamos recuperar o UID real quando possível.
+    if State.FarmRenderedFallback then
+        local rendered = GetRenderedEggFolder()
+        if rendered and (#result == 0 or State.FarmEngineProfile == "Rendered Eggs") then
+            for _, model in ipairs(rendered:GetChildren()) do
+                local position = GetEggPosition(model)
+                local eggName = GetRealRenderedEggName(model)
 
-                if position then
-                    local weight = GetEggWeight(egg) or 0
-                    local luck = GetEggLuck(egg) or 0
-                    local rarity = GetEggRarity(eggName, egg)
-                    local uid = egg.Name
+                if position and type(eggName) == "string" and EggData[eggName]
+                    and IsSelectedForFarm(eggName)
+                    and MeetsFilters(model, eggName) then
 
-                    if not FailedFarmTargets[uid]
-                        or os.clock() >= FailedFarmTargets[uid] then
-
+                    local active = FindActiveEggNear(position, 18)
+                    local uid = active and active.Name or model.Name
+                    if not seen[uid] and (not FailedFarmTargets[uid] or os.clock() >= FailedFarmTargets[uid]) then
+                        seen[uid] = true
+                        local source = active or model
+                        local rarity = GetEggRarity(eggName, source)
                         result[#result + 1] = {
-                            Instance = egg,
+                            Instance = source,
+                            Rendered = model,
                             UID = uid,
                             ID = uid,
                             Name = eggName,
                             Position = position,
                             Distance = (position - root.Position).Magnitude,
-                            Weight = weight,
-                            Luck = luck,
+                            Weight = GetEggWeight(source) or 0,
+                            Luck = GetEggLuck(source) or 0,
                             Rarity = rarity,
                             RarityScore = RarityPriority[rarity] or 0,
-                            Mutation = GetEggMutation(egg),
+                            Mutation = GetEggMutation(source),
+                            Synthetic = active == nil,
                         }
                     end
                 end
@@ -2017,9 +2066,14 @@ local function FarmFlyTo(targetPosition, speed, descend)
         root.Position.Z
     )
 
+    local effectiveSpeed = speed or State.FarmFlightSpeed
+    if State.FarmEngineProfile == "Conservative" then
+        effectiveSpeed = math.min(effectiveSpeed, 220)
+    end
+
     local ok = FarmFlightSegment(
         upPoint,
-        speed or State.FarmFlightSpeed,
+        effectiveSpeed,
         2,
         true
     )
@@ -2034,7 +2088,7 @@ local function FarmFlyTo(targetPosition, speed, descend)
 
         ok = FarmFlightSegment(
             cruisePoint,
-            speed or State.FarmFlightSpeed,
+            effectiveSpeed,
             2.5,
             true
         )
@@ -2279,43 +2333,56 @@ local function AttemptPickup(candidate)
     )
 
     local mode = State.FarmPickupMode
+    local profile = State.FarmEngineProfile
 
     for _ = 1, retries do
         if not FarmIsRunning() then
             return false
         end
 
-        -- Remote é o caminho principal confirmado pelo script open-source
-        -- do SixZensED: Game.EggPickup:FireServer(uid).
-        if mode == "Remote" then
+        -- Recupera o UID real perto do RenderedEgg quando a seleção veio do fallback.
+        if candidate.Synthetic or not candidate.UID then
+            local recovered = candidate.Position and FindActiveEggNear(candidate.Position, 24)
+            if recovered then
+                candidate.UID = recovered.Name
+                candidate.ID = recovered.Name
+                candidate.Instance = recovered
+                candidate.Synthetic = false
+            end
+        end
+
+        local remoteFirst = mode == "Remote"
+            or (mode == "Auto" and profile ~= "Prompt Priority")
+
+        local promptFirst = mode == "Prompt"
+            or (mode == "Auto" and (profile == "Prompt Priority" or profile == "Max Confiável 2026" or profile == "Rendered Eggs"))
+
+        if remoteFirst and State.FarmRemoteFallback then
             if TryRemotePickup(candidate) then
                 return true
             end
+        end
 
-        elseif mode == "Prompt" then
-            if TryPromptPickup(candidate) then
-                return true
-            end
-
-        else
-            -- AUTO: Remote primeiro; Prompt só como fallback.
-            if TryRemotePickup(candidate) then
-                return true
-            end
-
+        if promptFirst or State.FarmPromptFallback then
             if TryPromptPickup(candidate) then
                 return true
             end
         end
 
-        if not GetLiveActiveEgg(candidate.UID or candidate.ID) then
+        -- Mesmo quando o modo está em Remote, o perfil Hybrid tenta Prompt como
+        -- segundo mecanismo para não travar quando só o RenderedEgg possui prompt.
+        if mode == "Remote" and State.FarmRemoteFallback and State.FarmPromptFallback then
+            if TryPromptPickup(candidate) then
+                return true
+            end
+        end
+
+        local liveUID = candidate.UID or candidate.ID
+        if liveUID and not GetLiveActiveEgg(liveUID) then
             return true
         end
 
-        task.wait(math.max(
-            0.05,
-            tonumber(State.FarmPickupWait) or 0.20
-        ))
+        task.wait(math.max(0.05, tonumber(State.FarmPickupWait) or 0.20))
     end
 
     return false
@@ -2690,40 +2757,72 @@ local function ResolveFarmTarget(uid, fallbackName)
     local active = GetActiveEggFolder()
     local live = active and active:FindFirstChild(uid)
 
-    if not live then
-        return nil
+    if live then
+        local eggName = live:GetAttribute("Egg")
+        if type(eggName) ~= "string" or eggName == "" then
+            eggName = fallbackName or live.Name
+        end
+
+        local position = live:GetAttribute("Position")
+        if typeof(position) == "CFrame" then
+            position = position.Position
+        end
+        if typeof(position) ~= "Vector3" then
+            position = GetEggPosition(live)
+        end
+        if not position then
+            return nil
+        end
+
+        return {
+            Instance = live,
+            UID = live.Name,
+            ID = live.Name,
+            Name = eggName,
+            Position = position,
+            Distance = 0,
+            Weight = GetEggWeight(live) or 0,
+            Luck = GetEggLuck(live) or 0,
+            Mutation = GetEggMutation(live),
+            Rarity = GetEggRarity(eggName, live),
+            Synthetic = false,
+        }
     end
 
-    local eggName = live:GetAttribute("Egg")
-    if type(eggName) ~= "string" or eggName == "" then
-        eggName = fallbackName or live.Name
+    -- Fallback visual: se o UID servidor ainda não estiver disponível, usa
+    -- RenderedEggs para manter o voo/coleta funcionando e tenta recuperar o
+    -- Configuration real imediatamente antes do pickup.
+    if State.FarmRenderedFallback then
+        local rendered = GetRenderedEggFolder()
+        if rendered then
+            for _, model in ipairs(rendered:GetChildren()) do
+                local position = GetEggPosition(model)
+                local eggName = GetRealRenderedEggName(model)
+                if position and (model.Name == uid or uid == tostring(model:GetDebugId()))
+                    and type(eggName) == "string" and EggData[eggName] then
+                    local activeNear = FindActiveEggNear(position, 22)
+                    local realUID = activeNear and activeNear.Name or model.Name
+                    local source = activeNear or model
+                    return {
+                        Instance = source,
+                        Rendered = model,
+                        UID = realUID,
+                        ID = realUID,
+                        Name = eggName,
+                        Position = position,
+                        Distance = 0,
+                        Weight = GetEggWeight(source) or 0,
+                        Luck = GetEggLuck(source) or 0,
+                        Mutation = GetEggMutation(source),
+                        Rarity = GetEggRarity(eggName, source),
+                        Synthetic = activeNear == nil,
+                    }
+                end
+            end
+        end
     end
 
-    local position = live:GetAttribute("Position")
-    if typeof(position) == "CFrame" then
-        position = position.Position
-    end
-
-    if typeof(position) ~= "Vector3" then
-        position = GetEggPosition(live)
-    end
-
-    if not position then
-        return nil
-    end
-
-    return {
-        Instance = live,
-        UID = live.Name,
-        ID = live.Name,
-        Name = eggName,
-        Position = position,
-        Distance = 0,
-        Weight = GetEggWeight(live) or 0,
-        Luck = GetEggLuck(live) or 0,
-        Mutation = GetEggMutation(live),
-        Rarity = GetEggRarity(eggName, live),
-    }
+    return nil
 end
 
 local function ChooseAndCommitFarmTarget()
@@ -4452,7 +4551,8 @@ TabFarm:CreateToggle({
             StopFarmNoclip()
             ClearFarmTarget()
             State.FarmPhase = "Stopped"
-            FarmBusy = false
+            -- Não libera FarmBusy à força no meio de uma rota; o ciclo encerra
+            -- naturalmente, evitando corrida entre desligar e religar.
         end
     end,
 })
@@ -4518,6 +4618,114 @@ TabFarm:CreateDropdown({
         if value == "Remote" or value == "Auto" or value == "Prompt" then
             State.FarmPickupMode = value
         end
+    end,
+})
+
+TabFarm:CreateDropdown({
+    name = "Perfil do Auto Farm 2026",
+    flag = "FarmEngineProfile",
+    description = "Combina padrões públicos: scanner RenderedEggs/ActiveEggs, glide e coleta Remote/Prompt.",
+    options = {"Hybrid 2026", "Max Confiável 2026", "Remote Priority", "Prompt Priority", "Rendered Eggs", "Conservative"},
+    value = State.FarmEngineProfile,
+    callback = function(value)
+        if value == "Hybrid 2026"
+            or value == "Max Confiável 2026"
+            or value == "Remote Priority"
+            or value == "Prompt Priority"
+            or value == "Rendered Eggs"
+            or value == "Conservative" then
+            State.FarmEngineProfile = value
+
+            if value == "Max Confiável 2026" then
+                State.FarmPickupMode = "Auto"
+                State.FarmRenderedFallback = true
+                State.FarmRemoteFallback = true
+                State.FarmPromptFallback = true
+                State.FarmFloorGuard = true
+                State.FarmAutoRecover = true
+            elseif value == "Remote Priority" then
+                State.FarmPickupMode = "Remote"
+                State.FarmRemoteFallback = true
+                State.FarmPromptFallback = true
+            elseif value == "Prompt Priority" then
+                State.FarmPickupMode = "Prompt"
+                State.FarmPromptFallback = true
+                State.FarmRemoteFallback = true
+            elseif value == "Rendered Eggs" then
+                State.FarmPickupMode = "Auto"
+                State.FarmRenderedFallback = true
+                State.FarmPromptFallback = true
+            elseif value == "Conservative" then
+                State.FarmPickupMode = "Auto"
+                State.FarmRenderedFallback = true
+                State.FarmPromptFallback = true
+                State.FarmRemoteFallback = true
+                State.FarmFloorGuard = true
+                State.FarmCycleDelay = math.max(State.FarmCycleDelay or 1.5, 1.5)
+            end
+        end
+    end,
+})
+
+TabFarm:CreateToggle({
+    name = "Fallback RenderedEggs",
+    flag = "FarmRenderedFallback",
+    description = "Usa os ovos visuais quando ActiveEggs estiver atrasado ou indisponível.",
+    value = State.FarmRenderedFallback,
+    callback = function(value)
+        State.FarmRenderedFallback = value
+    end,
+})
+
+TabFarm:CreateToggle({
+    name = "Fallback Prompt",
+    flag = "FarmPromptFallback",
+    description = "Tenta ProximityPrompt quando o Remote não confirmar a coleta.",
+    value = State.FarmPromptFallback,
+    callback = function(value)
+        State.FarmPromptFallback = value
+    end,
+})
+
+TabFarm:CreateToggle({
+    name = "Auto Recovery",
+    flag = "FarmAutoRecover",
+    description = "Troca de alvo e recupera o ciclo após erro de movimento/coleta.",
+    value = State.FarmAutoRecover,
+    callback = function(value)
+        State.FarmAutoRecover = value
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Espera de recuperação",
+    flag = "FarmRetryAfterError",
+    range = {0.25, 4.00},
+    increment = 0.25,
+    value = State.FarmRetryAfterError,
+    suffix = " s",
+    callback = function(value)
+        State.FarmRetryAfterError = math.clamp(tonumber(value) or 1.00, 0.25, 4.00)
+    end,
+})
+
+TabFarm:CreateButton({
+    name = "Diagnóstico do Auto Farm",
+    description = "Mostra quais fontes e remotes estão disponíveis agora.",
+    callback = function()
+        pcall(function()
+            local fs = GetGameFeatureStatus()
+            local candidates = #GetFarmCandidates()
+            Window:Notify({
+                title = "Diagnóstico Auto Farm",
+                content = string.format(
+                    "ActiveEggs:%s • RenderedEggs:%s • EggPickup:%s • EggPlaced:%s • Ovos:%d • Fase:%s",
+                    tostring(fs.ActiveEggs), tostring(fs.RenderedEggs), tostring(fs.EggPickup),
+                    tostring(fs.EggPlaced), candidates, tostring(State.FarmPhase)
+                ),
+                duration = 6,
+            })
+        end)
     end,
 })
 
@@ -6383,32 +6591,41 @@ end)
 local FarmLoop = task.spawn(function()
     while Running do
         if not State.AutoFarm then
-            task.wait(0.20)
+            task.wait(0.15)
         elseif FarmBusy then
             -- Um único ciclo por vez. Isso evita duas rotas brigando pelo personagem.
-            task.wait(0.10)
+            task.wait(0.05)
         else
-            local beforePhase = State.FarmPhase
-            local ok = pcall(FarmOnce)
+            local ok, err = pcall(FarmOnce)
 
             if not ok and FarmIsRunning() then
                 SetFarmPhase("Recuperando do erro")
-            end
-
-            if Running and State.AutoFarm then
-                -- Depois de uma entrega completa, deixa o jogo estabilizar antes
-                -- de selecionar o próximo ovo.
-                task.wait(math.clamp(
-                    tonumber(State.FarmCycleDelay) or 1.50,
-                    0.50,
-                    5.00
-                ))
-            else
-                task.wait(0.10)
+                LastFarmStatus = "Auto Farm error: " .. tostring(err)
+                warn("[MontarUmPet] Auto Farm:", err)
+                if State.FarmAutoRecover then
+                    ClearFarmTarget()
+                    task.wait(math.clamp(tonumber(State.FarmRetryAfterError) or 1.0, 0.25, 4.0))
+                end
+            elseif State.FarmAutoRecover and FarmIsRunning() and State.FarmPhase == "No target - hovering" then
+                task.wait(math.clamp(tonumber(State.FarmNoTargetDelay) or 1.0, 0.25, 5.0))
+            elseif FarmIsRunning() then
+                task.wait(math.clamp(tonumber(State.FarmCycleDelay) or 1.50, 0.25, 5.0))
             end
         end
     end
 end)
+
+-- Dá um primeiro ciclo ao worker assim que o toggle for ligado sem criar um
+-- segundo worker ou uma segunda UI.
+Track(RunService.Heartbeat:Connect(function()
+    if Running and State.AutoFarm and not FarmBusy and State.FarmPhase == "Starting" then
+        task.defer(function()
+            if Running and State.AutoFarm and not FarmBusy then
+                pcall(FarmOnce)
+            end
+        end)
+    end
+end))
 
 local PickupLoop = task.spawn(function()
     while Running do
