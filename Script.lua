@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v18.2 SINGLETON UI • AUTOFARM 300 + NEST DEPOSIT + FLIGHT DIRECT + CONFIG
+-- MONTAR UM PET - MASTER v17.1 AUTOFARM 300 + NEST + UI BASE v15 + SAFE APPROACH + CONFIG
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 (stable)
 -- Config: salvamento manual + persistência do Rayfield
@@ -40,16 +40,6 @@ if game.PlaceId ~= 124216119978534 then
 end
 
 local ENV = (getgenv and getgenv()) or _G
-local ACTIVE_INSTANCE_KEY = "__MONTAR_UM_PET_ACTIVE_INSTANCE_V18"
-
--- Uma nova execução sempre substitui a instância anterior. O wrapper abaixo
--- também funciona enquanto a execução anterior ainda está carregando a UI.
-local ExistingInstance = ENV[ACTIVE_INSTANCE_KEY]
-if type(ExistingInstance) == "table" and type(ExistingInstance.Stop) == "function" then
-    pcall(ExistingInstance.Stop)
-    task.wait(0.12)
-end
-
 
 --============================================================--
 -- SINGLETON ROBUSTO / ANTI-DUPLICAÇÃO
@@ -144,23 +134,6 @@ local MY_GENERATION = generation
 
 local Running = true
 local StopHandler = nil
-local InstanceStopped = false
-ENV[ACTIVE_INSTANCE_KEY] = {
-    Stop = function()
-        if InstanceStopped then
-            return
-        end
-
-        if StopHandler then
-            pcall(StopHandler)
-        else
-            -- A execução antiga ainda está carregando; impedir que ela
-            -- crie a interface depois, mesmo sem haver algo para destruir.
-            InstanceStopped = true
-            Running = false
-        end
-    end,
-}
 
 local ReplaceConnection = ReplaceEvent.Event:Connect(function()
     if not Running then
@@ -243,7 +216,7 @@ local function LooksLikeOurRayfieldGui(gui)
     end
 
     local hasTitle = false
-    local hasHubMarker = false
+    local hasHubSubtitle = false
 
     for _, child in ipairs(gui:GetDescendants()) do
         if child:IsA("TextLabel") then
@@ -251,17 +224,17 @@ local function LooksLikeOurRayfieldGui(gui)
 
             if t == "Montar um Pet" then
                 hasTitle = true
-            elseif t:find("MASTER", 1, true)
-                or t == "Farm"
-                or t == "Ovos"
-                or t == "Movimento"
-                or t == "Performance"
-                or t == "Config"
-                or t == "Opções" then
-                hasHubMarker = true
+            elseif t:find("MASTER v5", 1, true)
+                or t:find("MASTER v6", 1, true)
+                or t:find("MASTER v7", 1, true)
+                or t:find("MASTER v14", 1, true)
+                or t:find("MASTER v16", 1, true)
+                or t:find("MASTER v17", 1, true)
+                or t:find("MASTER v17.1", 1, true) then
+                hasHubSubtitle = true
             end
 
-            if hasTitle and hasHubMarker then
+            if hasTitle and hasHubSubtitle then
                 return true
             end
         end
@@ -284,58 +257,23 @@ local function CleanupOldRayfield(container)
     end)
 end
 
-local function CleanupEveryOldHubUI()
-    pcall(function()
-        CleanupOldRayfield(game:GetService("CoreGui"))
-    end)
+pcall(function()
+    CleanupOldRayfield(game:GetService("CoreGui"))
+end)
 
-    pcall(function()
-        if typeof(gethui) == "function" then
-            CleanupOldRayfield(gethui())
-        end
-    end)
-
-    pcall(function()
-        CleanupOldRayfield(PlayerGui)
-    end)
-end
-
-CleanupEveryOldHubUI()
-
--- Garante que não exista uma janela antiga do hub antes de iniciar a nova.
-for _ = 1, 15 do
-    local oldFound = false
-
-    pcall(function()
-        local containers = {game:GetService("CoreGui")}
-        if typeof(gethui) == "function" then
-            table.insert(containers, gethui())
-        end
-        table.insert(containers, PlayerGui)
-
-        for _, container in ipairs(containers) do
-            if container then
-                for _, child in ipairs(container:GetChildren()) do
-                    if LooksLikeOurRayfieldGui(child) then
-                        oldFound = true
-                        break
-                    end
-                end
-            end
-            if oldFound then
-                break
-            end
-        end
-    end)
-
-    if not oldFound then
-        break
+pcall(function()
+    if typeof(gethui) == "function" then
+        CleanupOldRayfield(gethui())
     end
+end)
 
-    CleanupEveryOldHubUI()
-    task.wait(0.08)
-end
+pcall(function()
+    CleanupOldRayfield(PlayerGui)
+end)
 
+--============================================================--
+-- FIM DO SINGLETON
+--============================================================--
 
 --============================================================--
 -- ESTADO
@@ -391,10 +329,6 @@ local State = {
     FarmPickupRetryApproach = true,
     FarmBasePause = 2.50,
     FarmDepositWait = 3.50,
-    FarmNestWait = 6.00,
-    FarmDepositRetries = 3,
-    FarmFlightEngine = "Direct",   -- Direct (mais estável) ou Physics (BodyVelocity)
-    FarmStrictDepositConfirm = true,
 
     -- Auto Farm state machine
     FarmPhase = "Idle",
@@ -1195,41 +1129,6 @@ local function IsCarryingEggs()
     return #basket:GetChildren() > 0
 end
 
-local function PlotBelongsToPlayer(plot)
-    if not plot then
-        return false
-    end
-
-    if plot:GetAttribute("NestsOwnerLoaded") == LocalPlayer.UserId then
-        return true
-    end
-
-    local data = plot:FindFirstChild("Data")
-    local owner = data and data:FindFirstChild("Owner")
-    if owner and owner:IsA("ObjectValue") and owner.Value == LocalPlayer then
-        return true
-    end
-
-    local ownerUserId = plot:GetAttribute("OwnerUserId")
-        or plot:GetAttribute("OwnerId")
-    if ownerUserId ~= nil then
-        local n = tonumber(ownerUserId)
-        if n and n == LocalPlayer.UserId then
-            return true
-        end
-    end
-
-    local ownerName = plot:GetAttribute("Owner")
-        or plot:GetAttribute("OwnerName")
-    if type(ownerName) == "string" then
-        if ownerName == LocalPlayer.Name or ownerName == LocalPlayer.DisplayName then
-            return true
-        end
-    end
-
-    return false
-end
-
 local function GetMyPlot()
     local plots = workspace:FindFirstChild("Plots")
     if not plots then
@@ -1237,7 +1136,7 @@ local function GetMyPlot()
     end
 
     for _, plot in ipairs(plots:GetChildren()) do
-        if PlotBelongsToPlayer(plot) then
+        if plot:GetAttribute("NestsOwnerLoaded") == LocalPlayer.UserId then
             return plot
         end
     end
@@ -1627,7 +1526,7 @@ local function GetSafeDescentPosition(targetPosition, extraHeight)
     )
 end
 
-local function FarmFlightSegmentPhysics(targetPosition, speed, timeoutMultiplier)
+local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
     local character, root = GetCharacter()
 
     if not character or not root then
@@ -1772,113 +1671,6 @@ local function FarmFlightSegmentPhysics(targetPosition, speed, timeoutMultiplier
     return false
 end
 
-local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
-    if State.FarmFlightEngine == "Physics" then
-        return FarmFlightSegmentPhysics(targetPosition, speed, timeoutMultiplier)
-    end
-
-    local character, root = GetCharacter()
-    if not character or not root or typeof(targetPosition) ~= "Vector3" then
-        return false
-    end
-
-    if not FarmIsRunning() then
-        return false
-    end
-
-    StartFarmNoclip()
-
-    local maxSpeed = math.clamp(
-        tonumber(speed) or State.FarmFlightSpeed,
-        50,
-        1200
-    )
-    local arriveRadius = math.clamp(
-        tonumber(State.FarmFlightArriveRadius) or 4,
-        2,
-        10
-    )
-
-    local initialDistance = (targetPosition - root.Position).Magnitude
-    local timeout = math.clamp(
-        (initialDistance / maxSpeed) * (timeoutMultiplier or 2.25) + 1.5,
-        2.5,
-        35
-    )
-
-    local started = os.clock()
-    local lastPosition = root.Position
-    local stalledFor = 0
-
-    while FarmIsRunning()
-        and character.Parent
-        and root.Parent
-        and os.clock() - started < timeout do
-
-        EnforceFarmNoclip()
-
-        local delta = targetPosition - root.Position
-        local remaining = delta.Magnitude
-
-        if remaining <= arriveRadius then
-            pcall(function()
-                root.CFrame = CFrame.lookAt(
-                    root.Position,
-                    root.Position + (remaining > 0.05 and delta.Unit or root.CFrame.LookVector)
-                )
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            end)
-            return true
-        end
-
-        local dt = RunService.Heartbeat:Wait()
-        dt = math.clamp(tonumber(dt) or (1 / 60), 1 / 240, 0.10)
-
-        local direction = delta.Unit
-        local step = math.min(remaining, maxSpeed * dt)
-        local nextPosition = root.Position + direction * step
-
-        local moved = (nextPosition - lastPosition).Magnitude
-        if moved < 0.5 and remaining > arriveRadius + 2 then
-            stalledFor = stalledFor + dt
-        else
-            stalledFor = 0
-        end
-        lastPosition = nextPosition
-
-        pcall(function()
-            root.CFrame = CFrame.lookAt(
-                nextPosition,
-                nextPosition + direction
-            )
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
-
-        if stalledFor >= 0.75 then
-            -- Reforça a posição uma vez em vez de permanecer preso em um
-            -- obstáculo/física desatualizada. O próximo frame continua o trajeto.
-            stalledFor = 0
-            pcall(function()
-                character:PivotTo(CFrame.lookAt(
-                    nextPosition,
-                    nextPosition + direction
-                ))
-            end)
-        end
-    end
-
-    pcall(function()
-        if root and root.Parent then
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end
-    end)
-
-    return false
-end
-
 local function FarmFlyTo(targetPosition, speed, descend)
     local character, root = GetCharacter()
 
@@ -1892,12 +1684,8 @@ local function FarmFlyTo(targetPosition, speed, descend)
 
     StartFarmNoclip()
 
-    if State.FarmFlightEngine == "Physics" then
-        if not CreateFarmFlightMovers(root) then
-            return false
-        end
-    else
-        DestroyFarmFlightMovers()
+    if not CreateFarmFlightMovers(root) then
+        return false
     end
 
     local humanoid = character:FindFirstChildOfClass("Humanoid")
@@ -2709,72 +2497,17 @@ local function TriggerEggPlacementPrompt(prompt)
     return true
 end
 
-local function HasNestAcceptanceMarker(prompt)
-    if not prompt then
-        return false
-    end
-
-    local container = prompt:FindFirstAncestorOfClass("Model")
-    if not container then
-        container = prompt.Parent
-    end
-
-    if not container then
-        return false
-    end
-
-    local attributeNames = {
-        "Occupied", "HasEgg", "EggPlaced", "EggInNest", "Hatching", "IsOccupied",
-    }
-    for _, attrName in ipairs(attributeNames) do
-        local value = container:GetAttribute(attrName)
-        if value == true or (type(value) == "string" and value ~= "") then
-            return true
-        end
-    end
-
-    for _, child in ipairs(container:GetChildren()) do
-        local n = string.lower(child.Name)
-        if n:find("egg", 1, true)
-            or n:find("hatch", 1, true)
-            or n:find("occupied", 1, true) then
-            return true
-        end
-    end
-
-    return false
-end
-
-local function WaitForEggPlaced(timeout, prompt)
+local function WaitForEggPlaced(timeout)
     local deadline = os.clock() + math.max(tonumber(timeout) or 3, 0.5)
-    local sawBasketEmpty = false
-    local emptySince = nil
 
     while FarmIsRunning() and os.clock() < deadline do
-        local basketEmpty = GetBasketCount() <= 0
-
-        if basketEmpty then
-            if not sawBasketEmpty then
-                sawBasketEmpty = true
-                emptySince = os.clock()
-            end
-
-            local promptDisabled = prompt and (not prompt.Parent or not prompt.Enabled)
-            if promptDisabled or HasNestAcceptanceMarker(prompt) then
-                return true
-            end
-
-            -- O servidor já removeu o item da Basket; damos uma pequena janela
-            -- para o prompt/ninho atualizar antes do fallback.
-            if emptySince and os.clock() - emptySince >= 0.40 then
-                return true
-            end
+        if GetBasketCount() <= 0 then
+            return true
         end
-
         task.wait(0.05)
     end
 
-    return GetBasketCount() <= 0 and sawBasketEmpty
+    return GetBasketCount() <= 0
 end
 
 local function FindPlotEntryPosition(plot, nestPosition)
@@ -2816,10 +2549,8 @@ local function FarmPlaceEggInNest(plot)
     end
 
     local tried = {}
-    local maxNestAttempts = math.clamp(tonumber(State.FarmDepositRetries) or 3, 1, 6)
-    local waitDeadline = os.clock() + math.clamp(tonumber(State.FarmNestWait) or 6, 1, 15)
 
-    for _ = 1, maxNestAttempts do
+    for _ = 1, 4 do
         if not FarmIsRunning() or GetBasketCount() <= 0 then
             return GetBasketCount() <= 0
         end
@@ -2827,9 +2558,6 @@ local function FarmPlaceEggInNest(plot)
         local entry = FindBestEggNestPrompt(plot, root.Position, tried)
         if not entry then
             SetFarmPhase("Waiting for free nest")
-            if os.clock() >= waitDeadline then
-                return false
-            end
             task.wait(0.35)
             continue
         end
@@ -2905,10 +2633,7 @@ local function FarmPlaceEggInNest(plot)
         SetFarmPhase("Placing egg in nest")
         TriggerEggPlacementPrompt(entry.Prompt)
 
-        if WaitForEggPlaced(
-            math.max(tonumber(State.FarmDepositWait) or 3.5, 3),
-            entry.Prompt
-        ) then
+        if WaitForEggPlaced(math.max(tonumber(State.FarmDepositWait) or 3.5, 3)) then
             SetFarmPhase("Egg placed - next target")
             return true
         end
@@ -2918,7 +2643,7 @@ local function FarmPlaceEggInNest(plot)
         task.wait(0.35)
         if entry.Prompt and entry.Prompt.Parent and entry.Prompt.Enabled then
             TriggerEggPlacementPrompt(entry.Prompt)
-            if WaitForEggPlaced(2.5, entry.Prompt) then
+            if WaitForEggPlaced(2.5) then
                 SetFarmPhase("Egg placed - next target")
                 return true
             end
@@ -3012,14 +2737,8 @@ local function FarmDeposit()
             return false
         end
 
-        -- 5) Colocação real no ninho. A cesta vazia é a confirmação principal;
-        -- prompt/ninho atualizados acrescentam confirmação quando disponíveis.
-        local placed = FarmPlaceEggInNest(plot)
-        if placed then
-            return true
-        end
-
-        if not State.FarmStrictDepositConfirm and GetBasketCount() <= 0 then
+        -- 5) Colocação real no ninho, confirmada pela Basket.
+        if FarmPlaceEggInNest(plot) then
             return true
         end
 
@@ -4298,21 +4017,16 @@ end
 local okWindow, Window = pcall(function()
     return Rayfield:CreateWindow({
         name = "Montar um Pet",
-        subtitle = "MASTER v18.2 • Delta Mobile",
+        subtitle = "MASTER v17 • Delta Mobile",
         sidebarLayout = true,
         toggleUIKeybind = "K",
         configuration = {
             autoSave = true,
             autoLoad = true,
-            fileName = "MontarUmPet_Master_v18_2",
+            fileName = "MontarUmPet_Master_v17",
         },
     })
 end)
-
-if okWindow and Window and ENV[ACTIVE_INSTANCE_KEY] then
-    ENV[ACTIVE_INSTANCE_KEY].Rayfield = Rayfield
-    ENV[ACTIVE_INSTANCE_KEY].Window = Window
-end
 
 if not okWindow or not Window then
     Running = false
@@ -4359,175 +4073,6 @@ local TabMove = Window:CreateTab({name = "Movimento"})
 local TabVisual = Window:CreateTab({name = "Visual"})
 local TabPerf = Window:CreateTab({name = "Performance"})
 local TabConfig = Window:CreateTab({name = "Config"})
-local TabOptions = Window:CreateTab({name = "Opções"})
-
---============================================================--
--- OPCOES TAB
---============================================================--
-
-TabOptions:CreateSection({name = "Auto Farm avançado"})
-
-TabOptions:CreateSlider({
-    name = "Tentativas de coleta",
-    flag = "FarmPickupRetries",
-    range = {1, 10},
-    increment = 1,
-    value = State.FarmPickupRetries,
-    suffix = " tentativas",
-    callback = function(value)
-        State.FarmPickupRetries = math.clamp(math.floor(tonumber(value) or 6), 1, 10)
-    end,
-})
-
-TabOptions:CreateSlider({
-    name = "Espera da coleta",
-    flag = "FarmPickupWait",
-    range = {0.10, 1.00},
-    increment = 0.05,
-    value = State.FarmPickupWait,
-    suffix = " s",
-    callback = function(value)
-        State.FarmPickupWait = math.clamp(tonumber(value) or 0.25, 0.10, 1.00)
-    end,
-})
-
-TabOptions:CreateSlider({
-    name = "Atraso entre tentativas",
-    flag = "FarmRetryDelay",
-    range = {0.10, 1.50},
-    increment = 0.05,
-    value = State.FarmRetryDelay,
-    suffix = " s",
-    callback = function(value)
-        State.FarmRetryDelay = math.clamp(tonumber(value) or 0.30, 0.10, 1.50)
-    end,
-})
-
-TabOptions:CreateSlider({
-    name = "Raio de chegada do voo",
-    flag = "FarmFlightArriveRadius",
-    range = {1, 12},
-    increment = 1,
-    value = State.FarmFlightArriveRadius,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmFlightArriveRadius = math.clamp(math.floor(tonumber(value) or 4), 1, 12)
-    end,
-})
-
-TabOptions:CreateSlider({
-    name = "Raio de aproximação da base",
-    flag = "FarmHoverRadius",
-    range = {8, 50},
-    increment = 1,
-    value = State.FarmHoverRadius,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmHoverRadius = math.clamp(math.floor(tonumber(value) or 18), 8, 50)
-    end,
-})
-
-TabOptions:CreateSlider({
-    name = "Intervalo do motor",
-    flag = "FarmLoopDelay",
-    range = {0.05, 0.50},
-    increment = 0.05,
-    value = State.FarmLoopDelay,
-    suffix = " s",
-    callback = function(value)
-        State.FarmLoopDelay = math.clamp(tonumber(value) or 0.10, 0.05, 0.50)
-    end,
-})
-
-TabOptions:CreateToggle({
-    name = "Exigir pet montado",
-    flag = "FarmRequireMountedPetAdvanced",
-    value = State.FarmRequireMountedPet,
-    callback = function(value)
-        State.FarmRequireMountedPet = value
-    end,
-})
-
-TabOptions:CreateToggle({
-    name = "Reaproximar se a coleta falhar",
-    flag = "FarmPickupRetryApproachAdvanced",
-    value = State.FarmPickupRetryApproach,
-    callback = function(value)
-        State.FarmPickupRetryApproach = value
-    end,
-})
-
-TabOptions:CreateSection({name = "Renderização local"})
-
-TabOptions:CreateToggle({
-    name = "Fullbright",
-    flag = "Fullbright",
-    value = State.Fullbright,
-    callback = function(value)
-        SetFullbright(value)
-    end,
-})
-
-TabOptions:CreateToggle({
-    name = "Sem neblina",
-    flag = "NoFog",
-    value = State.NoFog,
-    callback = function(value)
-        SetNoFog(value)
-    end,
-})
-
-TabOptions:CreateToggle({
-    name = "Desativar renderização 3D",
-    flag = "Disable3D",
-    value = State.Disable3D,
-    callback = function(value)
-        Set3DDisabled(value)
-    end,
-})
-
-TabOptions:CreateButton({
-    name = "Aplicar renderização atual",
-    callback = function()
-        ApplyLightingState()
-        Set3DDisabled(State.Disable3D)
-        pcall(function()
-            Window:Notify({
-                title = "Opções",
-                content = "Configurações de renderização aplicadas.",
-                duration = 3,
-            })
-        end)
-    end,
-})
-
-TabOptions:CreateSection({name = "Voo do Auto Farm"})
-
-TabOptions:CreateSlider({
-    name = "Velocidade do voo",
-    flag = "FarmFlightSpeedAdvanced",
-    range = {50, 1200},
-    increment = 25,
-    value = State.FarmFlightSpeed,
-    suffix = " studs/s",
-    callback = function(value)
-        State.FarmFlightSpeed = math.clamp(math.floor(tonumber(value) or 300), 50, 1200)
-    end,
-})
-
-TabOptions:CreateSlider({
-    name = "Altura de voo",
-    flag = "FarmFlightHeightAdvanced",
-    range = {20, 200},
-    increment = 5,
-    value = State.FarmFlightHeight,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmFlightHeight = math.clamp(math.floor(tonumber(value) or 90), 20, 200)
-    end,
-})
-
-TabOptions:CreateLabel("As opções originais das abas Farm, Ovos, Movimento, Visual, Performance e Config continuam disponíveis.")
 
 --============================================================--
 -- FARM TAB
@@ -5253,7 +4798,7 @@ TabPerf:CreateButton({
 TabConfig:CreateSection({name = "Configuração"})
 
 local CONFIG_FOLDER = "MontarUmPet"
-local CONFIG_FILE = "MontarUmPet_MASTER_v18_2_config.json"
+local CONFIG_FILE = "MontarUmPet_MASTER_v15_config.json"
 
 local function CanUseConfigFiles()
     return type(writefile) == "function"
@@ -5287,7 +4832,7 @@ local function SaveConfigNow()
     if CanUseConfigFiles() then
         EnsureConfigFolder()
 
-        local data = { __version = 18.2 }
+        local data = { __version = 15 }
         pcall(function()
             for flagName, flag in pairs(Rayfield.Flags or {}) do
                 if type(flag) == "table" then
@@ -5522,13 +5067,6 @@ end)
 --============================================================--
 
 StopHandler = function()
-    if InstanceStopped then
-        Running = false
-        return
-    end
-
-    InstanceStopped = true
-
     if not Running then
         return
     end
@@ -5610,10 +5148,6 @@ StopHandler = function()
             Guard:Destroy()
         end
     end)
-end
-
-if ENV[ACTIVE_INSTANCE_KEY] then
-    ENV[ACTIVE_INSTANCE_KEY].Stop = StopHandler
 end
 
 ENV[TOKEN_NAMES[1]] = {
