@@ -1,8 +1,8 @@
 --============================================================--
--- MONTAR UM PET - MASTER v21 UI NATIVA + AUTOFARM FLIGHT + NOCLIP + CONFIG
+-- MONTAR UM PET - MASTER v22 • UI ORIGINAL v15 • DELTA STABLE
 -- PlaceId: 124216119978534
--- UI: Nativa, sem dependência externa; layout mobile/PC
--- Config: salvamento manual em arquivo + flags compatíveis
+-- UI: Rayfield Gen2 oficial • estrutura preservada da v15
+-- Config: salvamento manual + persistência do Rayfield
 -- Foco: Delta Mobile + Auto Farm por estados + voo sem colisão + retorno/entrega robustos + cleanup robusto
 --
 -- Pesquisa usada para esta versão:
@@ -18,6 +18,12 @@
 -- confirmado nas fontes abertas consultadas (Auto Place/Hatch/Feed/Shop/
 -- Rebirth etc.), NÃO recebem botões falsos nesta versão.
 --============================================================--
+
+-- Espera o cliente Roblox terminar de carregar antes de iniciar a UI.
+-- Mantém a interface exatamente no modelo estável da v15.
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -60,34 +66,9 @@ local GUI_HINTS = {
     "MontarUmPetVelocidade",
     "MontarUmPet_Master",
     "MontarUmPet_RayfieldGen2",
-    "MontarUmPet_NativeUI",
 }
 
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-
--- Limpeza direta da UI nativa desta versão, inclusive quando a janela
--- antiga foi parentada no gethui/CoreGui e o handler anterior não chegou
--- a ser registrado.
-local function RemoveOldNativeUI(container)
-    if not container then
-        return
-    end
-    pcall(function()
-        for _, child in ipairs(container:GetChildren()) do
-            if child.Name == "MontarUmPet_NativeUI" then
-                child:Destroy()
-            end
-        end
-    end)
-end
-
-pcall(function()
-    RemoveOldNativeUI(PlayerGui)
-    RemoveOldNativeUI(game:GetService("CoreGui"))
-    if typeof(gethui) == "function" then
-        RemoveOldNativeUI(gethui())
-    end
-end)
 
 -- Para versões anteriores que já tenham um Stop exposto.
 for _, tokenName in ipairs(TOKEN_NAMES) do
@@ -3683,1101 +3664,115 @@ local function Set3DDisabled(enabled)
 end
 
 --============================================================--
--- GUI: UI NATIVA ESTÁVEL / ZERO DEPENDÊNCIA
--- A interface não depende de HttpGet/loadstring de biblioteca externa.
--- Mantém a mesma API usada pelo restante do script (Window/Tab/Rayfield.Flags).
+-- GUI: RAYFIELD GEN2
 --============================================================--
 
-local NativeUI = {}
-NativeUI.Flags = {}
-NativeUI._windows = {}
+local okRayfield, Rayfield = pcall(function()
+    local source = game:HttpGet("https://sirius.menu/gen2")
+    local loader = loadstring(source)
+    assert(type(loader) == "function", "Rayfield Gen2 loader inválido")
+    return loader()
+end)
 
-local function uiParent()
-    local ok, hui = pcall(function()
-        if typeof(gethui) == "function" then
-            return gethui()
-        end
-    end)
-    if ok and hui then
-        return hui
-    end
-
-    local okCore, core = pcall(function()
-        return game:GetService("CoreGui")
-    end)
-    if okCore and core then
-        return core
-    end
-
-    return PlayerGui
-end
-
-local function make(className, props, parent)
-    local obj = Instance.new(className)
-    if props then
-        for key, value in pairs(props) do
-            pcall(function()
-                obj[key] = value
-            end)
-        end
-    end
-    obj.Parent = parent
-    return obj
-end
-
-local function corner(parent, radius)
-    return make("UICorner", {
-        CornerRadius = UDim.new(0, radius or 8),
-    }, parent)
-end
-
-local function stroke(parent, color, thickness, transparency)
-    return make("UIStroke", {
-        Color = color or Color3.fromRGB(45, 48, 58),
-        Thickness = thickness or 1,
-        Transparency = transparency or 0,
-    }, parent)
-end
-
-local COLORS = {
-    bg = Color3.fromRGB(12, 14, 18),
-    panel = Color3.fromRGB(18, 21, 27),
-    panel2 = Color3.fromRGB(23, 27, 34),
-    hover = Color3.fromRGB(31, 36, 46),
-    accent = Color3.fromRGB(92, 124, 255),
-    accent2 = Color3.fromRGB(73, 102, 230),
-    text = Color3.fromRGB(238, 241, 247),
-    sub = Color3.fromRGB(153, 160, 175),
-    line = Color3.fromRGB(40, 45, 55),
-    good = Color3.fromRGB(79, 208, 126),
-    bad = Color3.fromRGB(231, 90, 98),
-    white = Color3.fromRGB(255, 255, 255),
-}
-
-local function tween(obj, props, duration)
+-- Outra execução pode ter assumido o singleton enquanto o loader carregava.
+if not Running or (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
     pcall(function()
-        TweenService:Create(
-            obj,
-            TweenInfo.new(duration or 0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-            props
-        ):Play()
-    end)
-end
-
-local function clampNumber(v, a, b)
-    local n = tonumber(v) or a
-    return math.clamp(n, a, b)
-end
-
-local function arrayHas(tbl, value)
-    if type(tbl) ~= "table" then
-        return false
-    end
-    for _, v in ipairs(tbl) do
-        if v == value then
-            return true
-        end
-    end
-    return false
-end
-
-local function clearChildrenOfClass(parent, className)
-    for _, c in ipairs(parent:GetChildren()) do
-        if c:IsA(className) then
-            c:Destroy()
-        end
-    end
-end
-
-local function createFlag(flagName, initialValue, setter)
-    if not flagName or flagName == "" then
-        return nil
-    end
-
-    local flag = NativeUI.Flags[flagName]
-    if not flag then
-        flag = {}
-        NativeUI.Flags[flagName] = flag
-    end
-
-    flag.CurrentValue = initialValue
-    flag.CurrentOption = initialValue
-    flag.CurrentKeybind = initialValue
-    flag.Set = function(_, value)
-        setter(value, true)
-    end
-
-    return flag
-end
-
-function NativeUI:CreateWindow(options)
-    -- Derruba qualquer janela nativa anterior do próprio hub.
-    for _, w in pairs(self._windows) do
-        pcall(function()
-            if w.Destroy then
-                w:Destroy()
-            end
-        end)
-    end
-    self._windows = {}
-
-    local gui = make("ScreenGui", {
-        Name = "MontarUmPet_NativeUI",
-        ResetOnSpawn = false,
-        IgnoreGuiInset = true,
-        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-        DisplayOrder = 1000000,
-    }, uiParent())
-
-    local root = make("Frame", {
-        Name = "Window",
-        AnchorPoint = Vector2.new(0.5, 0.5),
-        Position = UDim2.fromScale(0.5, 0.52),
-        Size = UDim2.new(0.92, 0, 0.80, 0),
-        BackgroundColor3 = COLORS.bg,
-        BorderSizePixel = 0,
-        ClipsDescendants = true,
-    }, gui)
-    corner(root, 12)
-    stroke(root, Color3.fromRGB(50, 56, 68), 1)
-
-    local top = make("Frame", {
-        Name = "TopBar",
-        Size = UDim2.new(1, 0, 0, 58),
-        BackgroundColor3 = COLORS.panel,
-        BorderSizePixel = 0,
-    }, root)
-
-    local title = make("TextLabel", {
-        BackgroundTransparency = 1,
-        Position = UDim2.new(0, 16, 0, 7),
-        Size = UDim2.new(0.48, 0, 0, 24),
-        Font = Enum.Font.GothamBold,
-        Text = tostring(options and options.name or "Montar um Pet"),
-        TextColor3 = COLORS.text,
-        TextSize = 18,
-        TextXAlignment = Enum.TextXAlignment.Left,
-    }, top)
-
-    local subtitle = make("TextLabel", {
-        BackgroundTransparency = 1,
-        Position = UDim2.new(0, 16, 0, 31),
-        Size = UDim2.new(0.55, 0, 0, 18),
-        Font = Enum.Font.Gotham,
-        Text = tostring(options and options.subtitle or "MASTER • UI Nativa"),
-        TextColor3 = COLORS.sub,
-        TextSize = 11,
-        TextXAlignment = Enum.TextXAlignment.Left,
-    }, top)
-
-    local status = make("TextLabel", {
-        AnchorPoint = Vector2.new(1, 0.5),
-        Position = UDim2.new(1, -54, 0.5, 0),
-        Size = UDim2.new(0, 78, 0, 26),
-        BackgroundColor3 = Color3.fromRGB(26, 50, 37),
-        Text = "ONLINE",
-        Font = Enum.Font.GothamBold,
-        TextColor3 = COLORS.good,
-        TextSize = 10,
-        TextXAlignment = Enum.TextXAlignment.Center,
-    }, top)
-    corner(status, 8)
-
-    local close = make("TextButton", {
-        AnchorPoint = Vector2.new(1, 0.5),
-        Position = UDim2.new(1, -12, 0.5, 0),
-        Size = UDim2.new(0, 30, 0, 30),
-        BackgroundColor3 = COLORS.panel2,
-        AutoButtonColor = false,
-        Text = "×",
-        Font = Enum.Font.GothamBold,
-        TextColor3 = COLORS.text,
-        TextSize = 20,
-    }, top)
-    corner(close, 8)
-
-    local body = make("Frame", {
-        Position = UDim2.new(0, 0, 0, 58),
-        Size = UDim2.new(1, 0, 1, -58),
-        BackgroundTransparency = 1,
-    }, root)
-
-    local sidebarWidth = 148
-
-    local sidebar = make("Frame", {
-        Size = UDim2.new(0, sidebarWidth, 1, 0),
-        BackgroundColor3 = COLORS.panel,
-        BorderSizePixel = 0,
-    }, body)
-
-    local sidebarLine = make("Frame", {
-        Position = UDim2.new(1, -1, 0, 0),
-        Size = UDim2.new(0, 1, 1, 0),
-        BackgroundColor3 = COLORS.line,
-        BorderSizePixel = 0,
-    }, sidebar)
-
-    local tabList = make("ScrollingFrame", {
-        Position = UDim2.new(0, 8, 0, 10),
-        Size = UDim2.new(1, -16, 1, -20),
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        CanvasSize = UDim2.new(),
-        ScrollBarThickness = 2,
-        ScrollBarImageColor3 = COLORS.accent,
-        AutomaticCanvasSize = Enum.AutomaticSize.Y,
-    }, sidebar)
-
-    local tabLayout = make("UIListLayout", {
-        Padding = UDim.new(0, 6),
-        SortOrder = Enum.SortOrder.LayoutOrder,
-    }, tabList)
-
-    local content = make("Frame", {
-        Position = UDim2.new(0, sidebarWidth, 0, 0),
-        Size = UDim2.new(1, -sidebarWidth, 1, 0),
-        BackgroundColor3 = COLORS.bg,
-        BorderSizePixel = 0,
-    }, body)
-
-    local pages = {}
-    local pageButtons = {}
-    local currentTab
-
-    local function updateCanvas(scroll)
-        if not scroll then return end
-        local layout = scroll:FindFirstChildOfClass("UIListLayout")
-        if layout then
-            scroll.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + 18)
-        end
-    end
-
-    local dragging = false
-    local dragStart
-    local startPos
-    local dragConn
-
-    top.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = root.Position
-
-            if dragConn then
-                dragConn:Disconnect()
-            end
-
-            dragConn = UserInputService.InputChanged:Connect(function(changed)
-                if not dragging then
-                    return
-                end
-                if changed.UserInputType ~= Enum.UserInputType.MouseMovement
-                    and changed.UserInputType ~= Enum.UserInputType.Touch then
-                    return
-                end
-
-                local delta = changed.Position - dragStart
-                root.Position = UDim2.new(
-                    startPos.X.Scale,
-                    startPos.X.Offset + delta.X,
-                    startPos.Y.Scale,
-                    startPos.Y.Offset + delta.Y
-                )
-            end)
+        if Rayfield and Rayfield.Destroy then
+            Rayfield:Destroy()
         end
     end)
-
-    UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-            if dragConn then
-                dragConn:Disconnect()
-                dragConn = nil
-            end
+    pcall(function()
+        if GuardConnection then
+            GuardConnection:Disconnect()
+        end
+        if ReplaceConnection then
+            ReplaceConnection:Disconnect()
+        end
+        if Guard then
+            Guard:Destroy()
         end
     end)
-
-    local uiVisible = true
-
-    local function setUIVisible(v)
-        uiVisible = not not v
-        root.Visible = uiVisible
-    end
-
-    UserInputService.InputBegan:Connect(function(input, processed)
-        if processed then
-            return
-        end
-        if input.KeyCode == Enum.KeyCode.K then
-            setUIVisible(not uiVisible)
-        end
-    end)
-
-    local minimized = false
-    local normalSize = root.Size
-
-    local minimize = make("TextButton", {
-        AnchorPoint = Vector2.new(1, 0.5),
-        Position = UDim2.new(1, -90, 0.5, 0),
-        Size = UDim2.new(0, 30, 0, 30),
-        BackgroundColor3 = COLORS.panel2,
-        AutoButtonColor = false,
-        Text = "–",
-        Font = Enum.Font.GothamBold,
-        TextColor3 = COLORS.text,
-        TextSize = 18,
-    }, top)
-    corner(minimize, 8)
-
-    local function setMinimized()
-        minimized = not minimized
-        if minimized then
-            normalSize = root.Size
-            tween(root, {Size = UDim2.new(0, math.min(380, 520), 0, 58)}, 0.16)
-            body.Visible = false
-            minimize.Text = "+"
-        else
-            body.Visible = true
-            tween(root, {Size = normalSize}, 0.16)
-            minimize.Text = "–"
-        end
-    end
-    minimize.MouseButton1Click:Connect(setMinimized)
-
-    local window = {}
-    self._windows[#self._windows + 1] = window
-
-    function window:Notify(data)
-        data = data or {}
-        local note = make("Frame", {
-            AnchorPoint = Vector2.new(1, 0),
-            Position = UDim2.new(1, -14, 0, 72),
-            Size = UDim2.new(0, 270, 0, 72),
-            BackgroundColor3 = COLORS.panel2,
-            BorderSizePixel = 0,
-            ZIndex = 2000,
-        }, gui)
-        corner(note, 10)
-        stroke(note, COLORS.line, 1)
-
-        make("TextLabel", {
-            BackgroundTransparency = 1,
-            Position = UDim2.new(0, 12, 0, 8),
-            Size = UDim2.new(1, -24, 0, 20),
-            Font = Enum.Font.GothamBold,
-            Text = tostring(data.title or "Montar um Pet"),
-            TextColor3 = COLORS.text,
-            TextSize = 13,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            ZIndex = 2001,
-        }, note)
-
-        make("TextLabel", {
-            BackgroundTransparency = 1,
-            Position = UDim2.new(0, 12, 0, 29),
-            Size = UDim2.new(1, -24, 0, 36),
-            Font = Enum.Font.Gotham,
-            Text = tostring(data.content or ""),
-            TextWrapped = true,
-            TextColor3 = COLORS.sub,
-            TextSize = 11,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            TextYAlignment = Enum.TextYAlignment.Top,
-            ZIndex = 2001,
-        }, note)
-
-        task.delay(tonumber(data.duration) or 3, function()
-            pcall(function()
-                tween(note, {BackgroundTransparency = 1}, 0.15)
-                task.wait(0.16)
-                note:Destroy()
-            end)
-        end)
-    end
-
-    function window:Destroy()
-        pcall(function()
-            if dragConn then
-                dragConn:Disconnect()
-                dragConn = nil
-            end
-        end)
-        pcall(function()
-            if gui then
-                gui:Destroy()
-            end
-        end)
-    end
-
-    close.MouseButton1Click:Connect(function()
-        Running = false
-        if StopHandler then
-            task.spawn(function()
-                pcall(StopHandler)
-            end)
-        end
-        window:Destroy()
-    end)
-
-    function window:CreateTab(tabOptions)
-        local tabName = tostring((tabOptions and tabOptions.name) or "Tab")
-
-        local page = make("ScrollingFrame", {
-            Name = "Page_" .. tabName:gsub("%W", ""),
-            Size = UDim2.new(1, -22, 1, -18),
-            Position = UDim2.new(0, 11, 0, 9),
-            BackgroundTransparency = 1,
-            BorderSizePixel = 0,
-            ScrollBarThickness = 3,
-            ScrollBarImageColor3 = COLORS.accent,
-            CanvasSize = UDim2.new(),
-            Visible = false,
-            AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        }, content)
-
-        local layout = make("UIListLayout", {
-            Padding = UDim.new(0, 8),
-            SortOrder = Enum.SortOrder.LayoutOrder,
-        }, page)
-
-        local pad = make("UIPadding", {
-            PaddingTop = UDim.new(0, 2),
-            PaddingBottom = UDim.new(0, 10),
-        }, page)
-
-        local button = make("TextButton", {
-            Size = UDim2.new(1, 0, 0, 38),
-            BackgroundColor3 = COLORS.panel,
-            AutoButtonColor = false,
-            Text = tabName,
-            Font = Enum.Font.GothamMedium,
-            TextColor3 = COLORS.sub,
-            TextSize = 12,
-        }, tabList)
-        corner(button, 8)
-
-        local tab = {
-            _page = page,
-            _button = button,
-            _layout = layout,
-        }
-
-        local function select()
-            for _, record in pairs(pages) do
-                record.page.Visible = false
-            end
-            for _, b in pairs(pageButtons) do
-                b.BackgroundColor3 = COLORS.panel
-                b.TextColor3 = COLORS.sub
-            end
-
-            page.Visible = true
-            button.BackgroundColor3 = COLORS.hover
-            button.TextColor3 = COLORS.text
-            currentTab = tabName
-        end
-
-        button.MouseButton1Click:Connect(select)
-
-        pages[tabName] = {page = page, tab = tab}
-        pageButtons[tabName] = button
-
-        local function addBox(height)
-            local box = make("Frame", {
-                Size = UDim2.new(1, 0, 0, height or 54),
-                BackgroundColor3 = COLORS.panel,
-                BorderSizePixel = 0,
-            }, page)
-            corner(box, 9)
-            stroke(box, COLORS.line, 1)
-            return box
-        end
-
-        function tab:CreateSection(o)
-            local text = tostring((o and o.name) or "Seção")
-            local box = make("TextLabel", {
-                Size = UDim2.new(1, 0, 0, 28),
-                BackgroundTransparency = 1,
-                Font = Enum.Font.GothamBold,
-                Text = text,
-                TextColor3 = COLORS.accent,
-                TextSize = 12,
-                TextXAlignment = Enum.TextXAlignment.Left,
-            }, page)
-            return box
-        end
-
-        function tab:CreateLabel(text)
-            local box = make("TextLabel", {
-                Size = UDim2.new(1, 0, 0, 30),
-                BackgroundTransparency = 1,
-                Font = Enum.Font.Gotham,
-                Text = tostring(text or ""),
-                TextColor3 = COLORS.sub,
-                TextSize = 11,
-                TextWrapped = true,
-                TextXAlignment = Enum.TextXAlignment.Left,
-            }, page)
-            return box
-        end
-
-        function tab:CreateButton(o)
-            o = o or {}
-            local box = addBox(54)
-            local b = make("TextButton", {
-                Position = UDim2.new(0, 10, 0, 7),
-                Size = UDim2.new(1, -20, 0, 40),
-                BackgroundColor3 = COLORS.panel2,
-                AutoButtonColor = false,
-                Text = tostring(o.name or "Button"),
-                Font = Enum.Font.GothamMedium,
-                TextColor3 = COLORS.text,
-                TextSize = 12,
-            }, box)
-            corner(b, 8)
-            b.MouseEnter:Connect(function() tween(b, {BackgroundColor3 = COLORS.hover}, 0.08) end)
-            b.MouseLeave:Connect(function() tween(b, {BackgroundColor3 = COLORS.panel2}, 0.08) end)
-            b.MouseButton1Click:Connect(function()
-                pcall(o.callback)
-            end)
-            return b
-        end
-
-        function tab:CreateToggle(o)
-            o = o or {}
-            local value = not not o.value
-            local box = addBox(58)
-            local label = make("TextLabel", {
-                BackgroundTransparency = 1,
-                Position = UDim2.new(0, 12, 0, 7),
-                Size = UDim2.new(1, -92, 0, 20),
-                Font = Enum.Font.GothamMedium,
-                Text = tostring(o.name or "Toggle"),
-                TextColor3 = COLORS.text,
-                TextSize = 12,
-                TextXAlignment = Enum.TextXAlignment.Left,
-            }, box)
-
-            local desc = make("TextLabel", {
-                BackgroundTransparency = 1,
-                Position = UDim2.new(0, 12, 0, 28),
-                Size = UDim2.new(1, -104, 0, 18),
-                Font = Enum.Font.Gotham,
-                Text = tostring(o.description or ""),
-                TextColor3 = COLORS.sub,
-                TextSize = 9,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                TextTruncate = Enum.TextTruncate.AtEnd,
-            }, box)
-
-            local btn = make("TextButton", {
-                AnchorPoint = Vector2.new(1, 0.5),
-                Position = UDim2.new(1, -12, 0.5, 0),
-                Size = UDim2.new(0, 48, 0, 26),
-                BackgroundColor3 = COLORS.line,
-                AutoButtonColor = false,
-                Text = "",
-            }, box)
-            corner(btn, 13)
-
-            local dot = make("Frame", {
-                AnchorPoint = Vector2.new(0, 0.5),
-                Position = UDim2.new(0, 3, 0.5, 0),
-                Size = UDim2.new(0, 20, 0, 20),
-                BackgroundColor3 = COLORS.sub,
-                BorderSizePixel = 0,
-            }, btn)
-            corner(dot, 10)
-
-            local function render()
-                btn.BackgroundColor3 = value and COLORS.accent2 or COLORS.line
-                dot.Position = value and UDim2.new(1, -23, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
-                dot.BackgroundColor3 = value and COLORS.white or COLORS.sub
-            end
-
-            local function setValue(v, fire)
-                value = not not v
-                render()
-                local flag = o.flag and NativeUI.Flags[o.flag]
-                if flag then
-                    flag.CurrentValue = value
-                    flag.CurrentOption = value
-                end
-                if fire and o.callback then
-                    pcall(o.callback, value)
-                end
-            end
-
-            createFlag(o.flag, value, setValue)
-
-            btn.MouseButton1Click:Connect(function()
-                setValue(not value, true)
-            end)
-            render()
-
-            return btn
-        end
-
-        function tab:CreateSlider(o)
-            o = o or {}
-            local range = o.range or {0, 100}
-            local minV = tonumber(range[1]) or 0
-            local maxV = tonumber(range[2]) or 100
-            local increment = tonumber(o.increment) or 1
-            local value = clampNumber(o.value, minV, maxV)
-
-            local box = addBox(68)
-            make("TextLabel", {
-                BackgroundTransparency = 1,
-                Position = UDim2.new(0, 12, 0, 8),
-                Size = UDim2.new(0.62, 0, 0, 20),
-                Font = Enum.Font.GothamMedium,
-                Text = tostring(o.name or "Slider"),
-                TextColor3 = COLORS.text,
-                TextSize = 12,
-                TextXAlignment = Enum.TextXAlignment.Left,
-            }, box)
-
-            local valueLabel = make("TextLabel", {
-                BackgroundTransparency = 1,
-                AnchorPoint = Vector2.new(1, 0),
-                Position = UDim2.new(1, -12, 0, 8),
-                Size = UDim2.new(0.30, 0, 0, 20),
-                Font = Enum.Font.GothamBold,
-                TextColor3 = COLORS.accent,
-                TextSize = 11,
-                TextXAlignment = Enum.TextXAlignment.Right,
-            }, box)
-
-            local bar = make("TextButton", {
-                Position = UDim2.new(0, 12, 0, 37),
-                Size = UDim2.new(1, -24, 0, 12),
-                BackgroundColor3 = COLORS.line,
-                AutoButtonColor = false,
-                Text = "",
-            }, box)
-            corner(bar, 6)
-
-            local fill = make("Frame", {
-                Size = UDim2.new(0, 0, 1, 0),
-                BackgroundColor3 = COLORS.accent,
-                BorderSizePixel = 0,
-            }, bar)
-            corner(fill, 6)
-
-            local knob = make("Frame", {
-                AnchorPoint = Vector2.new(0.5, 0.5),
-                Position = UDim2.new(0, 0, 0.5, 0),
-                Size = UDim2.new(0, 16, 0, 16),
-                BackgroundColor3 = COLORS.white,
-                BorderSizePixel = 0,
-            }, bar)
-            corner(knob, 8)
-
-            local draggingSlider = false
-
-            local function quantize(v)
-                local steps = math.floor(((v - minV) / increment) + 0.5)
-                return math.clamp(minV + steps * increment, minV, maxV)
-            end
-
-            local function render()
-                local alpha = maxV == minV and 0 or (value - minV) / (maxV - minV)
-                fill.Size = UDim2.new(alpha, 0, 1, 0)
-                knob.Position = UDim2.new(alpha, 0, 0.5, 0)
-                valueLabel.Text = tostring(math.floor(value * 100) / 100) .. tostring(o.suffix or "")
-            end
-
-            local function setValue(v, fire)
-                value = quantize(clampNumber(v, minV, maxV))
-                render()
-                local flag = o.flag and NativeUI.Flags[o.flag]
-                if flag then
-                    flag.CurrentValue = value
-                    flag.CurrentOption = value
-                end
-                if fire and o.callback then
-                    pcall(o.callback, value)
-                end
-            end
-
-            createFlag(o.flag, value, setValue)
-
-            local function setFromInput(x)
-                local alpha = math.clamp(
-                    (x - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1),
-                    0, 1
-                )
-                setValue(minV + (maxV - minV) * alpha, true)
-            end
-
-            bar.InputBegan:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1
-                    or input.UserInputType == Enum.UserInputType.Touch then
-                    draggingSlider = true
-                    setFromInput(input.Position.X)
-                end
-            end)
-
-            UserInputService.InputChanged:Connect(function(input)
-                if not draggingSlider then return end
-                if input.UserInputType == Enum.UserInputType.MouseMovement
-                    or input.UserInputType == Enum.UserInputType.Touch then
-                    setFromInput(input.Position.X)
-                end
-            end)
-
-            UserInputService.InputEnded:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1
-                    or input.UserInputType == Enum.UserInputType.Touch then
-                    draggingSlider = false
-                end
-            end)
-
-            render()
-            return bar
-        end
-
-        function tab:CreateInput(o)
-            o = o or {}
-            local value = tostring(o.value or "")
-            local box = addBox(64)
-
-            make("TextLabel", {
-                BackgroundTransparency = 1,
-                Position = UDim2.new(0, 12, 0, 7),
-                Size = UDim2.new(0.45, 0, 0, 20),
-                Font = Enum.Font.GothamMedium,
-                Text = tostring(o.name or "Input"),
-                TextColor3 = COLORS.text,
-                TextSize = 12,
-                TextXAlignment = Enum.TextXAlignment.Left,
-            }, box)
-
-            local input = make("TextBox", {
-                AnchorPoint = Vector2.new(1, 0),
-                Position = UDim2.new(1, -10, 0, 7),
-                Size = UDim2.new(0.50, 0, 0, 34),
-                BackgroundColor3 = COLORS.panel2,
-                Text = value,
-                PlaceholderText = tostring(o.placeholder or ""),
-                ClearTextOnFocus = false,
-                Font = Enum.Font.Gotham,
-                TextColor3 = COLORS.text,
-                PlaceholderColor3 = COLORS.sub,
-                TextSize = 11,
-            }, box)
-            corner(input, 8)
-
-            make("TextLabel", {
-                BackgroundTransparency = 1,
-                Position = UDim2.new(0, 12, 0, 34),
-                Size = UDim2.new(0.42, 0, 0, 22),
-                Font = Enum.Font.Gotham,
-                Text = tostring(o.description or ""),
-                TextColor3 = COLORS.sub,
-                TextSize = 8,
-                TextTruncate = Enum.TextTruncate.AtEnd,
-                TextXAlignment = Enum.TextXAlignment.Left,
-            }, box)
-
-            local function setValue(v, fire)
-                value = tostring(v or "")
-                input.Text = value
-                local flag = o.flag and NativeUI.Flags[o.flag]
-                if flag then
-                    flag.CurrentValue = value
-                    flag.CurrentOption = value
-                end
-                if fire and o.callback then
-                    pcall(o.callback, value)
-                end
-            end
-
-            createFlag(o.flag, value, setValue)
-
-            input.FocusLost:Connect(function()
-                setValue(input.Text, true)
-            end)
-
-            return input
-        end
-
-        function tab:CreateDropdown(o)
-            o = o or {}
-            local optionsList = {}
-            for _, option in ipairs(o.options or {}) do
-                optionsList[#optionsList + 1] = tostring(option)
-            end
-
-            local multi = o.multiSelect == true
-            local selected = {}
-
-            if multi then
-                for _, v in ipairs(o.value or {}) do
-                    selected[tostring(v)] = true
-                end
-            else
-                local initial = o.value
-                if initial ~= nil then
-                    selected[tostring(initial)] = true
-                elseif optionsList[1] then
-                    selected[optionsList[1]] = true
-                end
-            end
-
-            local expanded = false
-            local box = addBox(58)
-
-            make("TextLabel", {
-                BackgroundTransparency = 1,
-                Position = UDim2.new(0, 12, 0, 7),
-                Size = UDim2.new(1, -24, 0, 20),
-                Font = Enum.Font.GothamMedium,
-                Text = tostring(o.name or "Dropdown"),
-                TextColor3 = COLORS.text,
-                TextSize = 12,
-                TextXAlignment = Enum.TextXAlignment.Left,
-            }, box)
-
-            local selectButton = make("TextButton", {
-                Position = UDim2.new(0, 10, 0, 29),
-                Size = UDim2.new(1, -20, 0, 26),
-                BackgroundColor3 = COLORS.panel2,
-                AutoButtonColor = false,
-                Text = "",
-                Font = Enum.Font.Gotham,
-                TextColor3 = COLORS.text,
-                TextSize = 10,
-            }, box)
-            corner(selectButton, 7)
-
-            local summary = make("TextLabel", {
-                BackgroundTransparency = 1,
-                Position = UDim2.new(0, 9, 0, 0),
-                Size = UDim2.new(1, -18, 1, 0),
-                Font = Enum.Font.Gotham,
-                TextColor3 = COLORS.sub,
-                TextSize = 10,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                TextTruncate = Enum.TextTruncate.AtEnd,
-            }, selectButton)
-
-            local listFrame
-
-            local function currentValue()
-                if multi then
-                    local t = {}
-                    for _, opt in ipairs(optionsList) do
-                        if selected[opt] then
-                            t[#t + 1] = opt
-                        end
-                    end
-                    return t
-                end
-
-                for _, opt in ipairs(optionsList) do
-                    if selected[opt] then
-                        return opt
-                    end
-                end
-                return nil
-            end
-
-            local function renderSummary()
-                if multi then
-                    local vals = currentValue()
-                    if #vals == 0 then
-                        summary.Text = tostring(o.placeholder or "Nenhuma")
-                    elseif #vals <= 2 then
-                        summary.Text = table.concat(vals, ", ")
-                    else
-                        summary.Text = tostring(#vals) .. " selecionados"
-                    end
-                else
-                    summary.Text = tostring(currentValue() or o.placeholder or "Selecionar")
-                end
-            end
-
-            local function fire()
-                local v = currentValue()
-                local flag = o.flag and NativeUI.Flags[o.flag]
-                if flag then
-                    flag.CurrentValue = v
-                    flag.CurrentOption = v
-                end
-                if o.callback then
-                    pcall(o.callback, v)
-                end
-            end
-
-            local function rebuildList()
-                if listFrame then
-                    listFrame:Destroy()
-                    listFrame = nil
-                end
-
-                if not expanded then
-                    box.Size = UDim2.new(1, 0, 0, 58)
-                    return
-                end
-
-                local rows = math.max(#optionsList, 1)
-                local listHeight = math.min(rows * 30 + 4, 190)
-
-                box.Size = UDim2.new(1, 0, 0, 58 + listHeight)
-
-                listFrame = make("Frame", {
-                    Position = UDim2.new(0, 10, 0, 58),
-                    Size = UDim2.new(1, -20, 0, listHeight),
-                    BackgroundColor3 = COLORS.panel2,
-                    BorderSizePixel = 0,
-                }, box)
-                corner(listFrame, 8)
-                stroke(listFrame, COLORS.line, 1)
-
-                local sc = make("ScrollingFrame", {
-                    Size = UDim2.new(1, -8, 1, -8),
-                    Position = UDim2.new(0, 4, 0, 4),
-                    BackgroundTransparency = 1,
-                    BorderSizePixel = 0,
-                    ScrollBarThickness = 2,
-                    CanvasSize = UDim2.new(0, 0, 0, rows * 30),
-                }, listFrame)
-
-                local ll = make("UIListLayout", {
-                    Padding = UDim.new(0, 2),
-                    SortOrder = Enum.SortOrder.LayoutOrder,
-                }, sc)
-
-                for _, option in ipairs(optionsList) do
-                    local item = make("TextButton", {
-                        Size = UDim2.new(1, -2, 0, 28),
-                        BackgroundColor3 = selected[option] and COLORS.hover or COLORS.panel2,
-                        AutoButtonColor = false,
-                        Text = (selected[option] and "✓  " or "    ") .. option,
-                        Font = Enum.Font.Gotham,
-                        TextColor3 = selected[option] and COLORS.text or COLORS.sub,
-                        TextSize = 10,
-                        TextXAlignment = Enum.TextXAlignment.Left,
-                    }, sc)
-                    corner(item, 6)
-
-                    item.MouseButton1Click:Connect(function()
-                        if multi then
-                            selected[option] = not selected[option]
-                            renderSummary()
-                            fire()
-                            rebuildList()
-                        else
-                            for k in pairs(selected) do
-                                selected[k] = nil
-                            end
-                            selected[option] = true
-                            expanded = false
-                            renderSummary()
-                            fire()
-                            rebuildList()
-                        end
-                    end)
-                end
-            end
-
-            local function setValue(v, fireCallback)
-                for k in pairs(selected) do
-                    selected[k] = nil
-                end
-
-                if multi then
-                    for _, item in ipairs(v or {}) do
-                        selected[tostring(item)] = true
-                    end
-                else
-                    if v ~= nil then
-                        selected[tostring(v)] = true
-                    end
-                end
-
-                renderSummary()
-                if fireCallback then
-                    fire()
-                end
-                rebuildList()
-            end
-
-            createFlag(o.flag, currentValue(), setValue)
-
-            selectButton.MouseButton1Click:Connect(function()
-                expanded = not expanded
-                rebuildList()
-            end)
-
-            renderSummary()
-            rebuildList()
-            return selectButton
-        end
-
-        -- Recalcula o canvas após alterações de altura (especialmente dropdowns).
-        layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-            updateCanvas(page)
-        end)
-
-        task.defer(function()
-            updateCanvas(page)
-        end)
-
-        if not currentTab then
-            select()
-        end
-
-        return tab
-    end
-
-    -- API de configuração.
-    function self:SaveConfiguration()
-        return true
-    end
-
-    function self:LoadConfiguration()
-        return true
-    end
-
-    function self:Destroy()
-        window:Destroy()
-    end
-
-    return window
+    return
 end
 
--- A partir daqui o restante do v15 usa a mesma API, mas com UI nativa.
-local Rayfield = NativeUI
+if not okRayfield or type(Rayfield) ~= "table" then
+    Running = false
+    if GuardConnection then
+        GuardConnection:Disconnect()
+    end
+    Guard:Destroy()
+    warn("Montar um Pet: não foi possível carregar Rayfield Gen2.")
+    return
+end
+
+-- Se outra execução pediu shutdown enquanto a biblioteca carregava,
+-- não continue criando uma segunda interface.
+if not Running then
+    pcall(function()
+        if Rayfield.Destroy then
+            Rayfield:Destroy()
+        end
+    end)
+    pcall(function()
+        Guard:Destroy()
+    end)
+    return
+end
+
+if not Running or (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
+    pcall(function()
+        if Rayfield and Rayfield.Destroy then
+            Rayfield:Destroy()
+        end
+    end)
+    return
+end
 
 local okWindow, Window = pcall(function()
-    return NativeUI:CreateWindow({
+    return Rayfield:CreateWindow({
         name = "Montar um Pet",
-        subtitle = "MASTER v21 • UI Nativa • Mobile/PC",
+        subtitle = "MASTER v15 • Delta Mobile",
+        sidebarLayout = true,
+        toggleUIKeybind = "K",
+        configuration = {
+            autoSave = true,
+            autoLoad = true,
+            fileName = "MontarUmPet_Master_v15",
+        },
     })
 end)
 
 if not okWindow or not Window then
     Running = false
     pcall(function()
-        if GuardConnection then
-            GuardConnection:Disconnect()
-        end
-        if Guard then
-            Guard:Destroy()
+        if Rayfield.Destroy then
+            Rayfield:Destroy()
         end
     end)
-    warn("Montar um Pet: não foi possível criar a UI nativa.")
+    if GuardConnection then
+        GuardConnection:Disconnect()
+    end
+    Guard:Destroy()
+    warn("Montar um Pet: não foi possível criar a janela.")
     return
 end
 
 if not Running or (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
     pcall(function()
-        Window:Destroy()
+        if Rayfield and Rayfield.Destroy then
+            Rayfield:Destroy()
+        end
+    end)
+    pcall(function()
+        if GuardConnection then
+            GuardConnection:Disconnect()
+        end
+        if ReplaceConnection then
+            ReplaceConnection:Disconnect()
+        end
+        if Guard then
+            Guard:Destroy()
+        end
     end)
     return
 end
@@ -4786,34 +3781,12 @@ end
 -- TABS
 --============================================================--
 
-local TabInicio = Window:CreateTab({name = "Início"})
 local TabFarm = Window:CreateTab({name = "Farm"})
 local TabOvos = Window:CreateTab({name = "Ovos"})
 local TabMove = Window:CreateTab({name = "Movimento"})
 local TabVisual = Window:CreateTab({name = "Visual"})
 local TabPerf = Window:CreateTab({name = "Performance"})
 local TabConfig = Window:CreateTab({name = "Config"})
-
-TabInicio:CreateSection({name = "Montar um Pet • MASTER v21"})
-TabInicio:CreateLabel("UI nativa sem dependência de Rayfield/WindUI. Feita para Delta Mobile e PC, com rolagem, toque, arrastar, minimizar e singleton de uma única janela.")
-TabInicio:CreateLabel("Status: interface carregada. Use a aba Farm para automação e Movimento para voo/velocidade.")
-TabInicio:CreateButton({
-    name = "Ativar Auto Farm",
-    description = "Liga o Auto Farm imediatamente.",
-    callback = function()
-        State.AutoFarm = true
-        pcall(StartFarmNoclip)
-        pcall(ClearFarmTarget)
-        State.FarmPhase = "Starting"
-        LastFarmStatus = "Starting Auto Farm"
-        task.spawn(function()
-            task.wait(0.05)
-            if Running and State.AutoFarm and not FarmBusy then
-                pcall(FarmOnce)
-            end
-        end)
-    end,
-})
 
 --============================================================--
 -- FARM TAB
