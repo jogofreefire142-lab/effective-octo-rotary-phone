@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v38 • UI V15 RESCUE • BASE v23.3 CONFIRMADA
+-- MONTAR UM PET - MASTER v43 • UI V41 ESTÁVEL • PICKUP PORT BAC0N/IAMDUNGX
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
@@ -254,7 +254,7 @@ local State = {
 
     -- Auto Farm engine
     FarmMoveMode = "Instant",      -- Instant or Tween
-    FarmPickupMode = "Remote",     -- Auto, Prompt, Remote
+    FarmPickupMode = "Auto",       -- Auto = Remote comprovado + Prompt/InputHold fallback
     FarmPickupRetries = 6,
     FarmPickupWait = 0.25,
     FarmPickupRadius = 12,
@@ -1864,29 +1864,81 @@ local function ConfirmFarmPickup(candidate, beforeBasket, timeout)
     return false
 end
 
+local function ResolvePickupUID(candidate)
+    if not candidate then return nil end
+
+    local direct = candidate.UID or candidate.ID
+    local activeFolder = GetActiveEggFolder()
+
+    -- Caminho comprovado pelo Bac0nH1ck/SixZensED: o UID real é o Name
+    -- do Configuration dentro de ReplicatedStorage.ServerData.ActiveEggs.
+    if activeFolder and direct then
+        local directObject = activeFolder:FindFirstChild(direct)
+        if directObject then
+            return directObject.Name
+        end
+    end
+
+    -- Fallback para RenderedEggs: casa por posição quando o registro visual
+    -- apareceu antes do ActiveEgg server-side.
+    local position = candidate.Position
+    if typeof(position) ~= "Vector3" then
+        position = GetEggPosition(candidate.Instance or candidate.Rendered)
+    end
+
+    if activeFolder and typeof(position) == "Vector3" then
+        local nearest, nearestDistance = nil, math.huge
+        for _, active in ipairs(activeFolder:GetChildren()) do
+            local activePosition = GetEggPosition(active)
+            local eggName = active:GetAttribute("Egg")
+            if activePosition and (not candidate.Name or eggName == candidate.Name) then
+                local distance = (activePosition - position).Magnitude
+                if distance < nearestDistance and distance <= 15 then
+                    nearest = active
+                    nearestDistance = distance
+                end
+            end
+        end
+        if nearest then
+            return nearest.Name
+        end
+    end
+
+    return direct
+end
+
 local function TryRemotePickup(candidate)
     local remote = GetEggPickupRemote()
-
     if not remote or not remote:IsA("RemoteEvent") then
         return false
     end
 
-    local uid = candidate and (candidate.UID or candidate.ID)
+    local uid = ResolvePickupUID(candidate)
     if not uid then
         return false
     end
 
     local beforeBasket = GetBasketCount()
 
+    -- Implementação portável do caminho comprovado: EggPickup(uid).
     local ok = pcall(function()
         remote:FireServer(uid)
     end)
-
     if not ok then
         return false
     end
 
-    return ConfirmFarmPickup(candidate, beforeBasket, 2)
+    -- Não considera só o desaparecimento do ovo um sucesso. A confirmação
+    -- principal é o Basket realmente aumentar, igual ao hub testado.
+    local deadline = os.clock() + 3
+    while FarmIsRunning() and os.clock() < deadline do
+        if GetBasketCount() > beforeBasket then
+            return true
+        end
+        task.wait(0.05)
+    end
+
+    return false
 end
 
 local function FindPromptOnEgg(candidate)
@@ -1899,10 +1951,6 @@ local function FindPromptOnEgg(candidate)
 end
 
 local function TryPromptPickup(candidate)
-    if type(fireproximityprompt) ~= "function" then
-        return false
-    end
-
     local prompt = FindPromptOnEgg(candidate)
     if not prompt then
         return false
@@ -1911,14 +1959,34 @@ local function TryPromptPickup(candidate)
     local beforeBasket = GetBasketCount()
 
     local ok = pcall(function()
-        fireproximityprompt(prompt)
+        -- Primeiro tenta a API do executor, quando disponível.
+        if type(fireproximityprompt) == "function" then
+            fireproximityprompt(prompt)
+            return
+        end
+
+        -- Fallback do Iamdungx: usar diretamente o ProximityPrompt,
+        -- sem depender de fireproximityprompt.
+        prompt.RequiresLineOfSight = false
+        prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 9999)
+        prompt:InputHoldBegin()
+        task.wait((tonumber(prompt.HoldDuration) or 0) + 0.12)
+        prompt:InputHoldEnd()
     end)
 
     if not ok then
         return false
     end
 
-    return ConfirmFarmPickup(candidate, beforeBasket, 2)
+    local deadline = os.clock() + 3
+    while FarmIsRunning() and os.clock() < deadline do
+        if GetBasketCount() > beforeBasket then
+            return true
+        end
+        task.wait(0.05)
+    end
+
+    return false
 end
 
 local function AttemptPickup(candidate)
@@ -4784,6 +4852,7 @@ task.defer(function()
     State.FarmNestApproachHeight = State.FarmNestApproachHeight or 6
     State.FarmNestPoll = State.FarmNestPoll or 0.25
     State.FarmPickupMode = State.FarmPickupMode or "Auto"
+    LastFarmStatus = LastFarmStatus or "Pickup adapter: Remote + Prompt/InputHold"
     State.FarmPickupRetries = State.FarmPickupRetries or 5
     State.FarmPickupWait = State.FarmPickupWait or 0.25
     State.FarmPendingEggs = State.FarmPendingEggs or {}
@@ -5377,34 +5446,66 @@ task.defer(function()
     local function advPickup(target)
         if not target then return false end
 
-        local remote = GetEggPickupRemote()
-        local prompt = nil
-        if target.Rendered and target.Rendered.Parent then
-            prompt = target.Rendered:FindFirstChildWhichIsA("ProximityPrompt", true)
-        end
-
-        local retries = math.clamp(math.floor(tonumber(State.FarmPickupRetries) or 5), 1, 10)
-        local before = advBasketCount()
+        local retries = math.clamp(math.floor(tonumber(State.FarmPickupRetries) or 6), 1, 10)
 
         for _ = 1, retries do
             if not advRunning() then return false end
 
-            if remote and remote:IsA("RemoteEvent") and target.UID then
-                pcall(function() remote:FireServer(target.UID) end)
-            elseif prompt and type(fireproximityprompt) == "function" then
-                pcall(function() fireproximityprompt(prompt) end)
+            local before = advBasketCount()
+            local uid = ResolvePickupUID(target)
+            local remote = GetEggPickupRemote()
+            local remoteAttempted = false
+
+            if remote and remote:IsA("RemoteEvent") and uid then
+                remoteAttempted = true
+                pcall(function()
+                    remote:FireServer(uid)
+                end)
             end
 
-            local deadline = os.clock() + 1.5
+            local deadline = os.clock() + 2.0
             while advRunning() and os.clock() < deadline do
-                if advBasketCount() > before then return true end
-                if target.UID and not GetActiveEggFolder():FindFirstChild(target.UID) then return true end
-                if target.Rendered and not target.Rendered.Parent then return true end
+                if advBasketCount() > before then
+                    return true
+                end
                 task.wait(0.05)
+            end
+
+            -- Se o Remote não produziu o Basket, tenta o Prompt com o mesmo
+            -- método de InputHold usado por implementações públicas.
+            local prompt = nil
+            if target.Rendered and target.Rendered.Parent then
+                prompt = target.Rendered:FindFirstChildWhichIsA("ProximityPrompt", true)
+            end
+
+            if prompt then
+                local promptBefore = advBasketCount()
+                local ok = pcall(function()
+                    if type(fireproximityprompt) == "function" then
+                        fireproximityprompt(prompt)
+                    else
+                        prompt.RequiresLineOfSight = false
+                        prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 9999)
+                        prompt:InputHoldBegin()
+                        task.wait((tonumber(prompt.HoldDuration) or 0) + 0.12)
+                        prompt:InputHoldEnd()
+                    end
+                end)
+
+                if ok then
+                    local promptDeadline = os.clock() + 2.0
+                    while advRunning() and os.clock() < promptDeadline do
+                        if advBasketCount() > promptBefore then
+                            return true
+                        end
+                        task.wait(0.05)
+                    end
+                end
             end
 
             task.wait(math.max(0.08, tonumber(State.FarmPickupWait) or 0.25))
         end
+
         return false
     end
 
