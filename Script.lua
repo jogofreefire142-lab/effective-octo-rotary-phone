@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v6 AUTOFARM CORRIGIDO
+-- MONTAR UM PET - MASTER v10 AUTOFARM STATE MACHINE
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 (stable)
 -- Foco: Delta Mobile + baixo custo de polling + Auto Farm híbrido + cleanup robusto
@@ -303,6 +303,23 @@ local State = {
     FarmRetryDelay = 0.30,
     FarmReturnInstant = true,
 
+    -- Auto Farm Flight
+    FarmFlightSpeed = 750,
+    FarmFlightHeight = 60,
+    FarmFlightDescendHeight = 3,
+    FarmFlightArriveRadius = 4,
+
+    -- Auto Farm state machine
+    FarmPhase = "Idle",
+    FarmTargetUID = nil,
+    FarmTargetName = nil,
+    FarmTargetPosition = nil,
+    FarmTargetRetries = 0,
+    FarmHoverRadius = 18,
+    FarmHoverHeight = 55,
+    FarmLoopDelay = 0.10,
+    FarmRequireMountedPet = true,
+
     ESPEnabled = false,
     ESPOnlySelected = false,
     ESPOnlyMutated = false,
@@ -348,6 +365,8 @@ local HiddenPlayerObjects = {}
 
 local FailedFarmTargets = {}
 local LastFarmStatus = "Idle"
+
+local FarmIsRunning
 
 local OriginalLighting = {
     Brightness = Lighting.Brightness,
@@ -1327,18 +1346,293 @@ local function ReturnToSaved()
 end
 
 --============================================================--
+-- AUTO FARM FLIGHT ENGINE
+-- Vai voando em altitude, desce apenas no alvo, coleta e
+-- volta voando para a base. Não usa teleport para o ciclo do farm.
+--============================================================--
+
+local FarmFlightVelocity = nil
+local FarmFlightGyro = nil
+
+local function DestroyFarmFlightMovers()
+    if FarmFlightVelocity then
+        pcall(function()
+            FarmFlightVelocity:Destroy()
+        end)
+        FarmFlightVelocity = nil
+    end
+
+    if FarmFlightGyro then
+        pcall(function()
+            FarmFlightGyro:Destroy()
+        end)
+        FarmFlightGyro = nil
+    end
+end
+
+local function CreateFarmFlightMovers(root)
+    DestroyFarmFlightMovers()
+
+    local ok = pcall(function()
+        local velocity = Instance.new("BodyVelocity")
+        velocity.Name = "MontarUmPetFarmFlightVelocity"
+        velocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+        velocity.P = 25000
+        velocity.Velocity = Vector3.zero
+        velocity.Parent = root
+
+        local gyro = Instance.new("BodyGyro")
+        gyro.Name = "MontarUmPetFarmFlightGyro"
+        gyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+        gyro.P = 50000
+        gyro.D = 1500
+        gyro.CFrame = root.CFrame
+        gyro.Parent = root
+
+        FarmFlightVelocity = velocity
+        FarmFlightGyro = gyro
+    end)
+
+    return ok and FarmFlightVelocity ~= nil and FarmFlightGyro ~= nil
+end
+
+local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
+    local character, root = GetCharacter()
+
+    if not character or not root then
+        return false
+    end
+
+    if typeof(targetPosition) ~= "Vector3" then
+        return false
+    end
+
+    if not FarmIsRunning() then
+        return false
+    end
+
+    if not FarmFlightVelocity or FarmFlightVelocity.Parent ~= root
+        or not FarmFlightGyro or FarmFlightGyro.Parent ~= root then
+
+        if not CreateFarmFlightMovers(root) then
+            return false
+        end
+    end
+
+    local maxSpeed = math.clamp(
+        tonumber(speed) or State.FarmFlightSpeed,
+        100,
+        2000
+    )
+
+    local arrivedRadius = math.clamp(
+        tonumber(State.FarmFlightArriveRadius) or 4,
+        2,
+        10
+    )
+
+    local distance = (targetPosition - root.Position).Magnitude
+    local timeout = math.clamp(
+        (distance / maxSpeed) * (timeoutMultiplier or 2.5) + 2,
+        3,
+        30
+    )
+
+    local started = os.clock()
+
+    while FarmIsRunning()
+        and character.Parent
+        and root.Parent
+        and os.clock() - started < timeout do
+
+        local delta = targetPosition - root.Position
+        local remaining = delta.Magnitude
+
+        if remaining <= arrivedRadius then
+            pcall(function()
+                FarmFlightVelocity.Velocity = Vector3.zero
+                root.AssemblyLinearVelocity = Vector3.zero
+            end)
+            return true
+        end
+
+        local direction = delta.Unit
+
+        -- Diminui a velocidade perto do ponto final para não passar direto.
+        local currentSpeed = math.clamp(
+            remaining * 8,
+            45,
+            maxSpeed
+        )
+
+        pcall(function()
+            FarmFlightVelocity.Velocity = direction * currentSpeed
+            FarmFlightGyro.CFrame = CFrame.lookAt(
+                root.Position,
+                root.Position + direction
+            )
+        end)
+
+        RunService.Heartbeat:Wait()
+    end
+
+    pcall(function()
+        if FarmFlightVelocity then
+            FarmFlightVelocity.Velocity = Vector3.zero
+        end
+        if root and root.Parent then
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end
+    end)
+
+    return false
+end
+
+local function FarmFlyTo(targetPosition, speed, descend)
+    local character, root = GetCharacter()
+
+    if not character or not root then
+        return false
+    end
+
+    if not FarmIsRunning() then
+        return false
+    end
+
+    if not CreateFarmFlightMovers(root) then
+        return false
+    end
+
+    local oldPlatformStand = nil
+    local oldAutoRotate = nil
+    local oldCollision = {}
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+    if humanoid then
+        oldPlatformStand = humanoid.PlatformStand
+        oldAutoRotate = humanoid.AutoRotate
+        humanoid.PlatformStand = true
+        humanoid.AutoRotate = false
+    end
+
+    -- Durante o voo do farm, evita o personagem bater em obstáculos.
+    for _, obj in ipairs(character:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            oldCollision[obj] = obj.CanCollide
+            obj.CanCollide = false
+        end
+    end
+
+    local flightHeight = math.clamp(
+        tonumber(State.FarmFlightHeight) or 60,
+        20,
+        200
+    )
+
+    local descendHeight = math.clamp(
+        tonumber(State.FarmFlightDescendHeight) or 3,
+        1,
+        8
+    )
+
+    local cruiseY = math.max(
+        root.Position.Y,
+        targetPosition.Y
+    ) + flightHeight
+
+    -- 1. Sobe.
+    local upPoint = Vector3.new(
+        root.Position.X,
+        cruiseY,
+        root.Position.Z
+    )
+
+    local ok = FarmFlightSegment(
+        upPoint,
+        speed or State.FarmFlightSpeed,
+        2
+    )
+
+    -- 2. Voa horizontalmente em altitude.
+    if ok and FarmIsRunning() then
+        local cruisePoint = Vector3.new(
+            targetPosition.X,
+            cruiseY,
+            targetPosition.Z
+        )
+
+        ok = FarmFlightSegment(
+            cruisePoint,
+            speed or State.FarmFlightSpeed,
+            2.5
+        )
+    end
+
+    -- 3. Desce somente quando está sobre o alvo.
+    if ok and FarmIsRunning() and descend ~= false then
+        local dropPoint = Vector3.new(
+            targetPosition.X,
+            targetPosition.Y + descendHeight,
+            targetPosition.Z
+        )
+
+        ok = FarmFlightSegment(
+            dropPoint,
+            math.min(
+                speed or State.FarmFlightSpeed,
+                260
+            ),
+            2
+        )
+    end
+
+    DestroyFarmFlightMovers()
+
+    for part, canCollide in pairs(oldCollision) do
+        if part and part.Parent then
+            pcall(function()
+                part.CanCollide = canCollide
+            end)
+        end
+    end
+
+    if humanoid and humanoid.Parent then
+        pcall(function()
+            humanoid.PlatformStand = oldPlatformStand
+            humanoid.AutoRotate = oldAutoRotate
+        end)
+    end
+
+    return ok
+end
+
+--============================================================--
 -- FARM ENGINE
 --============================================================--
 
 local FarmBusy = false
 local PickupBusy = false
 
-local function FarmIsRunning()
+FarmIsRunning = function()
     return Running and State.AutoFarm
 end
 
 local function FarmStatus(message)
     LastFarmStatus = tostring(message)
+end
+
+local function SetFarmPhase(phase)
+    State.FarmPhase = tostring(phase)
+    LastFarmStatus = State.FarmPhase
+end
+
+local function ClearFarmTarget()
+    State.FarmTargetUID = nil
+    State.FarmTargetName = nil
+    State.FarmTargetPosition = nil
+    State.FarmTargetRetries = 0
 end
 
 local function GetBasketCount()
@@ -1569,17 +1863,21 @@ local function EnterVolcano()
     local validate = volcano and volcano:FindFirstChild("VolcanoValidate")
 
     if entrance and entrance:IsA("BasePart") then
-        if State.FarmMoveMode == "Instant" then
-            SafeTeleport(entrance.Position, Vector3.new(0, 3, 0))
-        else
-            GlideTo(
-                entrance.Position + Vector3.new(0, 3, 0),
-                math.min(State.TravelSpeed, 180),
-                FarmIsRunning
-            )
+        if not FarmFlyTo(
+            entrance.Position,
+            math.min(State.FarmFlightSpeed, 700),
+            false
+        ) then
+            return false
         end
     else
-        SafeTeleport(VOLCANO_FALLBACK, Vector3.new(0, 3, 0))
+        if not FarmFlyTo(
+            VOLCANO_FALLBACK,
+            math.min(State.FarmFlightSpeed, 500),
+            false
+        ) then
+            return false
+        end
     end
 
     task.wait(0.25)
@@ -1589,17 +1887,21 @@ local function EnterVolcano()
     end
 
     if not IsInVolcano() and validate and validate:IsA("BasePart") then
-        if State.FarmMoveMode == "Instant" then
-            SafeTeleport(validate.Position, Vector3.new(0, 2, 0))
-        else
-            GlideTo(
-                validate.Position + Vector3.new(0, 2, 0),
-                math.min(State.TravelSpeed, 150),
-                FarmIsRunning
-            )
+        if not FarmFlyTo(
+            validate.Position,
+            math.min(State.FarmFlightSpeed, 350),
+            true
+        ) then
+            return false
         end
-    else
-        SafeTeleport(VOLCANO_FALLBACK, Vector3.new(0, 2, 0))
+    elseif not IsInVolcano() then
+        if not FarmFlyTo(
+            VOLCANO_FALLBACK,
+            math.min(State.FarmFlightSpeed, 350),
+            true
+        ) then
+            return false
+        end
     end
 
     local deadline = os.clock() + 3
@@ -1624,18 +1926,18 @@ local function ReturnFromVolcanoToPlot()
 
     if IsInVolcano() then
         if validate and validate:IsA("BasePart") then
-            if State.FarmMoveMode == "Instant" then
-                SafeTeleport(validate.Position, Vector3.new(0, 2, 0))
-            else
-                GlideTo(
-                    validate.Position + Vector3.new(0, 2, 0),
-                    math.min(State.TravelSpeed, 150),
-                    FarmIsRunning
-                )
-            end
+            FarmFlyTo(
+                validate.Position,
+                math.min(State.FarmFlightSpeed, 300),
+                true
+            )
             task.wait(0.25)
         else
-            SafeTeleport(VOLCANO_FALLBACK, Vector3.new(0, 2, 0))
+            FarmFlyTo(
+                VOLCANO_FALLBACK,
+                math.min(State.FarmFlightSpeed, 300),
+                true
+            )
             task.wait(0.25)
         end
     end
@@ -1652,18 +1954,12 @@ local function FarmMoveTo(position)
         return false
     end
 
-    if State.FarmMoveMode == "Instant" then
-        local ok = SafeTeleport(position, Vector3.new(0, 3, 0))
-        if ok then
-            task.wait(0.10)
-        end
-        return ok
-    end
-
-    return GlideTo(
-        position + Vector3.new(0, 3, 0),
-        State.TravelSpeed,
-        FarmIsRunning
+    -- Auto Farm não usa mais SafeTeleport/Instant.
+    -- Sempre sobe, voa até a coluna do ovo e desce perto dele.
+    return FarmFlyTo(
+        position,
+        State.FarmFlightSpeed,
+        true
     )
 end
 
@@ -1685,15 +1981,160 @@ local function ReturnToPlotForFarm()
         return false
     end
 
-    if State.FarmReturnInstant then
-        return SafeTeleport(pivot.Position, Vector3.new(0, 3, 0))
+    -- Depois de coletar, sobe novamente e volta voando.
+    return FarmFlyTo(
+        pivot.Position,
+        State.FarmFlightSpeed,
+        true
+    )
+end
+
+local function GetPlotHoverPosition()
+    local plot = GetMyPlot()
+    if not plot then
+        return nil
     end
 
-    return GlideTo(
-        pivot.Position + Vector3.new(0, 3, 0),
-        State.TravelSpeed,
-        FarmIsRunning
+    local ok, pivot = pcall(function()
+        return plot:GetPivot()
+    end)
+
+    if not ok or not pivot then
+        return nil
+    end
+
+    return pivot.Position + Vector3.new(
+        0,
+        math.clamp(
+            tonumber(State.FarmHoverHeight) or 55,
+            25,
+            150
+        ),
+        0
     )
+end
+
+local function HoverAbovePlot()
+    if not FarmIsRunning() then
+        return false
+    end
+
+    local hoverPosition = GetPlotHoverPosition()
+    if not hoverPosition then
+        return false
+    end
+
+    local _, root = GetCharacter()
+    if not root then
+        return false
+    end
+
+    local hoverRadius = math.clamp(
+        tonumber(State.FarmHoverRadius) or 18,
+        8,
+        40
+    )
+
+    if (root.Position - hoverPosition).Magnitude <= hoverRadius then
+        SetFarmPhase("Hovering at base")
+        return true
+    end
+
+    SetFarmPhase("Returning to base")
+    return FarmFlyTo(
+        hoverPosition,
+        State.FarmFlightSpeed,
+        false
+    )
+end
+
+local function ResolveFarmTarget(uid, fallbackName)
+    if not uid then
+        return nil
+    end
+
+    local active = GetActiveEggFolder()
+    local live = active and active:FindFirstChild(uid)
+
+    if not live then
+        return nil
+    end
+
+    local eggName = live:GetAttribute("Egg")
+    if type(eggName) ~= "string" or eggName == "" then
+        eggName = fallbackName or live.Name
+    end
+
+    local position = live:GetAttribute("Position")
+    if typeof(position) == "CFrame" then
+        position = position.Position
+    end
+
+    if typeof(position) ~= "Vector3" then
+        position = GetEggPosition(live)
+    end
+
+    if not position then
+        return nil
+    end
+
+    return {
+        Instance = live,
+        UID = live.Name,
+        ID = live.Name,
+        Name = eggName,
+        Position = position,
+        Distance = 0,
+        Weight = GetEggWeight(live) or 0,
+        Luck = GetEggLuck(live) or 0,
+        Mutation = GetEggMutation(live),
+        Rarity = GetEggRarity(eggName, live),
+    }
+end
+
+local function ChooseAndCommitFarmTarget()
+    local candidates = GetFarmCandidates()
+    local target = SelectBestFarmCandidate(candidates)
+
+    if not target then
+        return nil
+    end
+
+    State.FarmTargetUID = target.UID
+    State.FarmTargetName = target.Name
+    State.FarmTargetPosition = target.Position
+    State.FarmTargetRetries = 0
+
+    return target
+end
+
+local function GetCurrentFarmTarget()
+    if not State.FarmTargetUID then
+        return nil
+    end
+
+    local target = ResolveFarmTarget(
+        State.FarmTargetUID,
+        State.FarmTargetName
+    )
+
+    if target then
+        State.FarmTargetName = target.Name
+        State.FarmTargetPosition = target.Position
+    end
+
+    return target
+end
+
+local function FailCurrentFarmTarget(message, cooldown)
+    local uid = State.FarmTargetUID
+
+    if uid then
+        FailedFarmTargets[uid] = os.clock() + (cooldown or 5)
+    end
+
+    ClearFarmTarget()
+    SetFarmPhase(message or "Changing target")
 end
 
 local function FarmOnce()
@@ -1703,63 +2144,74 @@ local function FarmOnce()
 
     FarmBusy = true
 
-    local success = pcall(function()
+    local ok = pcall(function()
         if not FarmIsRunning() then
             return
         end
 
-        -- 1) Nunca pegue um segundo ovo enquanto carrega o anterior.
+        -- HOLDING
         if GetBasketCount() > 0 then
-            FarmStatus("Returning to base...")
-            if IsInVolcano() then
-                ReturnFromVolcanoToPlot()
-                task.wait(0.20)
+            SetFarmPhase("Carrying egg")
+
+            if State.ReturnToPlot then
+                FarmDeposit()
             end
-            ReturnToPlotForFarm()
+
             return
         end
 
-        -- 2) Monta um pet válido antes de iniciar o trajeto.
-        if State.AutoMountPet and not IsRidingPet() then
-            FarmStatus("Mounting pet...")
-            MountBestPet()
-            task.wait(0.35)
+        -- MOUNT
+        if State.FarmRequireMountedPet
+            and State.AutoMountPet
+            and not IsRidingPet() then
 
-            if not IsRidingPet() then
-                FarmStatus("Pet mount failed.")
-                task.wait(0.50)
+            SetFarmPhase("Mounting pet")
+
+            local mounted = MountBestPet()
+
+            if not mounted and not IsRidingPet() then
+                FarmStatus("Waiting for a usable pet")
+                return
+            end
+
+            task.wait(0.25)
+        end
+
+        if not FarmIsRunning() then
+            return
+        end
+
+        -- SELECT
+        local target = GetCurrentFarmTarget()
+
+        if not target then
+            SetFarmPhase("Scanning eggs")
+            target = ChooseAndCommitFarmTarget()
+
+            if not target then
+                SetFarmPhase("No target - hovering")
+                HoverAbovePlot()
                 return
             end
         end
 
-        -- 3) A lista do farm vem somente de ActiveEggs.
-        local candidates = GetFarmCandidates()
-        local target = SelectBestFarmCandidate(candidates)
-
-        if not target then
-            FarmStatus("No matching active egg.")
-            task.wait(0.30)
-            return
-        end
-
+        -- SPECIAL AREA
         local volcanic = string.lower(target.Name) == "volcanic egg"
 
-        -- 4) Tratamento específico do Volcano.
         if volcanic and State.VolcanicSupport then
             if not IsInVolcano() then
-                FarmStatus("Entering volcano...")
+                SetFarmPhase("Entering volcano")
 
                 if not EnterVolcano() then
-                    FarmStatus("Volcano entry failed.")
-                    FailedFarmTargets[target.UID] = os.clock() + 3
+                    FailCurrentFarmTarget("Volcano entry failed", 4)
                     return
                 end
 
-                task.wait(0.25)
+                return
             end
         elseif IsInVolcano() then
+            SetFarmPhase("Leaving volcano")
             ReturnFromVolcanoToPlot()
-            task.wait(0.25)
             return
         end
 
@@ -1767,150 +2219,132 @@ local function FarmOnce()
             return
         end
 
-        -- 5) Revalida o alvo antes de mover. O ovo pode ter desaparecido.
-        local liveTarget = GetLiveActiveEgg(target.UID)
-        if not liveTarget then
-            FailedFarmTargets[target.UID] = os.clock() + 2
+        -- REVALIDATE POSITION
+        local refreshed = GetCurrentFarmTarget()
+
+        if not refreshed then
+            FailCurrentFarmTarget("Target disappeared", 2)
             return
         end
 
-        local livePosition = liveTarget:GetAttribute("Position")
-
-        if typeof(livePosition) == "CFrame" then
-            livePosition = livePosition.Position
-        end
-
-        if typeof(livePosition) ~= "Vector3" then
-            livePosition = GetEggPosition(liveTarget)
-        end
-
-        if not livePosition then
-            FailedFarmTargets[target.UID] = os.clock() + 3
-            FarmStatus("Target position unavailable.")
-            return
-        end
-
-        target.Position = livePosition
+        target = refreshed
 
         local _, root = GetCharacter()
+
         if not root then
-            FarmStatus("Character not ready.")
             return
         end
 
-        target.Distance = (target.Position - root.Position).Magnitude
-
-        -- 6) Movimento: o mesmo padrão usado no source open-source:
-        -- teleporta até a posição quando está longe e deixa o próximo
-        -- ciclo fazer a coleta já estando na área de pickup.
+        local distance = (target.Position - root.Position).Magnitude
         local pickupRadius = math.clamp(
             tonumber(State.FarmPickupRadius) or 20,
             8,
             30
         )
 
-        if target.Distance > pickupRadius then
-            FarmStatus("Going to " .. tostring(target.Name) .. "...")
+        -- FLY
+        if distance > pickupRadius then
+            SetFarmPhase("Flying to " .. tostring(target.Name))
 
-            if not FarmMoveTo(target.Position) then
-                FailedFarmTargets[target.UID] = os.clock() + 4
-                FarmStatus("Movement failed.")
+            if not FarmFlyTo(
+                target.Position,
+                State.FarmFlightSpeed,
+                true
+            ) then
+                FailCurrentFarmTarget("Flight failed", 4)
                 return
             end
 
-            task.wait(0.15)
-        end
-
-        if not FarmIsRunning() then
             return
         end
 
-        -- 7) Revalidação final do UID/posição.
-        liveTarget = GetLiveActiveEgg(target.UID)
+        -- FINAL REVALIDATION + PICKUP
+        target = GetCurrentFarmTarget()
 
-        if not liveTarget then
-            FailedFarmTargets[target.UID] = os.clock() + 2
+        if not target then
+            FailCurrentFarmTarget("Target expired", 2)
             return
         end
 
-        livePosition = liveTarget:GetAttribute("Position")
-        if typeof(livePosition) == "CFrame" then
-            livePosition = livePosition.Position
-        end
-        if typeof(livePosition) ~= "Vector3" then
-            livePosition = GetEggPosition(liveTarget)
+        _, root = GetCharacter()
+
+        if not root then
+            return
         end
 
-        if livePosition then
-            local _, liveRoot = GetCharacter()
-            if liveRoot and
-                (livePosition - liveRoot.Position).Magnitude > pickupRadius then
+        distance = (target.Position - root.Position).Magnitude
 
-                FarmStatus("Position changed; correcting...")
-                if not FarmMoveTo(livePosition) then
-                    FailedFarmTargets[target.UID] = os.clock() + 4
-                    return
-                end
-
-                task.wait(0.10)
-            end
+        if distance > pickupRadius then
+            SetFarmPhase("Target moved")
+            return
         end
 
-        -- 8) Coleta pelo UID real do ActiveEggs.
-        FarmStatus("Collecting " .. tostring(target.Name) .. "...")
+        SetFarmPhase("Collecting " .. tostring(target.Name))
 
         local picked = AttemptPickup({
-            UID = liveTarget.Name,
-            ID = liveTarget.Name,
+            UID = target.UID,
+            ID = target.UID,
             Name = target.Name,
-            Rendered = target.Rendered,
-            Instance = liveTarget,
+            Instance = target.Instance,
         })
 
         if not picked then
-            FailedFarmTargets[target.UID] = os.clock() + 7
-            FarmStatus("Pickup failed; target skipped briefly.")
-            task.wait(math.max(
-                0.10,
-                tonumber(State.FarmRetryDelay) or 0.30
-            ))
+            State.FarmTargetRetries =
+                State.FarmTargetRetries + 1
+
+            if State.FarmTargetRetries >= 3 then
+                FailCurrentFarmTarget(
+                    "Pickup failed - changing target",
+                    6
+                )
+            else
+                FarmStatus(
+                    "Pickup retry " ..
+                    tostring(State.FarmTargetRetries)
+                )
+            end
+
             return
         end
 
         FailedFarmTargets[target.UID] = nil
-        FarmStatus("Collected " .. tostring(target.Name))
 
-        -- 9) Espera um pouco para o Basket atualizar e então volta à base.
-        task.wait(math.max(
-            0.08,
-            tonumber(State.FarmPickupWait) or 0.20
-        ))
+        -- CONFIRM CARRY
+        local deadline = os.clock() + 2
 
-        if not FarmIsRunning() then
+        while FarmIsRunning()
+            and os.clock() < deadline
+            and GetBasketCount() <= 0 do
+
+            task.wait(0.05)
+        end
+
+        if GetBasketCount() <= 0 then
+            FailCurrentFarmTarget("Pickup not confirmed", 5)
             return
         end
 
-        if GetBasketCount() > 0 and State.ReturnToPlot then
-            FarmStatus("Returning to base...")
+        ClearFarmTarget()
 
-            if IsInVolcano() then
-                ReturnFromVolcanoToPlot()
-                task.wait(0.15)
-            end
-
-            ReturnToPlotForFarm()
-            task.wait(0.20)
+        -- DEPOSIT
+        if State.ReturnToPlot then
+            FarmDeposit()
+        else
+            SetFarmPhase("Collected")
         end
     end)
 
     FarmBusy = false
 
-    if not success then
-        FarmStatus("Farm cycle recovered from an error.")
-        task.wait(math.max(
-            0.15,
-            tonumber(State.FarmRetryDelay) or 0.30
-        ))
+    if not ok and FarmIsRunning() then
+        ClearFarmTarget()
+        SetFarmPhase("Farm recovered from error")
+        task.wait(
+            math.max(
+                0.15,
+                tonumber(State.FarmRetryDelay) or 0.30
+            )
+        )
     end
 end
 
@@ -2890,13 +3324,13 @@ end
 local okWindow, Window = pcall(function()
     return Rayfield:CreateWindow({
         name = "Montar um Pet",
-        subtitle = "MASTER v7 • Delta Mobile",
+        subtitle = "MASTER v10 • Delta Mobile",
         sidebarLayout = true,
         toggleUIKeybind = "K",
         configuration = {
             autoSave = true,
             autoLoad = true,
-            fileName = "MontarUmPet_Master_v7",
+            fileName = "MontarUmPet_Master_v10",
         },
     })
 end)
@@ -2959,8 +3393,17 @@ TabFarm:CreateToggle({
     value = false,
     callback = function(value)
         State.AutoFarm = value
-        if not value then
+
+        if value then
+            ClearFarmTarget()
+            State.FarmPhase = "Starting"
+            LastFarmStatus = "Starting Auto Farm"
+        else
             CancelGlide()
+            DestroyFarmFlightMovers()
+            ClearFarmTarget()
+            State.FarmPhase = "Stopped"
+            FarmBusy = false
         end
     end,
 })
@@ -3115,7 +3558,106 @@ TabFarm:CreateSlider({
     end,
 })
 
+TabFarm:CreateSection({name = "Voo do Auto Farm"})
+
+TabFarm:CreateSlider({
+    name = "Velocidade do voo",
+    flag = "FarmFlightSpeed",
+    range = {100, 2000},
+    increment = 25,
+    value = State.FarmFlightSpeed,
+    suffix = " studs/s",
+    callback = function(value)
+        State.FarmFlightSpeed = math.clamp(
+            math.floor(tonumber(value) or 750),
+            100,
+            2000
+        )
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Altura de voo",
+    flag = "FarmFlightHeight",
+    range = {20, 200},
+    increment = 5,
+    value = State.FarmFlightHeight,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmFlightHeight = math.clamp(
+            math.floor(tonumber(value) or 60),
+            20,
+            200
+        )
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Altura de espera na base",
+    flag = "FarmHoverHeight",
+    range = {25, 150},
+    increment = 5,
+    value = State.FarmHoverHeight,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmHoverHeight = math.clamp(
+            math.floor(tonumber(value) or 55),
+            25,
+            150
+        )
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Raio para coletar",
+    flag = "FarmPickupRadius",
+    range = {8, 30},
+    increment = 1,
+    value = State.FarmPickupRadius,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmPickupRadius = math.clamp(
+            math.floor(tonumber(value) or 20),
+            8,
+            30
+        )
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Altura ao pegar",
+    flag = "FarmFlightDescendHeight",
+    range = {1, 8},
+    increment = 1,
+    value = State.FarmFlightDescendHeight,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmFlightDescendHeight = math.clamp(
+            math.floor(tonumber(value) or 3),
+            1,
+            8
+        )
+    end,
+})
+
 TabFarm:CreateSection({name = "Controle"})
+
+TabFarm:CreateButton({
+    name = "Estado do Auto Farm",
+    description = "Mostra a fase atual e o alvo.",
+    callback = function()
+        pcall(function()
+            Window:Notify({
+                title = "Auto Farm",
+                content =
+                    tostring(State.FarmPhase) ..
+                    " • alvo: " ..
+                    tostring(State.FarmTargetName or "nenhum"),
+                duration = 4,
+            })
+        end)
+    end,
+})
 
 TabFarm:CreateButton({
     name = "Status do Auto Farm",
@@ -3597,7 +4139,13 @@ TabConfig:CreateButton({
 
 local FarmLoop = task.spawn(function()
     while Running do
-        task.wait(0.15)
+        task.wait(
+            math.clamp(
+                tonumber(State.FarmLoopDelay) or 0.10,
+                0.05,
+                0.50
+            )
+        )
 
         if Running and State.AutoFarm and not FarmBusy then
             FarmOnce()
@@ -3625,6 +4173,8 @@ StopHandler = function()
     end
 
     CancelGlide()
+    DestroyFarmFlightMovers()
+    ClearFarmTarget()
     Running = false
 
     State.AutoFarm = false
