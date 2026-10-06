@@ -1,19 +1,22 @@
 --============================================================--
--- MONTAR UM PET - MASTER v36 • UI v32 RESURRECTION • TOP HUB 2026 • UI ORIGINAL v15 • DELTA STABLE
+-- MONTAR UM PET - MASTER v23.3 • UI ORIGINAL v15 • DELTA STABLE
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
--- Foco: Delta Mobile + Auto Farm Seguro 2026 + benchmark Top 7 + automações verificadas + UI v15 estável
+-- Foco: Delta Mobile + Auto Farm por estados + voo sem colisão + retorno/entrega robustos + cleanup robusto
 --
--- Pesquisa cruzada: Bac0nHck, SixZensED, VintHub, Iamdungx, Akaz, Sena, Zanji/Ouroboros, Sai Ops e Mystrix.
--- Nesta versão, a UI v15 fica congelada; toda a camada 2026 nova é criada
--- depois da UI e desabilitada por padrão. Se um módulo avançado falhar,
--- a interface e o Auto Farm principal continuam independentes.
+-- Pesquisa usada para esta versão:
+--   * VintHub / Ride a Pet.lua
+--   * Iamdungx / roblox-lua / ride-a-pet.lua
+--   * SixZensED / sixly-script / games/ride-a-pet.lua
 --
--- APIs verificadas publicamente e usadas com confirmação de estado:
--- EggPickup, EggPlaced, Hatch, PetDismount, PickupPet, PlacePet,
--- FeedPet, BuyWithCash, FavoritePet, ClaimIndexReward, além de
--- ActiveEggs, Basket, FreeNests, EggTimers e dados de pets/comida.
+-- Mecânicas implementadas com base em caminhos/remotes encontrados
+-- publicamente: Game.EggPickup, Game.Mounting, GameData.Eggs,
+-- ServerData.ActiveEggs, Plots.NestsOwnerLoaded, InVolcano, IsRiding.
+--
+-- Recursos anunciados por hubs públicos, mas sem remote/path confiável
+-- confirmado nas fontes abertas consultadas (Auto Place/Hatch/Feed/Shop/
+-- Rebirth etc.), NÃO recebem botões falsos nesta versão.
 --============================================================--
 
 -- Espera o cliente Roblox terminar de carregar antes de iniciar a UI.
@@ -71,7 +74,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 for _, tokenName in ipairs(TOKEN_NAMES) do
     pcall(function()
         local oldToken = ENV[tokenName]
-        if oldToken and type(oldToken.Stop) == "function" then
+        if oldToken and oldToken.Stop then
             oldToken:Stop()
         end
     end)
@@ -128,21 +131,7 @@ pcall(function()
     ReplaceEvent:Fire()
 end)
 
--- Dá tempo para a execução anterior destruir explicitamente a janela antes
--- de a nova execução chegar ao CreateWindow.
-task.wait(0.20)
-
-pcall(function()
-    CleanupOldRayfield(game:GetService("CoreGui"))
-end)
-pcall(function()
-    if typeof(gethui) == "function" then
-        CleanupOldRayfield(gethui())
-    end
-end)
-pcall(function()
-    CleanupOldRayfield(PlayerGui)
-end)
+task.wait(0.10)
 
 local generation = tonumber(ControlFolder:GetAttribute("Generation")) or 0
 generation = generation + 1
@@ -245,10 +234,7 @@ local function LooksLikeOurRayfieldGui(gui)
                 or t:find("MASTER v6", 1, true)
                 or t:find("MASTER v7", 1, true)
                 or t:find("MASTER v14", 1, true)
-                or t:find("MASTER v27 • Auto Farm Seguro 2026", 1, true)
-                or t:find("MASTER v15 • Delta Mobile", 1, true)
-                or t:find("MASTER v15", 1, true)
-                or t:find("Delta Mobile", 1, true) then
+                or t:find("MASTER v15", 1, true) then
                 hasHubSubtitle = true
             end
 
@@ -327,16 +313,12 @@ local State = {
 
     -- Auto Farm engine
     FarmMoveMode = "Instant",      -- Instant or Tween
-    FarmPickupMode = "Auto",       -- Auto, Prompt, Remote
+    FarmPickupMode = "Remote",     -- Auto, Prompt, Remote
+    FarmPickupRetries = 6,
+    FarmPickupWait = 0.25,
     FarmPickupRadius = 12,
+    FarmRetryDelay = 0.30,
     FarmReturnInstant = true,
-    -- Perfis 2026: combina scanner, coleta remota/prompt e glide.
-    FarmEngineProfile = "Max Confiável 2026",
-    FarmRenderedFallback = true,
-    FarmRemoteFallback = true,
-    FarmPromptFallback = true,
-    FarmAutoRecover = true,
-    FarmRetryAfterError = 1.0,
 
     -- Auto Farm Flight
     FarmFlightSpeed = 300,
@@ -344,37 +326,13 @@ local State = {
     -- Mantém o HumanoidRootPart alguns studs acima do ovo/solo.
     -- Isso evita que os pés atravessem o chão quando o noclip está ativo.
     FarmFlightDescendHeight = 6,
+    FarmFlightArriveRadius = 4,
     FarmArrivalPause = 0.45,
     FarmPickupPause = 0.45,
     FarmPickupApproachHeight = 6,
     FarmPickupRetryApproach = true,
     FarmBasePause = 2.50,
     FarmDepositWait = 3.50,
-    -- Rota de retorno 2026: chega acima do lado da base, desce ao lado,
-    -- faz uma pequena pausa, entra no plot e só então procura o ninho.
-    FarmBaseSideOffset = 26,
-    FarmBaseSideHeight = 6,
-    FarmBaseEntryInset = 14,
-    FarmBaseSidePause = 0.60,
-    FarmBaseEntryPause = 0.80,
-    FarmBaseEntrySpeed = 110,
-    FarmNestApproachSpeed = 100,
-    FarmBaseConfirmTimeout = 2.50,
-    FarmNestWait = 8.0,
-    -- Controles internos expostos na UI.
-    FarmPickupRetries = 6,
-    FarmPickupWait = 0.25,
-    FarmRetryDelay = 0.30,
-    FarmFlightArriveRadius = 4,
-    FarmBaseEntryHeight = 7,
-    FarmBaseApproachSpeed = 140,
-    FarmNestApproachHeight = 6,
-    FarmNestPoll = 0.25,
-    -- Proteção adicional contra atravessar o chão.
-    FarmFloorGuard = true,
-    FarmFloorClearance = 6,
-    FarmMaxDescendSpeed = 70,
-    FarmPendingEggs = {},
 
     -- Auto Farm state machine
     FarmPhase = "Idle",
@@ -385,26 +343,7 @@ local State = {
     FarmHoverRadius = 18,
     FarmHoverHeight = 55,
     FarmLoopDelay = 0.10,
-    FarmCycleDelay = 1.50,
-    FarmNoTargetDelay = 1.00,
     FarmRequireMountedPet = false,
-    FarmWatchdog = true,
-    FarmWatchdogTimeout = 4.0,
-    FarmCycles = 0,
-    FarmEggsDelivered = 0,
-    FarmFailures = 0,
-
-    -- Automacoes 2026 verificadas (desligadas por padrao).
-    AutoPlaceEggs = false,
-    AutoHatchEggs = false,
-    AutoBestPets = false,
-    AutoClaimIndex = false,
-    AutoBuyFood = false,
-    AutoFeedPets = false,
-    AutoFavorites = false,
-    BestPetMetric = "Income",
-    AdvancedInterval = 1.0,
-    AdvancedStatus = "Aguardando modulos 2026",
 
     ESPEnabled = false,
     ESPOnlySelected = false,
@@ -519,12 +458,12 @@ local function RefreshCharacter()
     Character, RootPart = GetCharacter()
 end
 
-pcall(RefreshCharacter)
+RefreshCharacter()
 
-pcall(function() Track(LocalPlayer.CharacterAdded:Connect(function(character)
+Track(LocalPlayer.CharacterAdded:Connect(function(character)
     Character = character
     RootPart = character:WaitForChild("HumanoidRootPart", 5) or character.PrimaryPart
-end) end)
+end))
 
 --============================================================--
 -- DESCOBERTA DO GAME API
@@ -543,11 +482,6 @@ end
 local function GetMountRemote()
     local gameRemotes = GetGameRemotes()
     return gameRemotes and gameRemotes:FindFirstChild("Mounting")
-end
-
-local function GetEggPlacedRemote()
-    local gameRemotes = GetGameRemotes()
-    return gameRemotes and gameRemotes:FindFirstChild("EggPlaced")
 end
 
 local EggData = {}
@@ -671,12 +605,7 @@ local function LoadEggData()
     ResetRarities()
 end
 
-pcall(LoadEggData)
-if #EggNames == 0 then
-    for _, eggName in ipairs(FallbackEggNames) do table.insert(EggNames, eggName) end
-    SortEggNames()
-    ResetRarities()
-end
+LoadEggData()
 
 local RarityPriority = {
     Common = 1,
@@ -736,7 +665,6 @@ local function GetGameFeatureStatus()
     return {
         EggPickup = (GetEggPickupRemote() and GetEggPickupRemote():IsA("RemoteEvent")) or false,
         Mounting = (GetMountRemote() and GetMountRemote():IsA("RemoteEvent")) or false,
-        EggPlaced = (GetEggPlacedRemote() and GetEggPlacedRemote():IsA("RemoteEvent")) or false,
         EggData = next(EggData) ~= nil,
         ActiveEggs = ReplicatedStorage:FindFirstChild("ServerData")
             and ReplicatedStorage.ServerData:FindFirstChild("ActiveEggs") ~= nil,
@@ -1090,99 +1018,50 @@ end
 
 local function GetFarmCandidates()
     local _, root = GetCharacter()
-    if not root then
+    local activeEggs = GetActiveEggFolder()
+
+    if not root or not activeEggs then
         return {}
     end
 
     local result = {}
-    local seen = {}
-    local activeEggs = GetActiveEggFolder()
-    local activeCount = 0
 
-    -- Caminho principal: ServerData.ActiveEggs (UID real do servidor).
-    if activeEggs then
-        for _, egg in ipairs(activeEggs:GetChildren()) do
-            if egg:IsA("Configuration") then
-                local eggName = egg:GetAttribute("Egg")
-                local privateTo = egg:GetAttribute("PrivateTo")
-                local collected = tostring(LocalPlayer:GetAttribute("CollectedEggs") or "")
-                local alreadyCollected = string.find("," .. collected .. ",", "," .. tostring(egg.Name) .. ",", 1, true) ~= nil
-                local privateMismatch = privateTo ~= nil and tostring(privateTo) ~= tostring(LocalPlayer.UserId)
+    for _, egg in ipairs(activeEggs:GetChildren()) do
+        if egg:IsA("Configuration") then
+            local eggName = egg:GetAttribute("Egg")
 
-                if type(eggName) == "string"
-                    and not alreadyCollected
-                    and not privateMismatch
-                    and MeetsFilters(egg, eggName) then
+            if type(eggName) == "string" and MeetsFilters(egg, eggName) then
+                local position = egg:GetAttribute("Position")
 
-                    local position = egg:GetAttribute("Position")
-                    if typeof(position) == "CFrame" then
-                        position = position.Position
-                    end
-                    if typeof(position) ~= "Vector3" then
-                        position = GetEggPosition(egg)
-                    end
-
-                    if position then
-                        local uid = egg.Name
-                        if not FailedFarmTargets[uid] or os.clock() >= FailedFarmTargets[uid] then
-                            activeCount = activeCount + 1
-                            seen[uid] = true
-                            local rarity = GetEggRarity(eggName, egg)
-                            result[#result + 1] = {
-                                Instance = egg,
-                                UID = uid,
-                                ID = uid,
-                                Name = eggName,
-                                Position = position,
-                                Distance = (position - root.Position).Magnitude,
-                                Weight = GetEggWeight(egg) or 0,
-                                Luck = GetEggLuck(egg) or 0,
-                                Rarity = rarity,
-                                RarityScore = RarityPriority[rarity] or 0,
-                                Mutation = GetEggMutation(egg),
-                                Synthetic = false,
-                            }
-                        end
-                    end
+                if typeof(position) == "CFrame" then
+                    position = position.Position
                 end
-            end
-        end
-    end
 
-    -- Fallback importante: alguns carregamentos/executores expõem RenderedEggs
-    -- antes de ActiveEggs. Os hubs públicos de 2026 usam este caminho para
-    -- localizar ovos visuais; aqui tentamos recuperar o UID real quando possível.
-    if State.FarmRenderedFallback then
-        local rendered = GetRenderedEggFolder()
-        if rendered then
-            for _, model in ipairs(rendered:GetChildren()) do
-                local position = GetEggPosition(model)
-                local eggName = GetRealRenderedEggName(model)
+                if typeof(position) ~= "Vector3" then
+                    position = GetEggPosition(egg)
+                end
 
-                if position and type(eggName) == "string" and EggData[eggName]
-                    and IsSelectedForFarm(eggName)
-                    and MeetsFilters(model, eggName) then
+                if position then
+                    local weight = GetEggWeight(egg) or 0
+                    local luck = GetEggLuck(egg) or 0
+                    local rarity = GetEggRarity(eggName, egg)
+                    local uid = egg.Name
 
-                    local active = FindActiveEggNear(position, 18)
-                    local uid = active and active.Name or model.Name
-                    if not seen[uid] and (not FailedFarmTargets[uid] or os.clock() >= FailedFarmTargets[uid]) then
-                        seen[uid] = true
-                        local source = active or model
-                        local rarity = GetEggRarity(eggName, source)
+                    if not FailedFarmTargets[uid]
+                        or os.clock() >= FailedFarmTargets[uid] then
+
                         result[#result + 1] = {
-                            Instance = source,
-                            Rendered = model,
+                            Instance = egg,
                             UID = uid,
                             ID = uid,
                             Name = eggName,
                             Position = position,
                             Distance = (position - root.Position).Magnitude,
-                            Weight = GetEggWeight(source) or 0,
-                            Luck = GetEggLuck(source) or 0,
+                            Weight = weight,
+                            Luck = luck,
                             Rarity = rarity,
                             RarityScore = RarityPriority[rarity] or 0,
-                            Mutation = GetEggMutation(source),
-                            Synthetic = active == nil,
+                            Mutation = GetEggMutation(egg),
                         }
                     end
                 end
@@ -1260,148 +1139,13 @@ local function GetMyPlot()
         return nil
     end
 
-    -- Prefer the same owner representation used by current public scripts.
     for _, plot in ipairs(plots:GetChildren()) do
-        local data = plot:FindFirstChild("Data")
-        local owner = data and data:FindFirstChild("Owner")
-        if owner and owner:IsA("ObjectValue") and owner.Value == LocalPlayer then
-            return plot
-        end
-    end
-
-    -- Fallback for builds exposing only the loaded-owner attribute.
-    for _, plot in ipairs(plots:GetChildren()) do
-        local loaded = plot:GetAttribute("NestsOwnerLoaded")
-        if loaded == LocalPlayer.UserId then
+        if plot:GetAttribute("NestsOwnerLoaded") == LocalPlayer.UserId then
             return plot
         end
     end
 
     return nil
-end
-
-local FarmUtil = {}
-
-function FarmUtil.GetFreeNests()
-    local plot = GetMyPlot()
-    local nests = plot and plot:FindFirstChild("Nests")
-    if not nests then
-        return {}
-    end
-
-    local result = {}
-
-    for _, nest in ipairs(nests:GetChildren()) do
-        local unlocked = nest:GetAttribute("Unlocked")
-        local occupied = nest:GetAttribute("Occupied")
-
-        -- Different builds have used either an explicit Unlocked flag or a
-        -- nest that is immediately usable when the attribute is absent.
-        if unlocked ~= false and occupied ~= true then
-            table.insert(result, nest)
-        end
-    end
-
-    table.sort(result, function(a, b)
-        local an = tonumber(a.Name) or math.huge
-        local bn = tonumber(b.Name) or math.huge
-        if an == bn then
-            return tostring(a.Name) < tostring(b.Name)
-        end
-        return an < bn
-    end)
-
-    return result
-end
-
-function FarmUtil.GetEggTools()
-    local result = {}
-    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-    local character = LocalPlayer.Character
-
-    for _, container in ipairs({backpack, character}) do
-        if container then
-            for _, tool in ipairs(container:GetChildren()) do
-                if tool:IsA("Tool") and EggData[tool.Name] and not tool:GetAttribute("PetKey") then
-                    table.insert(result, tool)
-                end
-            end
-        end
-    end
-
-    table.sort(result, function(a, b)
-        local al = KnownEggLuck[a.Name] or 0
-        local bl = KnownEggLuck[b.Name] or 0
-        if al == bl then
-            return tostring(a.Name) < tostring(b.Name)
-        end
-        return al > bl
-    end)
-
-    return result
-end
-
-function FarmUtil.GetBasketEggNames()
-    local basket = LocalPlayer:FindFirstChild("Basket")
-    if not basket then
-        return {}
-    end
-
-    local expected = {}
-    for _, egg in ipairs(basket:GetChildren()) do
-        local name = egg:GetAttribute("Egg")
-        if type(name) == "string" and name ~= "" then
-            expected[name] = (expected[name] or 0) + 1
-        end
-    end
-    return expected
-end
-
-function FarmUtil.SnapshotEggTools()
-    local snapshot = {}
-    for _, tool in ipairs(FarmUtil.GetEggTools()) do
-        snapshot[tool] = true
-    end
-    return snapshot
-end
-
-function FarmUtil.GetBasketCount()
-    local basket = LocalPlayer:FindFirstChild("Basket")
-    return basket and #basket:GetChildren() or 0
-end
-
-function FarmUtil.WaitForReturnedEggTools(expected, beforeTools, timeout)
-    local deadline = os.clock() + (timeout or 5)
-
-    while FarmIsRunning() and os.clock() < deadline do
-        local basketCount = FarmUtil.GetBasketCount()
-        local currentTools = FarmUtil.GetEggTools()
-        local received = {}
-
-        for _, tool in ipairs(currentTools) do
-            if not beforeTools[tool] then
-                received[tool.Name] = (received[tool.Name] or 0) + 1
-            end
-        end
-
-        local enough = basketCount <= 0
-        if enough then
-            for name, count in pairs(expected) do
-                if (received[name] or 0) < count then
-                    enough = false
-                    break
-                end
-            end
-        end
-
-        if enough then
-            return true
-        end
-
-        task.wait(0.10)
-    end
-
-    return false
 end
 
 local function IsInVolcano()
@@ -1635,8 +1379,8 @@ end
 
 --============================================================--
 -- AUTO FARM FLIGHT ENGINE
--- Modelo de fases: CRUZEIRO = noclip ON; APROXIMAÇÃO/DESCIDA = noclip OFF;
--- PARADO = colisão restaurada. Não usa teleport para o ciclo do farm.
+-- Vai voando em altitude, desce apenas no alvo, coleta e
+-- volta voando para a base. Não usa teleport para o ciclo do farm.
 --============================================================--
 
 local FarmFlightVelocity = nil
@@ -1750,7 +1494,7 @@ local function GetSafeDescentPosition(targetPosition, extraHeight)
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
     -- Altura mínima conservadora para não colocar o RootPart dentro do solo.
-    local bodyClearance = math.max(3, tonumber(State.FarmFloorClearance) or 6)
+    local bodyClearance = 6
     if humanoid then
         bodyClearance = math.max(6, (tonumber(humanoid.HipHeight) or 2) + 3)
     end
@@ -1786,68 +1530,7 @@ local function GetSafeDescentPosition(targetPosition, extraHeight)
     )
 end
 
-local function GetFarmFloorY(position, rayLength)
-    if typeof(position) ~= "Vector3" then
-        return nil
-    end
-
-    local character = LocalPlayer.Character
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = character and {character} or {}
-    params.IgnoreWater = false
-
-    local origin = position + Vector3.new(0, 18, 0)
-    local direction = Vector3.new(0, -(rayLength or 140), 0)
-    local ok, hit = pcall(function()
-        return workspace:Raycast(origin, direction, params)
-    end)
-
-    if ok and hit and hit.Position then
-        return hit.Position.Y
-    end
-
-    return nil
-end
-
-local function EnforceFarmFloorSafety(root)
-    if not State.FarmFloorGuard or not root or not root.Parent then
-        return
-    end
-
-    local floorY = GetFarmFloorY(root.Position, 140)
-    if not floorY then
-        return
-    end
-
-    local clearance = math.max(3, tonumber(State.FarmFloorClearance) or 6)
-    local minimumY = floorY + clearance
-    local velocity = root.AssemblyLinearVelocity
-    local safeVertical = velocity.Y
-
-    -- Nunca deixa a queda passar do limite configurado.
-    if safeVertical < -math.abs(tonumber(State.FarmMaxDescendSpeed) or 70) then
-        safeVertical = -math.abs(tonumber(State.FarmMaxDescendSpeed) or 70)
-    end
-
-    -- Se já estiver muito próximo do chão, corta a componente descendente
-    -- e aplica uma pequena correção ascendente via física. Não teleporta.
-    if root.Position.Y <= minimumY + 1.5 then
-        safeVertical = math.max(safeVertical, 12)
-    end
-
-    if safeVertical ~= velocity.Y then
-        pcall(function()
-            root.AssemblyLinearVelocity = Vector3.new(velocity.X, safeVertical, velocity.Z)
-            if FarmFlightVelocity then
-                local current = FarmFlightVelocity.Velocity
-                FarmFlightVelocity.Velocity = Vector3.new(current.X, safeVertical, current.Z)
-            end
-        end)
-    end
-end
-
-local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier, allowNoclip)
+local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
     local character, root = GetCharacter()
 
     if not character or not root then
@@ -1862,11 +1545,14 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier, allow
         return false
     end
 
-    local useNoclip = allowNoclip == true
-    if useNoclip then
-        StartFarmNoclip()
-    else
-        StopFarmNoclip()
+    StartFarmNoclip()
+
+    if not FarmFlightVelocity or FarmFlightVelocity.Parent ~= root
+        or not FarmFlightGyro or FarmFlightGyro.Parent ~= root then
+
+        if not CreateFarmFlightMovers(root) then
+            return false
+        end
     end
 
     local maxSpeed = math.clamp(
@@ -1876,105 +1562,58 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier, allow
     )
 
     local arrivedRadius = math.clamp(
-        tonumber(State.FarmFlightArriveRadius) or 3,
-        1.5,
-        8
+        tonumber(State.FarmFlightArriveRadius) or 4,
+        2,
+        10
     )
 
     local distance = (targetPosition - root.Position).Magnitude
     local timeout = math.clamp(
-        (distance / math.max(maxSpeed, 1)) * (timeoutMultiplier or 2.5) + 2,
+        (distance / maxSpeed) * (timeoutMultiplier or 2.5) + 2,
         3,
-        45
+        35
     )
 
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    local oldPlatformStand = humanoid and humanoid.PlatformStand or nil
-    local oldAutoRotate = humanoid and humanoid.AutoRotate or nil
-
-    if humanoid then
-        humanoid.PlatformStand = true
-        humanoid.AutoRotate = false
-    end
-
     local started = os.clock()
-    local lastSamplePosition = root.Position
     local lastSampleTime = started
+    local lastSamplePosition = root.Position
     local stalledFor = 0
     local rescueCount = 0
 
-    -- VintHub-style glide: move in small frame-sized steps instead of doing
-    -- a single teleport. During active flight collision is disabled, and the
-    -- caller restores collision only after the flight has actually stopped.
     while FarmIsRunning()
         and character.Parent
         and root.Parent
         and os.clock() - started < timeout do
 
-        if useNoclip then
-            EnforceFarmNoclip()
-        end
-        EnforceFarmFloorSafety(root)
+        EnforceFarmNoclip()
 
-        local currentPos = root.Position
-        local delta = targetPosition - currentPos
+        local delta = targetPosition - root.Position
         local remaining = delta.Magnitude
 
         if remaining <= arrivedRadius then
             pcall(function()
-                root.CFrame = CFrame.new(targetPosition, targetPosition + root.CFrame.LookVector)
+                FarmFlightVelocity.Velocity = Vector3.zero
                 root.AssemblyLinearVelocity = Vector3.zero
                 root.AssemblyAngularVelocity = Vector3.zero
             end)
-            break
+            return true
         end
 
         local direction = delta.Unit
 
-        -- Desacelera perto do alvo para evitar passar do ponto.
+        -- Diminui a velocidade perto do ponto final para não passar direto.
         local currentSpeed = math.clamp(
-            math.min(maxSpeed, math.max(55, remaining * 6)),
-            55,
+            remaining * 5,
+            40,
             maxSpeed
         )
 
-        local dt = RunService.Heartbeat:Wait()
-        if type(dt) ~= "number" or dt <= 0 then
-            dt = 1 / 60
-        end
-
-        local step = math.min(remaining, currentSpeed * math.min(dt, 0.05))
-        local newPos = currentPos + direction * step
-
-        -- Floor guard: nunca permite que a etapa de voo passe abaixo da altura
-        -- mínima calculada pelo Raycast. Isso evita a “queda reta para dentro
-        -- da terra” mesmo enquanto o noclip está ativo.
-        if State.FarmFloorGuard then
-            local floorY = GetFarmFloorY(newPos, 160)
-            if floorY then
-                local clearance = math.max(3, tonumber(State.FarmFloorClearance) or 6)
-                local minimumY = floorY + clearance
-                if newPos.Y < minimumY then
-                    newPos = Vector3.new(newPos.X, minimumY, newPos.Z)
-                end
-            end
-        end
-
-        pcall(function()
-            root.CFrame = CFrame.lookAt(
-                newPos,
-                newPos + direction
-            )
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
-
-        -- Anti-stall simples. Se a posição praticamente não mudar, cria uma
-        -- pequena correção para manter o glide avançando; não usa teleport.
+        -- Anti-engasgo: se a física não avançar, sobe e atravessa sem
+        -- depender de colisão local. Não usa teleport.
         local now = os.clock()
         if now - lastSampleTime >= 0.30 then
             local moved = (root.Position - lastSamplePosition).Magnitude
-            if moved < 1.0 and remaining > arrivedRadius + 2 then
+            if moved < 1.5 and remaining > arrivedRadius + 3 then
                 stalledFor = stalledFor + (now - lastSampleTime)
             else
                 stalledFor = 0
@@ -1983,55 +1622,57 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier, allow
             lastSampleTime = now
             lastSamplePosition = root.Position
 
-            if stalledFor >= 0.45 then
+            if stalledFor >= 0.30 then
                 rescueCount = rescueCount + 1
                 stalledFor = 0
 
-                local rescueStep = math.min(remaining, math.max(120, currentSpeed) * 0.08)
-                local rescuePos = root.Position + direction * rescueStep
-
-                if State.FarmFloorGuard then
-                    local floorY = GetFarmFloorY(rescuePos, 160)
-                    if floorY then
-                        local clearance = math.max(3, tonumber(State.FarmFloorClearance) or 6)
-                        rescuePos = Vector3.new(
-                            rescuePos.X,
-                            math.max(rescuePos.Y, floorY + clearance),
-                            rescuePos.Z
-                        )
-                    end
-                end
-
                 pcall(function()
-                    root.CFrame = CFrame.lookAt(rescuePos, rescuePos + direction)
+                    FarmFlightVelocity.Velocity =
+                        direction * math.max(currentSpeed, 120)
+                        + Vector3.new(0, 90, 0)
+
+                    root.AssemblyLinearVelocity =
+                        direction * math.max(currentSpeed, 120)
+                        + Vector3.new(0, 90, 0)
                 end)
 
-                if rescueCount >= 4 then
-                    return false
+                if rescueCount >= 3 then
+                    DestroyFarmFlightMovers()
+                    task.wait(0.05)
+                    if not FarmIsRunning() then
+                        return false
+                    end
+                    if not CreateFarmFlightMovers(root) then
+                        return false
+                    end
+                    rescueCount = 0
                 end
-            else
-                rescueCount = 0
             end
         end
+
+        pcall(function()
+            FarmFlightVelocity.Velocity = direction * currentSpeed
+            FarmFlightGyro.CFrame = CFrame.lookAt(
+                root.Position,
+                root.Position + direction
+            )
+            root.AssemblyLinearVelocity = direction * currentSpeed
+        end)
+
+        RunService.Heartbeat:Wait()
     end
 
-    local reached = false
-    if root and root.Parent then
-        reached = (root.Position - targetPosition).Magnitude <= arrivedRadius + 0.75
-        pcall(function()
+    pcall(function()
+        if FarmFlightVelocity then
+            FarmFlightVelocity.Velocity = Vector3.zero
+        end
+        if root and root.Parent then
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
-        end)
-    end
+        end
+    end)
 
-    if humanoid and humanoid.Parent then
-        pcall(function()
-            humanoid.PlatformStand = oldPlatformStand
-            humanoid.AutoRotate = oldAutoRotate
-        end)
-    end
-
-    return reached
+    return false
 end
 
 local function FarmFlyTo(targetPosition, speed, descend)
@@ -2045,11 +1686,25 @@ local function FarmFlyTo(targetPosition, speed, descend)
         return false
     end
 
-    -- Toda a viagem é uma única sessão de voo. O noclip entra antes de sair,
-    -- permanece ativo durante subida + cruzeiro + aproximação + descida e só
-    -- é removido depois que o personagem parou no ponto seguro.
     StartFarmNoclip()
-    SetFarmPhase("Voando / noclip ON")
+
+    if not CreateFarmFlightMovers(root) then
+        return false
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local oldPlatformStand = nil
+    local oldAutoRotate = nil
+
+    if humanoid then
+        oldPlatformStand = humanoid.PlatformStand
+        oldAutoRotate = humanoid.AutoRotate
+        humanoid.PlatformStand = true
+        humanoid.AutoRotate = false
+    end
+
+    -- Noclip persistente durante todo o ciclo do Auto Farm.
+    EnforceFarmNoclip()
 
     local flightHeight = math.clamp(
         tonumber(State.FarmFlightHeight) or 90,
@@ -2058,36 +1713,31 @@ local function FarmFlyTo(targetPosition, speed, descend)
     )
 
     local descendHeight = math.clamp(
-        tonumber(State.FarmFlightDescendHeight) or 6,
-        3,
-        12
+        tonumber(State.FarmFlightDescendHeight) or 3,
+        1,
+        8
     )
 
+    -- Mantém o voo acima do ponto mais alto entre origem e destino.
     local cruiseY = math.max(
         root.Position.Y,
         targetPosition.Y
     ) + flightHeight
 
-    -- 1. Sobe suavemente até a altitude de cruzeiro.
+    -- 1. Sobe verticalmente.
     local upPoint = Vector3.new(
         root.Position.X,
         cruiseY,
         root.Position.Z
     )
 
-    local effectiveSpeed = speed or State.FarmFlightSpeed
-    if State.FarmEngineProfile == "Conservative" then
-        effectiveSpeed = math.min(effectiveSpeed, 220)
-    end
-
     local ok = FarmFlightSegment(
         upPoint,
-        effectiveSpeed,
-        2,
-        true
+        speed or State.FarmFlightSpeed,
+        2
     )
 
-    -- 2. Cruza o mapa em linha reta, ainda com noclip.
+    -- 2. Voa rápido acima do ovo/base.
     if ok and FarmIsRunning() then
         local cruisePoint = Vector3.new(
             targetPosition.X,
@@ -2097,15 +1747,12 @@ local function FarmFlyTo(targetPosition, speed, descend)
 
         ok = FarmFlightSegment(
             cruisePoint,
-            effectiveSpeed,
-            2.5,
-            true
+            speed or State.FarmFlightSpeed,
+            2.5
         )
     end
 
-    -- 3. Faz a descida somente dentro da coluna do alvo. O noclip continua
-    -- ligado nesta etapa para não enroscar em teto/parede, mas o Raycast trava
-    -- o ponto final acima do chão.
+    -- 3. Só desce quando está exatamente na coluna do destino.
     if ok and FarmIsRunning() and descend ~= false then
         local dropPoint = GetSafeDescentPosition(
             targetPosition,
@@ -2118,33 +1765,36 @@ local function FarmFlyTo(targetPosition, speed, descend)
         if not dropPoint then
             ok = false
         else
-            SetFarmPhase("Aproximando / noclip ON")
+            -- Aproximação final deliberadamente mais lenta.
             ok = FarmFlightSegment(
                 dropPoint,
                 math.min(
                     speed or State.FarmFlightSpeed,
-                    160
+                    180
                 ),
-                2.8,
-                true
+                2.5
             )
         end
     end
 
+    DestroyFarmFlightMovers()
+
+    -- Pequena estabilização após pousar na coluna do alvo/base para dar
+    -- tempo ao jogo de registrar a posição e processar a interação.
     if ok and descend ~= false and FarmIsRunning() then
         task.wait(math.clamp(tonumber(State.FarmArrivalPause) or 0.35, 0.10, 0.80))
     end
 
-    -- O voo termina aqui. Só depois de realmente parar restauramos a colisão.
-    StopFarmNoclip()
-    DestroyFarmFlightMovers()
-    SetFarmPhase(ok and "Parado / colisão ativa" or "Voo interrompido / colisão ativa")
-
-    -- Depois da descida, ainda deixamos o personagem um frame estabilizar com
-    -- colisão normal antes de qualquer interação com ovo/base.
-    if ok and FarmIsRunning() then
-        RunService.Heartbeat:Wait()
+    if humanoid and humanoid.Parent then
+        pcall(function()
+            humanoid.PlatformStand = oldPlatformStand
+            humanoid.AutoRotate = oldAutoRotate
+        end)
     end
+
+    -- Não restaura colisão aqui. O noclip continua ativo até o Auto Farm parar,
+    -- evitando que árvore/estrutura faça o personagem travar no próximo trecho.
+    EnforceFarmNoclip()
 
     return ok
 end
@@ -2342,56 +1992,43 @@ local function AttemptPickup(candidate)
     )
 
     local mode = State.FarmPickupMode
-    local profile = State.FarmEngineProfile
 
     for _ = 1, retries do
         if not FarmIsRunning() then
             return false
         end
 
-        -- Recupera o UID real perto do RenderedEgg quando a seleção veio do fallback.
-        if candidate.Synthetic or not candidate.UID then
-            local recovered = candidate.Position and FindActiveEggNear(candidate.Position, 24)
-            if recovered then
-                candidate.UID = recovered.Name
-                candidate.ID = recovered.Name
-                candidate.Instance = recovered
-                candidate.Synthetic = false
-            end
-        end
-
-        local remoteFirst = mode == "Remote"
-            or (mode == "Auto" and profile ~= "Prompt Priority")
-
-        local promptFirst = mode == "Prompt"
-            or (mode == "Auto" and (profile == "Prompt Priority" or profile == "Max Confiável 2026" or profile == "Rendered Eggs"))
-
-        if remoteFirst and State.FarmRemoteFallback then
+        -- Remote é o caminho principal confirmado pelo script open-source
+        -- do SixZensED: Game.EggPickup:FireServer(uid).
+        if mode == "Remote" then
             if TryRemotePickup(candidate) then
                 return true
             end
-        end
 
-        if promptFirst or State.FarmPromptFallback then
+        elseif mode == "Prompt" then
+            if TryPromptPickup(candidate) then
+                return true
+            end
+
+        else
+            -- AUTO: Remote primeiro; Prompt só como fallback.
+            if TryRemotePickup(candidate) then
+                return true
+            end
+
             if TryPromptPickup(candidate) then
                 return true
             end
         end
 
-        -- Mesmo quando o modo está em Remote, o perfil Hybrid tenta Prompt como
-        -- segundo mecanismo para não travar quando só o RenderedEgg possui prompt.
-        if mode == "Remote" and State.FarmRemoteFallback and State.FarmPromptFallback then
-            if TryPromptPickup(candidate) then
-                return true
-            end
-        end
-
-        local liveUID = candidate.UID or candidate.ID
-        if liveUID and not GetLiveActiveEgg(liveUID) then
+        if not GetLiveActiveEgg(candidate.UID or candidate.ID) then
             return true
         end
 
-        task.wait(math.max(0.05, tonumber(State.FarmPickupWait) or 0.20))
+        task.wait(math.max(
+            0.05,
+            tonumber(State.FarmPickupWait) or 0.20
+        ))
     end
 
     return false
@@ -2602,162 +2239,6 @@ local function HoverAbovePlot()
     )
 end
 
-local function GetBaseRoutePoints()
-    local plot = GetMyPlot()
-    if not plot then
-        return nil
-    end
-
-    local baseplate = plot:FindFirstChild("Baseplate")
-    if not baseplate or not baseplate:IsA("BasePart") then
-        return nil
-    end
-
-    local _, root = GetCharacter()
-    if not root then
-        return nil
-    end
-
-    local cf = baseplate.CFrame
-    local size = baseplate.Size
-    local halfX = math.max(4, size.X * 0.5)
-    local halfZ = math.max(4, size.Z * 0.5)
-    local topY = baseplate.Position.Y + (size.Y * 0.5)
-
-    local localRoot = cf:PointToObjectSpace(root.Position)
-    local useX = math.abs(localRoot.X) >= math.abs(localRoot.Z)
-    local sideSign
-    local sideAxisSize
-
-    if useX then
-        sideSign = localRoot.X >= 0 and 1 or -1
-        sideAxisSize = halfX
-        if math.abs(localRoot.X) < 2 then
-            sideSign = -1
-        end
-    else
-        sideSign = localRoot.Z >= 0 and 1 or -1
-        sideAxisSize = halfZ
-        if math.abs(localRoot.Z) < 2 then
-            sideSign = -1
-        end
-    end
-
-    local sideOffset = math.clamp(
-        tonumber(State.FarmBaseSideOffset) or 26,
-        8,
-        60
-    )
-
-    local sideHeight = math.clamp(
-        tonumber(State.FarmBaseSideHeight) or 6,
-        3,
-        15
-    )
-
-    local entryInset = math.clamp(
-        tonumber(State.FarmBaseEntryInset) or 14,
-        4,
-        math.max(4, sideAxisSize - 3)
-    )
-
-    local entryHeight = math.clamp(
-        tonumber(State.FarmBaseEntryHeight) or 7,
-        3,
-        15
-    )
-
-    local hoverHeight = math.clamp(
-        tonumber(State.FarmHoverHeight) or 55,
-        20,
-        150
-    )
-
-    local sideLocal
-    local entryLocal
-
-    if useX then
-        sideLocal = Vector3.new(sideSign * (halfX + sideOffset), 0, 0)
-        entryLocal = Vector3.new(sideSign * math.max(0, halfX - entryInset), 0, 0)
-    else
-        sideLocal = Vector3.new(0, 0, sideSign * (halfZ + sideOffset))
-        entryLocal = Vector3.new(0, 0, sideSign * math.max(0, halfZ - entryInset))
-    end
-
-    local sideGround = cf:PointToWorldSpace(sideLocal + Vector3.new(0, topY - cf.Position.Y + sideHeight, 0))
-    local sideAir = Vector3.new(sideGround.X, topY + hoverHeight, sideGround.Z)
-    local entryPoint = cf:PointToWorldSpace(entryLocal + Vector3.new(0, topY - cf.Position.Y + entryHeight, 0))
-
-    return {
-        Plot = plot,
-        Baseplate = baseplate,
-        SideAir = sideAir,
-        SideGround = sideGround,
-        EntryPoint = entryPoint,
-        TopY = topY,
-    }
-end
-
-local function IsInsideMyPlot(position)
-    if typeof(position) ~= "Vector3" then
-        return false
-    end
-
-    local route = GetBaseRoutePoints()
-    if not route or not route.Baseplate then
-        return false
-    end
-
-    local localPosition = route.Baseplate.CFrame:PointToObjectSpace(position)
-    local margin = 2.5
-    return math.abs(localPosition.X) <= (route.Baseplate.Size.X * 0.5) - margin
-        and math.abs(localPosition.Z) <= (route.Baseplate.Size.Z * 0.5) - margin
-end
-
-local function ConfirmPlotEntry(timeout)
-    local deadline = os.clock() + math.clamp(
-        tonumber(timeout) or State.FarmBaseConfirmTimeout or 2.5,
-        0.5,
-        5.0
-    )
-
-    while FarmIsRunning() and os.clock() < deadline do
-        local _, root = GetCharacter()
-        if root and IsInsideMyPlot(root.Position) then
-            return true
-        end
-        task.wait(0.08)
-    end
-
-    local _, root = GetCharacter()
-    return root and IsInsideMyPlot(root.Position) or false
-end
-
-local function GetNestWorldPosition(nest)
-    if not nest or not nest.Parent then
-        return nil
-    end
-
-    local ok, pivot = pcall(function()
-        return nest:GetPivot()
-    end)
-
-    if ok and pivot then
-        return pivot.Position
-    end
-
-    if nest:IsA("BasePart") then
-        return nest.Position
-    end
-
-    local part = nest:FindFirstChildWhichIsA("BasePart", true)
-    if part then
-        return part.Position
-    end
-
-    return nil
-end
-
 local function ResolveFarmTarget(uid, fallbackName)
     if not uid then
         return nil
@@ -2766,72 +2247,40 @@ local function ResolveFarmTarget(uid, fallbackName)
     local active = GetActiveEggFolder()
     local live = active and active:FindFirstChild(uid)
 
-    if live then
-        local eggName = live:GetAttribute("Egg")
-        if type(eggName) ~= "string" or eggName == "" then
-            eggName = fallbackName or live.Name
-        end
-
-        local position = live:GetAttribute("Position")
-        if typeof(position) == "CFrame" then
-            position = position.Position
-        end
-        if typeof(position) ~= "Vector3" then
-            position = GetEggPosition(live)
-        end
-        if not position then
-            return nil
-        end
-
-        return {
-            Instance = live,
-            UID = live.Name,
-            ID = live.Name,
-            Name = eggName,
-            Position = position,
-            Distance = 0,
-            Weight = GetEggWeight(live) or 0,
-            Luck = GetEggLuck(live) or 0,
-            Mutation = GetEggMutation(live),
-            Rarity = GetEggRarity(eggName, live),
-            Synthetic = false,
-        }
+    if not live then
+        return nil
     end
 
-    -- Fallback visual: se o UID servidor ainda não estiver disponível, usa
-    -- RenderedEggs para manter o voo/coleta funcionando e tenta recuperar o
-    -- Configuration real imediatamente antes do pickup.
-    if State.FarmRenderedFallback then
-        local rendered = GetRenderedEggFolder()
-        if rendered then
-            for _, model in ipairs(rendered:GetChildren()) do
-                local position = GetEggPosition(model)
-                local eggName = GetRealRenderedEggName(model)
-                if position and (model.Name == uid or uid == tostring(model:GetDebugId()))
-                    and type(eggName) == "string" and EggData[eggName] then
-                    local activeNear = FindActiveEggNear(position, 22)
-                    local realUID = activeNear and activeNear.Name or model.Name
-                    local source = activeNear or model
-                    return {
-                        Instance = source,
-                        Rendered = model,
-                        UID = realUID,
-                        ID = realUID,
-                        Name = eggName,
-                        Position = position,
-                        Distance = 0,
-                        Weight = GetEggWeight(source) or 0,
-                        Luck = GetEggLuck(source) or 0,
-                        Mutation = GetEggMutation(source),
-                        Rarity = GetEggRarity(eggName, source),
-                        Synthetic = activeNear == nil,
-                    }
-                end
-            end
-        end
+    local eggName = live:GetAttribute("Egg")
+    if type(eggName) ~= "string" or eggName == "" then
+        eggName = fallbackName or live.Name
     end
 
-    return nil
+    local position = live:GetAttribute("Position")
+    if typeof(position) == "CFrame" then
+        position = position.Position
+    end
+
+    if typeof(position) ~= "Vector3" then
+        position = GetEggPosition(live)
+    end
+
+    if not position then
+        return nil
+    end
+
+    return {
+        Instance = live,
+        UID = live.Name,
+        ID = live.Name,
+        Name = eggName,
+        Position = position,
+        Distance = 0,
+        Weight = GetEggWeight(live) or 0,
+        Luck = GetEggLuck(live) or 0,
+        Mutation = GetEggMutation(live),
+        Rarity = GetEggRarity(eggName, live),
+    }
 end
 
 local function ChooseAndCommitFarmTarget()
@@ -2879,218 +2328,44 @@ local function FailCurrentFarmTarget(message, cooldown)
     SetFarmPhase(message or "Changing target")
 end
 
-function FarmUtil.FireEggPlaced(nestName)
-    local remote = GetEggPlacedRemote()
-    if not remote or not remote:IsA("RemoteEvent") then
-        return false
-    end
-
-    return pcall(function()
-        remote:FireServer({NestId = tostring(nestName)})
-    end)
-end
-
-function FarmUtil.EquipEggTool(tool)
-    local character, humanoid = GetCharacter()
-    if not character or not humanoid or not tool or not tool.Parent then
-        return false
-    end
-
-    return pcall(function()
-        humanoid:EquipTool(tool)
-    end)
-end
-
-function FarmUtil.CopyCountMap(source)
-    local copy = {}
-    if type(source) ~= "table" then
-        return copy
-    end
-    for name, count in pairs(source) do
-        local n = tonumber(count) or 0
-        if n > 0 then
-            copy[name] = math.floor(n)
-        end
-    end
-    return copy
-end
-
-function FarmUtil.CountPendingTools(expected, beforeTools)
-    local found = {}
-    for _, tool in ipairs(FarmUtil.GetEggTools()) do
-        if (not beforeTools or not beforeTools[tool]) and expected[tool.Name] then
-            found[tool.Name] = (found[tool.Name] or 0) + 1
-        end
-    end
-    return found
-end
-
-function FarmUtil.PlaceEggToolsInNests(expected, beforeTools)
-    local remaining = FarmUtil.CopyCountMap(expected)
-    local deadline = os.clock() + math.clamp(
-        tonumber(State.FarmNestWait) or 8.0,
-        2.0,
-        20.0
-    )
-
-    while FarmIsRunning() and os.clock() < deadline do
-        local nests = FarmUtil.GetFreeNests()
-        local available = FarmUtil.CountPendingTools(remaining, beforeTools)
-
-        local hasRemaining = false
-        for _, count in pairs(remaining) do
-            if count > 0 then
-                hasRemaining = true
-                break
-            end
-        end
-
-        if not hasRemaining then
-            State.FarmPendingEggs = {}
-            return true
-        end
-
-        if #nests > 0 then
-            for _, nest in ipairs(nests) do
-                if not FarmIsRunning() then
-                    return false
-                end
-
-                local tool = nil
-                for _, candidate in ipairs(FarmUtil.GetEggTools()) do
-                    if (not beforeTools or not beforeTools[candidate]) and remaining[candidate.Name]
-                        and remaining[candidate.Name] > 0 then
-                        tool = candidate
-                        break
-                    end
-                end
-
-                if not tool then
-                    break
-                end
-
-                local nestPosition = GetNestWorldPosition(nest)
-                if not nestPosition then
-                    continue
-                end
-                local safeNestPosition = GetSafeDescentPosition(
-                    nestPosition,
-                    math.max(3, tonumber(State.FarmNestApproachHeight) or 6)
-                )
-                if safeNestPosition then
-                    nestPosition = safeNestPosition
-                end
-
-                SetFarmPhase("Indo até o ninho " .. tostring(nest.Name))
-                local nestTarget = Vector3.new(
-                    nestPosition.X,
-                    nestPosition.Y,
-                    nestPosition.Z
-                )
-                if not FarmFlyTo(
-                    nestTarget,
-                    math.clamp(tonumber(State.FarmNestApproachSpeed) or 100, 60, 180),
-                    true
-                ) then
-                    return false
-                end
-
-                if not FarmIsRunning() then
-                    return false
-                end
-
-                SetFarmPhase("Equipando " .. tostring(tool.Name) .. " no ninho " .. tostring(nest.Name))
-
-                if not FarmUtil.EquipEggTool(tool) then
-                    return false
-                end
-
-                task.wait(0.15)
-
-                if not FarmIsRunning() then
-                    return false
-                end
-
-                if not FarmUtil.FireEggPlaced(nest.Name) then
-                    return false
-                end
-
-                local placed = false
-                local confirmDeadline = os.clock() + 4
-
-                while FarmIsRunning() and os.clock() < confirmDeadline do
-                    local occupied = nest:GetAttribute("Occupied") == true
-                    local stillInTools = false
-
-                    for _, currentTool in ipairs(FarmUtil.GetEggTools()) do
-                        if currentTool == tool then
-                            stillInTools = true
-                            break
-                        end
-                    end
-
-                    if occupied or not stillInTools then
-                        placed = true
-                        break
-                    end
-
-                    task.wait(0.10)
-                end
-
-                if not placed then
-                    State.FarmPendingEggs = FarmUtil.CopyCountMap(remaining)
-                    SetFarmPhase("Depósito não confirmado")
-                    return false
-                end
-
-                remaining[tool.Name] = math.max(0, (remaining[tool.Name] or 1) - 1)
-                if remaining[tool.Name] <= 0 then
-                    remaining[tool.Name] = nil
-                end
-
-                task.wait(math.clamp(
-                    tonumber(State.FarmBasePause) or 2.50,
-                    0.50,
-                    5.0
-                ))
-            end
-        end
-
-        State.FarmPendingEggs = FarmUtil.CopyCountMap(remaining)
-        task.wait(math.clamp(tonumber(State.FarmNestPoll) or 0.25, 0.10, 0.75))
-    end
-
-    State.FarmPendingEggs = FarmUtil.CopyCountMap(remaining)
-    return next(remaining) == nil
-end
-
 local function FarmDeposit()
     if not FarmIsRunning() then
         return false
     end
 
-    local route = GetBaseRoutePoints()
-    if not route then
+    local plot = GetMyPlot()
+    if not plot then
         SetFarmPhase("Base não encontrada")
         return false
     end
 
-    local expected = FarmUtil.GetBasketEggNames()
-    if next(expected) == nil then
-        expected = FarmUtil.CopyCountMap(State.FarmPendingEggs)
+    local okPivot, pivot = pcall(function()
+        return plot:GetPivot()
+    end)
+
+    if not okPivot or not pivot then
+        SetFarmPhase("Posição da base indisponível")
+        return false
     end
 
-    if next(expected) == nil then
-        return GetBasketCount() <= 0
+    local basePosition = pivot.Position
+    local hoverHeight = math.clamp(
+        tonumber(State.FarmHoverHeight) or 55,
+        25,
+        150
+    )
+
+    local hoverPosition = basePosition + Vector3.new(0, hoverHeight, 0)
+    local _, root = GetCharacter()
+    if not root then
+        return false
     end
 
-    local beforeTools = FarmUtil.SnapshotEggTools()
-
-    -- ETAPA 1: chega acima do lado da base usando a velocidade de cruzeiro.
-    SetFarmPhase("Voltando para a base • acima do lado")
+    -- CHECKPOINT 1: sobe antes do retorno para nunca cortar o terreno.
+    SetFarmPhase("Subindo para voltar")
     if not FarmFlyTo(
-        route.SideAir,
-        math.clamp(tonumber(State.FarmFlightSpeed) or 300, 50, 350),
+        hoverPosition,
+        State.FarmFlightSpeed,
         false
     ) then
         return false
@@ -3100,124 +2375,108 @@ local function FarmDeposit()
         return false
     end
 
-    -- ETAPA 2: desce do lado da base, fora do plot, sem mergulhar no centro.
-    SetFarmPhase("Descendo ao lado da base")
-    if not FarmFlyTo(
-        route.SideGround,
-        math.clamp(tonumber(State.FarmBaseApproachSpeed) or 140, 60, 220),
-        true
-    ) then
+    -- CHECKPOINT 2: chega sobre a base em altitude.
+    local _, latestRoot = GetCharacter()
+    if not latestRoot then
         return false
+    end
+
+    if (latestRoot.Position - hoverPosition).Magnitude > 20 then
+        SetFarmPhase("Posicionando sobre a base")
+        if not FarmFlyTo(
+            hoverPosition,
+            State.FarmFlightSpeed,
+            false
+        ) then
+            return false
+        end
     end
 
     if not FarmIsRunning() then
         return false
     end
 
+    -- CHECKPOINT 3: desce apenas até uma altura segura do piso.
+    SetFarmPhase("Descendo na base")
+    local depositPoint = GetSafeDescentPosition(
+        basePosition,
+        math.max(
+            tonumber(State.FarmFlightDescendHeight) or 6,
+            6
+        )
+    )
+
+    if not depositPoint then
+        return false
+    end
+
+    if not FarmFlyTo(
+        depositPoint,
+        math.min(State.FarmFlightSpeed, 180),
+        true
+    ) then
+        return false
+    end
+
+    -- CHECKPOINT 4: parada intencional. Dá tempo para o servidor registrar
+    -- a entrega antes de iniciar o próximo alvo.
+    SetFarmPhase("Estabilizando na base")
+
+    local settleDeadline = os.clock() + math.clamp(
+        tonumber(State.FarmDepositWait) or 3.5,
+        1.5,
+        6
+    )
+
+    while FarmIsRunning()
+        and os.clock() < settleDeadline
+        and GetBasketCount() > 0 do
+        EnforceFarmNoclip()
+        task.wait(0.08)
+    end
+
+    if not FarmIsRunning() then
+        return false
+    end
+
+    -- Mesmo que a cesta já esteja vazia, mantém a parada configurada.
     task.wait(math.clamp(
-        tonumber(State.FarmBaseSidePause) or 0.60,
-        0.20,
-        2.0
+        tonumber(State.FarmBasePause) or 2.50,
+        1.0,
+        5.0
     ))
 
     if not FarmIsRunning() then
         return false
     end
 
-    -- ETAPA 3: entra fisicamente no plot a partir do lado escolhido.
-    SetFarmPhase("Entrando no plot")
-    if not FarmFlyTo(
-        route.EntryPoint,
-        math.clamp(tonumber(State.FarmBaseEntrySpeed) or 110, 60, 180),
-        true
-    ) then
-        return false
-    end
+    -- Última confirmação. Se ainda estiver carregando, faz uma única
+    -- reaproximação curta em baixa velocidade e espera novamente.
+    if GetBasketCount() > 0 then
+        SetFarmPhase("Confirmando entrega")
 
-    if not FarmIsRunning() then
-        return false
-    end
+        local retryPoint = GetSafeDescentPosition(
+            basePosition,
+            6
+        )
 
-    -- Confirma que realmente cruzamos o limite do Baseplate.
-    if not ConfirmPlotEntry(State.FarmBaseConfirmTimeout) then
-        SetFarmPhase("Entrada do plot não confirmada")
-
-        -- Uma única reaproximação controlada para corrigir a entrada.
-        if not FarmFlyTo(
-            route.EntryPoint,
-            math.clamp(tonumber(State.FarmBaseEntrySpeed) or 110, 60, 180),
+        if retryPoint and not FarmFlyTo(
+            retryPoint,
+            120,
             true
         ) then
             return false
         end
 
-        if not ConfirmPlotEntry(1.5) then
-            SetFarmPhase("Falha ao entrar no plot")
-            return false
-        end
-    end
-
-    SetFarmPhase("Dentro do plot • confirmando")
-    task.wait(math.clamp(
-        tonumber(State.FarmBaseEntryPause) or 0.80,
-        0.20,
-        2.0
-    ))
-
-    if not FarmIsRunning() then
-        return false
-    end
-
-    -- ETAPA 4: espera a Basket ser convertida pelo jogo nos EggTools.
-    SetFarmPhase("Confirmando ovo na base")
-    local returned = FarmUtil.WaitForReturnedEggTools(
-        expected,
-        beforeTools,
-        math.clamp(tonumber(State.FarmDepositWait) or 3.50, 2.0, 8.0)
-    )
-
-    if not returned and GetBasketCount() > 0 then
-        -- Não cria uma nova rota: somente revalida a posição interna uma vez.
-        SetFarmPhase("Reconfirmando ovo dentro da base")
-        local _, root = GetCharacter()
-        if not root or not IsInsideMyPlot(root.Position) then
-            if not FarmFlyTo(route.EntryPoint, 100, true) then
-                return false
-            end
-        end
-
         task.wait(math.clamp(
-            tonumber(State.FarmBaseEntryPause) or 0.80,
-            0.20,
-            2.0
+            tonumber(State.FarmBasePause) or 2.50,
+            1.0,
+            5.0
         ))
-
-        returned = FarmUtil.WaitForReturnedEggTools(
-            expected,
-            beforeTools,
-            math.clamp(tonumber(State.FarmDepositWait) or 3.50, 2.0, 8.0)
-        )
     end
 
-    if not returned and GetBasketCount() > 0 then
-        SetFarmPhase("Ovo ainda não chegou à base")
-        return false
-    end
-
-    State.FarmPendingEggs = FarmUtil.CopyCountMap(expected)
-
-    -- ETAPA 5: procura um ninho livre e vai fisicamente até ele antes do Remote.
-    SetFarmPhase("Procurando ninho livre")
-    local placed = FarmUtil.PlaceEggToolsInNests(expected, beforeTools)
-
-    if not placed then
-        SetFarmPhase("Aguardando ninho livre")
-        return false
-    end
-
-    -- ETAPA 6: só libera o próximo ciclo quando a entrega estiver limpa.
-    if GetBasketCount() <= 0 and next(State.FarmPendingEggs) == nil then
-        SetFarmPhase("Ovo entregue • próximo alvo")
+    if GetBasketCount() <= 0 then
+        SetFarmPhase("Entregue - procurando próximo ovo")
         return true
     end
 
@@ -3237,16 +2496,12 @@ local function FarmOnce()
             return
         end
 
-        -- HOLDING / PENDING DELIVERY
-        if GetBasketCount() > 0 or next(State.FarmPendingEggs) ~= nil then
-            SetFarmPhase(GetBasketCount() > 0 and "Carrying egg" or "Pending egg delivery")
+        -- HOLDING
+        if GetBasketCount() > 0 then
+            SetFarmPhase("Carrying egg")
 
             if State.ReturnToPlot then
-                local delivered = FarmDeposit()
-                if delivered then
-                    State.FarmCycles = (tonumber(State.FarmCycles) or 0) + 1
-                    State.FarmEggsDelivered = (tonumber(State.FarmEggsDelivered) or 0) + 1
-                end
+                FarmDeposit()
             end
 
             return
@@ -3285,11 +2540,6 @@ local function FarmOnce()
             if not target then
                 SetFarmPhase("No target - hovering")
                 HoverAbovePlot()
-                task.wait(math.clamp(
-                    tonumber(State.FarmNoTargetDelay) or 1.00,
-                    0.25,
-                    5.00
-                ))
                 return
             end
         end
@@ -4064,7 +3314,7 @@ local function SetEggESPEnabled(enabled)
     end
 end
 
-task.defer(function() pcall(AttachRenderedEggs) end)
+AttachRenderedEggs()
 
 task.spawn(function()
     while Running do
@@ -4418,29 +3668,10 @@ end
 --============================================================--
 
 local okRayfield, Rayfield = pcall(function()
-    local urls = {
-        "https://sirius.menu/gen2",
-        "https://sirius.menu/rayfield",
-        "https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua",
-    }
-
-    local lastError = "Rayfield loader indisponível"
-    for _, url in ipairs(urls) do
-        local ok, result = pcall(function()
-            local source = game:HttpGet(url)
-            local loader = loadstring(source)
-            assert(type(loader) == "function", "loader inválido")
-            return loader()
-        end)
-
-        if ok and type(result) == "table" then
-            return result
-        end
-
-        lastError = tostring(result)
-    end
-
-    error(lastError)
+    local source = game:HttpGet("https://sirius.menu/gen2")
+    local loader = loadstring(source)
+    assert(type(loader) == "function", "Rayfield Gen2 loader inválido")
+    return loader()
 end)
 
 -- Outra execução pode ter assumido o singleton enquanto o loader carregava.
@@ -4512,21 +3743,6 @@ local okWindow, Window = pcall(function()
 end)
 
 if not okWindow or not Window then
-    okWindow, Window = pcall(function()
-        return Rayfield:CreateWindow({
-            Name = "Montar um Pet",
-            Subtitle = "MASTER v15 • Delta Mobile",
-            ShowText = "Montar um Pet",
-            ToggleUIKeybind = "K",
-            ConfigurationSaving = {
-                Enabled = true,
-                FileName = "MontarUmPet_Master_v15",
-            },
-        })
-    end)
-end
-
-if not okWindow or not Window then
     Running = false
     pcall(function()
         if Rayfield.Destroy then
@@ -4590,15 +3806,19 @@ TabFarm:CreateToggle({
             ClearFarmTarget()
             State.FarmPhase = "Starting"
             LastFarmStatus = "Starting Auto Farm"
-            -- O worker centralizado assume o ciclo; FarmBusy evita concorrência.
+            task.spawn(function()
+                task.wait(0.05)
+                if Running and State.AutoFarm and not FarmBusy then
+                    FarmOnce()
+                end
+            end)
         else
             CancelGlide()
             DestroyFarmFlightMovers()
             StopFarmNoclip()
             ClearFarmTarget()
             State.FarmPhase = "Stopped"
-            -- Não libera FarmBusy à força no meio de uma rota; o ciclo encerra
-            -- naturalmente, evitando corrida entre desligar e religar.
+            FarmBusy = false
         end
     end,
 })
@@ -4664,175 +3884,6 @@ TabFarm:CreateDropdown({
         if value == "Remote" or value == "Auto" or value == "Prompt" then
             State.FarmPickupMode = value
         end
-    end,
-})
-
-TabFarm:CreateDropdown({
-    name = "Perfil do Auto Farm 2026",
-    flag = "FarmEngineProfile",
-    description = "Combina padrões públicos: scanner RenderedEggs/ActiveEggs, glide e coleta Remote/Prompt.",
-    options = {"Hybrid 2026", "Max Confiável 2026", "Remote Priority", "Prompt Priority", "Rendered Eggs", "Conservative"},
-    value = State.FarmEngineProfile,
-    callback = function(value)
-        if value == "Hybrid 2026"
-            or value == "Max Confiável 2026"
-            or value == "Remote Priority"
-            or value == "Prompt Priority"
-            or value == "Rendered Eggs"
-            or value == "Conservative" then
-            State.FarmEngineProfile = value
-
-            if value == "Max Confiável 2026" then
-                State.FarmPickupMode = "Auto"
-                State.FarmRenderedFallback = true
-                State.FarmRemoteFallback = true
-                State.FarmPromptFallback = true
-                State.FarmFloorGuard = true
-                State.FarmAutoRecover = true
-            elseif value == "Remote Priority" then
-                State.FarmPickupMode = "Remote"
-                State.FarmRemoteFallback = true
-                State.FarmPromptFallback = true
-            elseif value == "Prompt Priority" then
-                State.FarmPickupMode = "Prompt"
-                State.FarmPromptFallback = true
-                State.FarmRemoteFallback = true
-            elseif value == "Rendered Eggs" then
-                State.FarmPickupMode = "Auto"
-                State.FarmRenderedFallback = true
-                State.FarmPromptFallback = true
-            elseif value == "Conservative" then
-                State.FarmPickupMode = "Auto"
-                State.FarmRenderedFallback = true
-                State.FarmPromptFallback = true
-                State.FarmRemoteFallback = true
-                State.FarmFloorGuard = true
-                State.FarmCycleDelay = math.max(State.FarmCycleDelay or 1.5, 1.5)
-            end
-        end
-    end,
-})
-
-TabFarm:CreateButton({
-    name = "Aplicar perfil Top 7 recomendado",
-    description = "Max Confiável + Rendered/Remote/Prompt + Floor Guard + Watchdog.",
-    callback = function()
-        State.FarmEngineProfile = "Max Confiável 2026"
-        State.FarmPickupMode = "Auto"
-        State.FarmRenderedFallback = true
-        State.FarmRemoteFallback = true
-        State.FarmPromptFallback = true
-        State.FarmFloorGuard = true
-        State.FarmAutoRecover = true
-        State.FarmWatchdog = true
-        Window:Notify({title = "Top 7", content = "Perfil Max Confiável 2026 aplicado.", duration = 4})
-    end,
-})
-
-TabFarm:CreateToggle({
-    name = "Fallback RenderedEggs",
-    flag = "FarmRenderedFallback",
-    description = "Usa os ovos visuais quando ActiveEggs estiver atrasado ou indisponível.",
-    value = State.FarmRenderedFallback,
-    callback = function(value)
-        State.FarmRenderedFallback = value
-    end,
-})
-
-TabFarm:CreateToggle({
-    name = "Fallback Prompt",
-    flag = "FarmPromptFallback",
-    description = "Tenta ProximityPrompt quando o Remote não confirmar a coleta.",
-    value = State.FarmPromptFallback,
-    callback = function(value)
-        State.FarmPromptFallback = value
-    end,
-})
-
-TabFarm:CreateToggle({
-    name = "Auto Recovery",
-    flag = "FarmAutoRecover",
-    description = "Troca de alvo e recupera o ciclo após erro de movimento/coleta.",
-    value = State.FarmAutoRecover,
-    callback = function(value)
-        State.FarmAutoRecover = value
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Espera de recuperação",
-    flag = "FarmRetryAfterError",
-    range = {0.25, 4.00},
-    increment = 0.25,
-    value = State.FarmRetryAfterError,
-    suffix = " s",
-    callback = function(value)
-        State.FarmRetryAfterError = math.clamp(tonumber(value) or 1.00, 0.25, 4.00)
-    end,
-})
-
-TabFarm:CreateButton({
-    name = "Diagnóstico do Auto Farm",
-    description = "Mostra quais fontes e remotes estão disponíveis agora.",
-    callback = function()
-        pcall(function()
-            local fs = GetGameFeatureStatus()
-            local candidates = #GetFarmCandidates()
-            Window:Notify({
-                title = "Diagnóstico Auto Farm",
-                content = string.format(
-                    "ActiveEggs:%s • RenderedEggs:%s • EggPickup:%s • EggPlaced:%s • Ovos:%d • Fase:%s",
-                    tostring(fs.ActiveEggs), tostring(fs.RenderedEggs), tostring(fs.EggPickup),
-                    tostring(fs.EggPlaced), candidates, tostring(State.FarmPhase)
-                ),
-                duration = 6,
-            })
-        end)
-    end,
-})
-
-TabFarm:CreateToggle({
-    name = "Farm Watchdog 2026",
-    flag = "FarmWatchdog",
-    description = "Reinicia somente estados presos; não cria um segundo Auto Farm.",
-    value = State.FarmWatchdog,
-    callback = function(value)
-        State.FarmWatchdog = value
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Tempo anti-travamento",
-    flag = "FarmWatchdogTimeout",
-    range = {2, 12},
-    increment = 0.5,
-    value = State.FarmWatchdogTimeout,
-    suffix = " s",
-    callback = function(value)
-        State.FarmWatchdogTimeout = math.clamp(tonumber(value) or 4, 2, 12)
-    end,
-})
-
-TabFarm:CreateButton({
-    name = "Status Top Hub 2026",
-    description = "Mostra ciclos, entregas, falhas e fontes atuais do farm.",
-    callback = function()
-        pcall(function()
-            local fs = GetGameFeatureStatus()
-            Window:Notify({
-                title = "MontarUmPet • Top Hub 2026",
-                content = string.format(
-                    "Ciclos:%d • Ovos:%d • Falhas:%d • Fase:%s\nActive:%s • Rendered:%s • Pickup:%s • Placed:%s",
-                    tonumber(State.FarmCycles) or 0,
-                    tonumber(State.FarmEggsDelivered) or 0,
-                    tonumber(State.FarmFailures) or 0,
-                    tostring(State.FarmPhase),
-                    tostring(fs.ActiveEggs), tostring(fs.RenderedEggs),
-                    tostring(fs.EggPickup), tostring(fs.EggPlaced)
-                ),
-                duration = 7,
-            })
-        end)
     end,
 })
 
@@ -4944,15 +3995,15 @@ TabFarm:CreateSection({name = "Voo do Auto Farm"})
 TabFarm:CreateSlider({
     name = "Velocidade do voo",
     flag = "FarmFlightSpeed",
-    range = {50, 350},
-    increment = 10,
+    range = {50, 1200},
+    increment = 25,
     value = State.FarmFlightSpeed,
     suffix = " studs/s",
     callback = function(value)
         State.FarmFlightSpeed = math.clamp(
             math.floor(tonumber(value) or 300),
             50,
-            350
+            1200
         )
     end,
 })
@@ -5050,189 +4101,6 @@ TabFarm:CreateToggle({
     end,
 })
 
-TabFarm:CreateSection({name = "Motor avançado e segurança"})
-
-TabFarm:CreateSlider({
-    name = "Tentativas de coleta",
-    flag = "FarmPickupRetries",
-    range = {1, 10},
-    increment = 1,
-    value = State.FarmPickupRetries,
-    suffix = " tentativas",
-    callback = function(value)
-        State.FarmPickupRetries = math.clamp(math.floor(tonumber(value) or 6), 1, 10)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Espera após tentativa",
-    flag = "FarmPickupWait",
-    range = {0.10, 0.80},
-    increment = 0.05,
-    value = State.FarmPickupWait,
-    suffix = " s",
-    callback = function(value)
-        State.FarmPickupWait = math.clamp(tonumber(value) or 0.25, 0.10, 0.80)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Atraso entre retries",
-    flag = "FarmRetryDelay",
-    range = {0.10, 1.00},
-    increment = 0.05,
-    value = State.FarmRetryDelay,
-    suffix = " s",
-    callback = function(value)
-        State.FarmRetryDelay = math.clamp(tonumber(value) or 0.30, 0.10, 1.00)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Raio de chegada",
-    flag = "FarmFlightArriveRadius",
-    range = {2, 10},
-    increment = 1,
-    value = State.FarmFlightArriveRadius,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmFlightArriveRadius = math.clamp(math.floor(tonumber(value) or 4), 2, 10)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Altura de entrada no plot",
-    flag = "FarmBaseEntryHeight",
-    range = {3, 15},
-    increment = 1,
-    value = State.FarmBaseEntryHeight,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmBaseEntryHeight = math.clamp(math.floor(tonumber(value) or 7), 3, 15)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Velocidade de aproximação da base",
-    flag = "FarmBaseApproachSpeed",
-    range = {60, 220},
-    increment = 5,
-    value = State.FarmBaseApproachSpeed,
-    suffix = " studs/s",
-    callback = function(value)
-        State.FarmBaseApproachSpeed = math.clamp(math.floor(tonumber(value) or 140), 60, 220)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Altura de aproximação do ninho",
-    flag = "FarmNestApproachHeight",
-    range = {3, 12},
-    increment = 1,
-    value = State.FarmNestApproachHeight,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmNestApproachHeight = math.clamp(math.floor(tonumber(value) or 6), 3, 12)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Intervalo de procura do ninho",
-    flag = "FarmNestPoll",
-    range = {0.10, 0.75},
-    increment = 0.05,
-    value = State.FarmNestPoll,
-    suffix = " s",
-    callback = function(value)
-        State.FarmNestPoll = math.clamp(tonumber(value) or 0.25, 0.10, 0.75)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Raio para considerar na base",
-    flag = "FarmHoverRadius",
-    range = {8, 40},
-    increment = 1,
-    value = State.FarmHoverRadius,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmHoverRadius = math.clamp(math.floor(tonumber(value) or 18), 8, 40)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Intervalo do motor",
-    flag = "FarmLoopDelay",
-    range = {0.05, 0.50},
-    increment = 0.05,
-    value = State.FarmLoopDelay,
-    suffix = " s",
-    callback = function(value)
-        State.FarmLoopDelay = math.clamp(tonumber(value) or 0.10, 0.05, 0.50)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Pausa entre ciclos",
-    flag = "FarmCycleDelay",
-    range = {0.50, 5.00},
-    increment = 0.25,
-    value = State.FarmCycleDelay,
-    suffix = " s",
-    callback = function(value)
-        State.FarmCycleDelay = math.clamp(tonumber(value) or 1.50, 0.50, 5.00)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Espera sem ovo alvo",
-    flag = "FarmNoTargetDelay",
-    range = {0.25, 5.00},
-    increment = 0.25,
-    value = State.FarmNoTargetDelay,
-    suffix = " s",
-    callback = function(value)
-        State.FarmNoTargetDelay = math.clamp(tonumber(value) or 1.00, 0.25, 5.00)
-    end,
-})
-
-TabFarm:CreateToggle({
-    name = "Proteção contra atravessar o chão",
-    flag = "FarmFloorGuard",
-    description = "Mantém folga do piso, limita a descida e restaura colisão na aproximação final.",
-    value = State.FarmFloorGuard,
-    callback = function(value)
-        State.FarmFloorGuard = value
-        if not value and State.AutoFarm then
-            StartFarmNoclip()
-        end
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Folga mínima do chão",
-    flag = "FarmFloorClearance",
-    range = {3, 12},
-    increment = 1,
-    value = State.FarmFloorClearance,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmFloorClearance = math.clamp(math.floor(tonumber(value) or 6), 3, 12)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Velocidade máxima de descida",
-    flag = "FarmMaxDescendSpeed",
-    range = {30, 120},
-    increment = 5,
-    value = State.FarmMaxDescendSpeed,
-    suffix = " studs/s",
-    callback = function(value)
-        State.FarmMaxDescendSpeed = math.clamp(math.floor(tonumber(value) or 70), 30, 120)
-    end,
-})
-
 TabFarm:CreateSlider({
     name = "Pausa na base",
     flag = "FarmBasePause",
@@ -5254,116 +4122,6 @@ TabFarm:CreateSlider({
     suffix = " s",
     callback = function(value)
         State.FarmDepositWait = math.clamp(tonumber(value) or 3.50, 1.5, 6.0)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Espera por ninho livre",
-    flag = "FarmNestWait",
-    range = {2.0, 20.0},
-    increment = 0.5,
-    value = State.FarmNestWait,
-    suffix = " s",
-    callback = function(value)
-        State.FarmNestWait = math.clamp(tonumber(value) or 8.0, 2.0, 20.0)
-    end,
-})
-
-TabFarm:CreateSection({name = "Rota segura 2026"})
-
-TabFarm:CreateSlider({
-    name = "Distância do lado da base",
-    flag = "FarmBaseSideOffset",
-    range = {8, 60},
-    increment = 1,
-    value = State.FarmBaseSideOffset,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmBaseSideOffset = math.clamp(math.floor(tonumber(value) or 26), 8, 60)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Altura ao cair ao lado",
-    flag = "FarmBaseSideHeight",
-    range = {3, 15},
-    increment = 1,
-    value = State.FarmBaseSideHeight,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmBaseSideHeight = math.clamp(math.floor(tonumber(value) or 6), 3, 15)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Entrada no plot",
-    flag = "FarmBaseEntryInset",
-    range = {4, 40},
-    increment = 1,
-    value = State.FarmBaseEntryInset,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmBaseEntryInset = math.clamp(math.floor(tonumber(value) or 14), 4, 40)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Velocidade para entrar",
-    flag = "FarmBaseEntrySpeed",
-    range = {60, 180},
-    increment = 5,
-    value = State.FarmBaseEntrySpeed,
-    suffix = " studs/s",
-    callback = function(value)
-        State.FarmBaseEntrySpeed = math.clamp(math.floor(tonumber(value) or 110), 60, 180)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Pausa ao lado da base",
-    flag = "FarmBaseSidePause",
-    range = {0.20, 2.0},
-    increment = 0.10,
-    value = State.FarmBaseSidePause,
-    suffix = " s",
-    callback = function(value)
-        State.FarmBaseSidePause = math.clamp(tonumber(value) or 0.60, 0.20, 2.0)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Pausa dentro do plot",
-    flag = "FarmBaseEntryPause",
-    range = {0.20, 2.0},
-    increment = 0.10,
-    value = State.FarmBaseEntryPause,
-    suffix = " s",
-    callback = function(value)
-        State.FarmBaseEntryPause = math.clamp(tonumber(value) or 0.80, 0.20, 2.0)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Velocidade até o ninho",
-    flag = "FarmNestApproachSpeed",
-    range = {60, 180},
-    increment = 5,
-    value = State.FarmNestApproachSpeed,
-    suffix = " studs/s",
-    callback = function(value)
-        State.FarmNestApproachSpeed = math.clamp(math.floor(tonumber(value) or 100), 60, 180)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Confirmação do plot",
-    flag = "FarmBaseConfirmTimeout",
-    range = {0.5, 5.0},
-    increment = 0.25,
-    value = State.FarmBaseConfirmTimeout,
-    suffix = " s",
-    callback = function(value)
-        State.FarmBaseConfirmTimeout = math.clamp(tonumber(value) or 2.50, 0.5, 5.0)
     end,
 })
 
@@ -5405,13 +4163,9 @@ TabFarm:CreateButton({
     callback = function()
         State.AutoFarm = false
         State.AutoPickup = false
+        FarmBusy = false
+        PickupBusy = false
         CancelGlide()
-        DestroyFarmFlightMovers()
-        StopFarmNoclip()
-        ClearFarmTarget()
-        State.FarmPhase = "Stopped"
-        LastFarmStatus = "Auto Farm parado"
-        -- FarmBusy fica sob controle do ciclo atual até ele sair naturalmente.
     end,
 })
 
@@ -5419,104 +4173,6 @@ TabFarm:CreateButton({
     name = "Montar melhor pet agora",
     callback = function()
         MountBestPet()
-    end,
-})
-
-TabFarm:CreateSection({name = "Automações 2026 verificadas"})
-
-TabFarm:CreateToggle({
-    name = "Auto Place Eggs",
-    flag = "AutoPlaceEggs",
-    description = "Coloca ovos em ninhos livres; no Auto Farm principal, a entrega já faz parte do ciclo.",
-    value = State.AutoPlaceEggs,
-    callback = function(value)
-        State.AutoPlaceEggs = value
-    end,
-})
-
-TabFarm:CreateToggle({
-    name = "Auto Hatch Eggs",
-    flag = "AutoHatchEggs",
-    description = "Hatch eggs com timer concluído e confirma a remoção do ovo.",
-    value = State.AutoHatchEggs,
-    callback = function(value)
-        State.AutoHatchEggs = value
-    end,
-})
-
-TabFarm:CreateToggle({
-    name = "Auto Best Pets",
-    flag = "AutoBestPets",
-    description = "Reorganiza os pets colocados usando Income ou Speed.",
-    value = State.AutoBestPets,
-    callback = function(value)
-        State.AutoBestPets = value
-    end,
-})
-
-TabFarm:CreateDropdown({
-    name = "Melhor pet por",
-    flag = "BestPetMetric",
-    options = {"Income", "Speed"},
-    value = State.BestPetMetric,
-    callback = function(value)
-        if value == "Income" or value == "Speed" then
-            State.BestPetMetric = value
-        end
-    end,
-})
-
-TabFarm:CreateToggle({
-    name = "Auto Claim Index",
-    flag = "AutoClaimIndex",
-    description = "Resgata automaticamente o próximo reward de Index quando o objetivo já foi alcançado.",
-    value = State.AutoClaimIndex,
-    callback = function(value)
-        State.AutoClaimIndex = value
-    end,
-})
-
-TabFarm:CreateToggle({
-    name = "Auto Buy Food",
-    flag = "AutoBuyFood",
-    description = "Compra comida apenas quando o estoque e o dinheiro podem ser confirmados.",
-    value = State.AutoBuyFood,
-    callback = function(value)
-        State.AutoBuyFood = value
-    end,
-})
-
-TabFarm:CreateToggle({
-    name = "Auto Feed Pets",
-    flag = "AutoFeedPets",
-    description = "Alimenta um pet elegível com comida disponível; não interfere enquanto o Auto Farm estiver voando.",
-    value = State.AutoFeedPets,
-    callback = function(value)
-        State.AutoFeedPets = value
-    end,
-})
-
-TabFarm:CreateToggle({
-    name = "Auto Favorites",
-    flag = "AutoFavorites",
-    description = "Favorita pets de inventário usando o melhor pet disponível por sua métrica selecionada.",
-    value = State.AutoFavorites,
-    callback = function(value)
-        State.AutoFavorites = value
-    end,
-})
-
-TabFarm:CreateButton({
-    name = "Status 2026",
-    description = "Mostra quais módulos e APIs avançadas foram detectados.",
-    callback = function()
-        pcall(function()
-            Window:Notify({
-                title = "Automações 2026",
-                content = tostring(State.AdvancedStatus),
-                duration = 6,
-            })
-        end)
     end,
 })
 
@@ -5952,17 +4608,6 @@ local function LoadConfigNow()
 end
 
 TabConfig:CreateButton({
-    name = "Reentrar no servidor",
-    description = "Reinicia a sessão atual sem apagar a configuração do hub.",
-    callback = function()
-        pcall(function()
-            local TeleportService = game:GetService("TeleportService")
-            TeleportService:Teleport(game.PlaceId, LocalPlayer)
-        end)
-    end,
-})
-
-TabConfig:CreateButton({
     name = "Salvar config",
     description = "Salva os toggles, sliders, filtros e seleções atuais no arquivo do hub.",
     callback = function()
@@ -6071,13 +4716,6 @@ TabConfig:CreateButton({
         State.InfiniteJump = false
         State.AntiAFK = false
         State.Flying = false
-        State.AutoPlaceEggs = false
-        State.AutoHatchEggs = false
-        State.AutoBestPets = false
-        State.AutoClaimIndex = false
-        State.AutoBuyFood = false
-        State.AutoFeedPets = false
-        State.AutoFavorites = false
 
         StopSpeed()
         CancelGlide()
@@ -6109,677 +4747,24 @@ TabConfig:CreateButton({
 })
 
 --============================================================--
--- CAMADA 2026 VERIFICADA (CARREGADA SOMENTE APOS A UI)
--- Baseada em APIs concretas vistas no codigo publico atual do jogo.
--- Todas as automacoes abaixo sao opt-in; qualquer falha fica confinada
--- a esta camada e nao pode impedir a interface v15 de aparecer.
---============================================================--
-
-local Advanced2026 = {
-    Ready = false,
-    Failed = false,
-    Busy = false,
-    Data = {},
-    Services = {},
-    Cooldowns = {},
-    FavoriteRequests = {},
-}
-
-function Advanced2026:SetStatus(message)
-    State.AdvancedStatus = tostring(message)
-end
-
-function Advanced2026:Ready(key, interval)
-    local now = os.clock()
-    if now < (self.Cooldowns[key] or 0) then
-        return false
-    end
-    self.Cooldowns[key] = now + interval
-    return true
-end
-
-function Advanced2026:Value(name, default)
-    local saved = LocalPlayer:FindFirstChild("SavedData")
-    local value = saved and saved:FindFirstChild(name)
-    return value and value.Value or default
-end
-
-function Advanced2026:Fire(name, ...)
-    local remotes = GetGameRemotes()
-    local remote = remotes and remotes:FindFirstChild(name)
-    if not remote or not remote:IsA("RemoteEvent") then
-        return false
-    end
-    local ok = pcall(function(...)
-        remote:FireServer(...)
-    end, ...)
-    return ok
-end
-
-function Advanced2026:WaitFor(predicate, timeout)
-    local deadline = os.clock() + (timeout or 3)
-    while Running and os.clock() < deadline do
-        local ok, result = pcall(predicate)
-        if ok and result then
-            return true
-        end
-        task.wait(0.10)
-    end
-    return false
-end
-
-function Advanced2026:Tools()
-    local result = {}
-    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-    local character = LocalPlayer.Character
-    for _, container in ipairs({backpack, character}) do
-        if container then
-            for _, item in ipairs(container:GetChildren()) do
-                if item:IsA("Tool") then
-                    table.insert(result, item)
-                end
-            end
-        end
-    end
-    return result
-end
-
-function Advanced2026:ToolByPetKey(key)
-    for _, tool in ipairs(self:Tools()) do
-        if tool:GetAttribute("PetKey") == key then
-            return tool
-        end
-    end
-    return nil
-end
-
-function Advanced2026:Equip(tool)
-    local character, humanoid = GetCharacter()
-    if not character or not humanoid or not tool or not tool.Parent then
-        return false
-    end
-    return pcall(function()
-        humanoid:EquipTool(tool)
-    end)
-end
-
-function Advanced2026:EggTools()
-    local result = {}
-    for _, tool in ipairs(self:Tools()) do
-        if self.Data.Eggs and self.Data.Eggs[tool.Name] and not tool:GetAttribute("PetKey") then
-            table.insert(result, tool)
-        end
-    end
-    table.sort(result, function(a, b)
-        local la = (self.Data.Eggs[a.Name] and self.Data.Eggs[a.Name].Luck) or 0
-        local lb = (self.Data.Eggs[b.Name] and self.Data.Eggs[b.Name].Luck) or 0
-        if la == lb then
-            return a.Name < b.Name
-        end
-        return la > lb
-    end)
-    return result
-end
-
-function Advanced2026:FreeNests()
-    local plot = GetMyPlot()
-    local nests = plot and plot:FindFirstChild("Nests")
-    local result = {}
-    if not nests then
-        return result
-    end
-    for _, nest in ipairs(nests:GetChildren()) do
-        if nest:GetAttribute("Unlocked") and not nest:GetAttribute("Occupied") then
-            table.insert(result, nest)
-        end
-    end
-    table.sort(result, function(a, b)
-        return (tonumber(a.Name) or math.huge) < (tonumber(b.Name) or math.huge)
-    end)
-    return result
-end
-
-function Advanced2026:PetList()
-    local result, seen = {}, {}
-    local function add(object)
-        if not object then return end
-        local key = object:GetAttribute("PetKey")
-        local name = object:GetAttribute("PetName") or object.Name
-        local data = self.Data.Pets and self.Data.Pets[name]
-        if not key or not data or seen[key] then return end
-        seen[key] = true
-        local weight = tonumber(object:GetAttribute("Weight")) or 10
-        local age = tonumber(object:GetAttribute("Age")) or 1
-        local mutation = object:GetAttribute("Mutation")
-        local spawnMutation = object:GetAttribute("SpawnMutation")
-        local factor = 1
-        if self.Data.Mutations and type(self.Data.Mutations.CombinedFactor) == "function" then
-            local ok, value = pcall(self.Data.Mutations.CombinedFactor, mutation, spawnMutation)
-            if ok and type(value) == "number" then factor = value end
-        end
-        local income = (tonumber(data.Income) or 0) * weight / 10 * factor
-        local speed = tonumber(data.Speed) or 0
-        if self.Services.PetAging and type(self.Services.PetAging.DisplaySpeedFor) == "function" then
-            local ok, value = pcall(self.Services.PetAging.DisplaySpeedFor, data.Speed or 0, weight)
-            if ok and type(value) == "number" then speed = value * factor end
-        end
-        result[#result + 1] = {
-            Key = key,
-            Name = name,
-            Object = object,
-            Age = age,
-            Weight = weight,
-            Income = income,
-            Speed = speed,
-            Rarity = data.Rarity,
-            Favorite = object:GetAttribute("Favorited") == true,
-            Placed = not object:IsA("Tool"),
-        }
-    end
-
-    local plot = GetMyPlot()
-    local petsFolder = plot and plot:FindFirstChild("Pets")
-    if petsFolder then
-        for _, pet in ipairs(petsFolder:GetChildren()) do
-            add(pet)
-        end
-    end
-    for _, tool in ipairs(self:Tools()) do
-        if tool:GetAttribute("PetKey") then
-            add(tool)
-        end
-    end
-
-    table.sort(result, function(a, b)
-        local metric = State.BestPetMetric == "Speed" and "Speed" or "Income"
-        if a[metric] == b[metric] then
-            return a.Key < b.Key
-        end
-        return (a[metric] or 0) > (b[metric] or 0)
-    end)
-    return result
-end
-
-function Advanced2026:Dismount()
-    if not IsRidingPet() then
-        return true
-    end
-    if not self:Fire("PetDismount") then
-        return false
-    end
-    return self:WaitFor(function()
-        return not IsRidingPet()
-    end, 3)
-end
-
-function Advanced2026:PlaceEggs()
-    if not self.Ready or State.AutoFarm or GetBasketCount() <= 0 then
-        return false
-    end
-    local plot = GetMyPlot()
-    if not plot then
-        self:SetStatus("Aguardando seu plot")
-        return false
-    end
-
-    ReturnToPlot()
-    local toolReady = self:WaitFor(function()
-        return #self:EggTools() > 0
-    end, 4)
-    if not toolReady then
-        self:SetStatus("Auto Place: ovo ainda nao virou Tool na mochila")
-        return false
-    end
-
-    local nests = self:FreeNests()
-    local tools = self:EggTools()
-    if #nests == 0 then
-        self:SetStatus("Auto Place: aguardando ninho livre")
-        return false
-    end
-    if #tools == 0 then
-        self:SetStatus("Auto Place: aguardando ovo na mochila")
-        return false
-    end
-
-    for _, nest in ipairs(nests) do
-        if not Running or not State.AutoPlaceEggs or State.AutoFarm then break end
-        local tool = self:EggTools()[1]
-        if not tool then break end
-        if not self:Equip(tool) then
-            self:SetStatus("Auto Place: falha ao equipar ovo")
-            return false
-        end
-        task.wait(0.15)
-        if not self:Fire("EggPlaced", {NestId = nest.Name}) then
-            self:SetStatus("Auto Place: EggPlaced indisponivel")
-            return false
-        end
-        if not self:WaitFor(function()
-            return nest:GetAttribute("Occupied") == true
-        end, 3) then
-            self:SetStatus("Auto Place: colocacao nao confirmada")
-            return false
-        end
-    end
-
-    self:SetStatus("Auto Place: ovos colocados e confirmados")
-    return true
-end
-
-function Advanced2026:EggTimers()
-    local result = {}
-    local plot = GetMyPlot()
-    local eggs = plot and plot:FindFirstChild("Eggs")
-    if not eggs then return result end
-    for _, egg in ipairs(eggs:GetChildren()) do
-        local info = egg:FindFirstChild("EggData", true)
-        local data = self.Data.Eggs and self.Data.Eggs[egg.Name]
-        local start = info and info:FindFirstChild("PlaceTime")
-        local weight = info and info:FindFirstChild("Weight")
-        if data and start and start:IsA("NumberValue") and self.Services.DayNight and type(self.Services.DayNight.GrowthRealRemaining) == "function" then
-            local total = tonumber(data.GrowthTime) or 0
-            if self.Data.General and type(self.Data.General.GrowthTimeFor) == "function" then
-                local ok, value = pcall(self.Data.General.GrowthTimeFor, data.GrowthTime or 0, weight and weight.Value or 1)
-                if ok and type(value) == "number" then total = value end
-            end
-            local ok, remaining = pcall(self.Services.DayNight.GrowthRealRemaining, start.Value, total)
-            if ok and type(remaining) == "number" then
-                result[#result + 1] = {Object = egg, Key = egg:GetAttribute("EggKey"), Name = egg.Name, Remaining = remaining}
-            end
-        end
-    end
-    table.sort(result, function(a, b)
-        return (a.Remaining or math.huge) < (b.Remaining or math.huge)
-    end)
-    return result
-end
-
-function Advanced2026:AutoHatch()
-    if not self.Ready or State.AutoFarm or not State.AutoHatchEggs then
-        return false
-    end
-    local timers = self:EggTimers()
-    for _, egg in ipairs(timers) do
-        if egg.Remaining <= 0 and egg.Key then
-            local _, root = GetCharacter()
-            if not root then return false end
-            if (root.Position - egg.Object:GetPivot().Position).Magnitude > 12 then
-                if not GlideTo(egg.Object:GetPivot().Position, State.TravelSpeed) then
-                    self:SetStatus("Auto Hatch: falha no deslocamento")
-                    return false
-                end
-            end
-            if not self:Dismount() then
-                self:SetStatus("Auto Hatch: nao foi possivel desmontar")
-                return false
-            end
-            if not self:Fire("Hatch", {EggKey = egg.Key}) then
-                self:SetStatus("Auto Hatch: remote indisponivel")
-                return false
-            end
-            if self:WaitFor(function()
-                return not egg.Object.Parent
-            end, 8) then
-                self:SetStatus("Auto Hatch: ovo chocou " .. tostring(egg.Name))
-                return true
-            end
-        end
-    end
-    return false
-end
-
-function Advanced2026:AutoClaimIndex()
-    if not self.Ready or State.AutoFarm or not State.AutoClaimIndex or not self.Data.IndexRewards then
-        return false
-    end
-    local stage = tonumber(self:Value("IndexRewardStage", 0)) or 0
-    local reward
-    if type(self.Data.IndexRewards.StageAt) == "function" then
-        local ok, value = pcall(self.Data.IndexRewards.StageAt, stage)
-        if ok then reward = value end
-    end
-    if not reward then return false end
-    local count = 0
-    if type(self.Data.IndexRewards.DiscoveredCount) == "function" then
-        local ok, value = pcall(self.Data.IndexRewards.DiscoveredCount, self:Value("OwnedPets", ""))
-        if ok then count = tonumber(value) or 0 end
-    end
-    if count < (tonumber(reward.Goal) or math.huge) then return false end
-    if not self:Fire("ClaimIndexReward") then
-        self:SetStatus("Auto Index: remote indisponivel")
-        return false
-    end
-    if self:WaitFor(function()
-        return (tonumber(self:Value("IndexRewardStage", 0)) or 0) ~= stage
-    end, 2) then
-        self:SetStatus("Auto Index: reward resgatado")
-        return true
-    end
-    return false
-end
-
-function Advanced2026:AutoBestPets()
-    if not self.Ready or State.AutoFarm or not State.AutoBestPets then
-        return false
-    end
-    if not self:Dismount() then return false end
-    if not ReturnToPlot() then return false end
-    task.wait(0.35)
-    local plot = GetMyPlot()
-    if not plot then return false end
-    local pets = self:PetList()
-    if #pets == 0 then return false end
-    local capacity = tonumber(LocalPlayer:GetAttribute("MaxPets")) or tonumber(self:Value("MaxPets", 5)) or 5
-    capacity = math.max(1, math.floor(capacity))
-    table.sort(pets, function(a, b)
-        local metric = State.BestPetMetric == "Speed" and "Speed" or "Income"
-        if a[metric] == b[metric] then return a.Key < b.Key end
-        return (a[metric] or 0) > (b[metric] or 0)
-    end)
-    local desired = {}
-    for i = 1, math.min(capacity, #pets) do desired[pets[i].Key] = true end
-
-    for _, pet in ipairs(pets) do
-        if pet.Placed and not desired[pet.Key] then
-            if self:Fire("PickupPet", pet.Key) then
-                self:WaitFor(function() return self:ToolByPetKey(pet.Key) ~= nil end, 3)
-            end
-        end
-    end
-
-    local base = plot:FindFirstChild("Baseplate")
-    if not base then return false end
-    local cols = math.max(1, math.ceil(math.sqrt(capacity)))
-    local spacing = math.min(9, (math.min(base.Size.X, base.Size.Z) - 12) / cols)
-
-    for i = 1, math.min(capacity, #pets) do
-        local pet = pets[i]
-        local tool = self:ToolByPetKey(pet.Key)
-        if tool then
-            if not self:Equip(tool) then return false end
-            task.wait(0.15)
-            local pos = (base.CFrame * CFrame.new(
-                ((i - 1) % cols - (cols - 1) / 2) * spacing,
-                4,
-                math.floor((i - 1) / cols) * spacing
-            )).Position
-            if not self:Fire("PlacePet", pet.Key, pos) then
-                return false
-            end
-            if not self:WaitFor(function()
-                for _, current in ipairs(self:PetList()) do
-                    if current.Key == pet.Key and current.Placed then return true end
-                end
-                return false
-            end, 3) then
-                self:SetStatus("Auto Best Pets: colocacao nao confirmada")
-                return false
-            end
-        end
-    end
-
-    self:SetStatus("Auto Best Pets: " .. tostring(State.BestPetMetric))
-    return true
-end
-
-function Advanced2026:FoodTools(name)
-    local result = {}
-    for _, tool in ipairs(self:Tools()) do
-        if tool.Name == name then table.insert(result, tool) end
-    end
-    return result
-end
-
-function Advanced2026:FoodAmount(tool)
-    local data = tool and tool:FindFirstChild("Data")
-    local amount = data and data:FindFirstChild("Amount")
-    if amount and amount:IsA("ValueBase") then
-        return math.max(0, math.floor(tonumber(amount.Value) or 0))
-    end
-    return tool and tool.Parent and 1 or 0
-end
-
-function Advanced2026:FoodCount(name)
-    local total = 0
-    for _, tool in ipairs(self:FoodTools(name)) do
-        total = total + self:FoodAmount(tool)
-    end
-    return total
-end
-
-function Advanced2026:AutoBuyFoodOnce()
-    if not self.Ready or State.AutoFarm or not State.AutoBuyFood or not self.Data.Shop or not self.Data.Shop.Food then
-        return false
-    end
-    local main = LocalPlayer.PlayerGui:FindFirstChild("Main")
-    local shop = main and main:FindFirstChild("Shop")
-    local holders = shop and shop:FindFirstChild("Holders")
-    local foodHolder = holders and holders:FindFirstChild("Food")
-    for name, definition in pairs(self.Data.Shop.Food) do
-        if type(definition) == "table" and self.Data.Foods and self.Data.Foods[name] then
-            local card = foodHolder and foodHolder:FindFirstChild(name)
-            local stockLabel = card and card:FindFirstChild("Stock", true)
-            local stock = stockLabel and tonumber(stockLabel.Text:match("(%d+)"))
-            local cash = tonumber(self:Value("Cash", 0)) or 0
-            if stock and stock > 0 and cash >= (tonumber(definition.Price) or math.huge) then
-                local before = self:FoodCount(name)
-                if self:Fire("BuyWithCash", "Food", name) and self:WaitFor(function()
-                    return self:FoodCount(name) > before
-                end, 3) then
-                    self:SetStatus("Auto Buy Food: " .. tostring(name))
-                    return true
-                end
-            end
-        end
-    end
-    return false
-end
-
-function Advanced2026:AutoFeedOnce()
-    if not self.Ready or State.AutoFarm or not State.AutoFeedPets then return false end
-    local foodName = nil
-    if self:FoodCount("Grass") > 0 then foodName = "Grass" end
-    if not foodName then return false end
-    local pets = self:PetList()
-    for _, pet in ipairs(pets) do
-        local maxAge = self.Services.PetAging and tonumber(self.Services.PetAging.MaxAge) or 100
-        if pet.Age < maxAge then
-            if pet.Placed and pet.Object:IsA("Model") then
-                local pos = pet.Object:GetPivot().Position
-                local _, root = GetCharacter()
-                if root and (root.Position - pos).Magnitude > 18 then
-                    if not GlideTo(pos, State.TravelSpeed) then return false end
-                end
-            end
-            local food = self:FoodTools(foodName)[1]
-            if not food or not self:Equip(food) then return false end
-            task.wait(0.15)
-            local before = self:FoodCount(foodName)
-            if not self:Fire("FeedPet", pet.Key, foodName) then return false end
-            if self:WaitFor(function() return self:FoodCount(foodName) < before end, 3) then
-                self:SetStatus("Auto Feed: " .. tostring(pet.Name))
-                return true
-            end
-        end
-    end
-    return false
-end
-
-function Advanced2026:AutoFavoriteOnce()
-    if not self.Ready or State.AutoFarm or not State.AutoFavorites or not self.Data.Pets then return false end
-    local pets = self:PetList()
-    table.sort(pets, function(a, b)
-        if a.Favorite ~= b.Favorite then return not a.Favorite end
-        local metric = State.BestPetMetric == "Speed" and "Speed" or "Income"
-        if a[metric] == b[metric] then return a.Key < b.Key end
-        return (a[metric] or 0) > (b[metric] or 0)
-    end)
-    for _, pet in ipairs(pets) do
-        if pet.Object:IsA("Tool") and not pet.Favorite and not self.FavoriteRequests[pet.Key] then
-            self.FavoriteRequests[pet.Key] = true
-            if not self:Fire("FavoritePet", pet.Key) then
-                self.FavoriteRequests[pet.Key] = nil
-                return false
-            end
-            if self:WaitFor(function()
-                local tool = self:ToolByPetKey(pet.Key)
-                return tool and tool:GetAttribute("Favorited") == true
-            end, 3) then
-                self.FavoriteRequests[pet.Key] = nil
-                self:SetStatus("Auto Favorites: " .. tostring(pet.Name))
-                return true
-            end
-            self.FavoriteRequests[pet.Key] = nil
-        end
-    end
-    return false
-end
-
-function Advanced2026:LoadModules()
-    local essentialOk, essentialErr = pcall(function()
-        local gameData = ReplicatedStorage:WaitForChild("GameData", 10)
-        local gameServices = ReplicatedStorage:WaitForChild("GameServices", 10)
-        self.Data.Eggs = require(gameData:WaitForChild("Eggs", 10))
-        self.Data.Pets = require(gameData:WaitForChild("Pets", 10))
-        self.Data.General = require(gameData:WaitForChild("General", 10))
-        self.Data.Mutations = require(gameData:WaitForChild("Mutations", 10))
-        self.Data.EggBaskets = require(gameData:WaitForChild("EggBaskets", 10))
-        self.Data.IndexRewards = require(gameData:WaitForChild("IndexRewards", 10))
-        self.Services.PetAging = require(gameServices:WaitForChild("PetAging", 10))
-        self.Services.DayNight = require(gameServices:WaitForChild("DayNight", 10))
-    end)
-    if not essentialOk then
-        self.Failed = true
-        self:SetStatus("Falha nos módulos essenciais 2026: " .. tostring(essentialErr))
-        return false
-    end
-
-    -- Food/Shop é opcional: se o jogo mudar esses módulos, as outras automações
-    -- continuam disponíveis.
-    pcall(function()
-        local gameData = ReplicatedStorage:FindFirstChild("GameData")
-        if gameData then
-            local foods = gameData:FindFirstChild("Foods")
-            local shop = gameData:FindFirstChild("Shop")
-            if foods and foods:IsA("ModuleScript") then self.Data.Foods = require(foods) end
-            if shop and shop:IsA("ModuleScript") then self.Data.Shop = require(shop) end
-        end
-    end)
-
-    self.Ready = true
-    self:SetStatus("Módulos 2026 essenciais carregados")
-    return true
-end
-
-task.defer(function()
-    if not Running then return end
-    local loaded = Advanced2026:LoadModules()
-    if not loaded then return end
-    while Running do
-        task.wait(math.clamp(tonumber(State.AdvancedInterval) or 1.0, 0.5, 5.0))
-        if Running and not Advanced2026.Failed and not Advanced2026.Busy and not State.AutoFarm then
-            Advanced2026.Busy = true
-            pcall(function()
-                if State.AutoPlaceEggs and GetBasketCount() > 0 then
-                    Advanced2026:PlaceEggs()
-                elseif State.AutoHatchEggs then
-                    Advanced2026:AutoHatch()
-                elseif State.AutoClaimIndex then
-                    Advanced2026:AutoClaimIndex()
-                elseif State.AutoBestPets and Advanced2026:Ready("Best", 25) then
-                    Advanced2026:AutoBestPets()
-                elseif State.AutoBuyFood and Advanced2026:Ready("BuyFood", 2) and Advanced2026.Data.Foods and Advanced2026.Data.Shop then
-                    Advanced2026:AutoBuyFoodOnce()
-                elseif State.AutoFeedPets and Advanced2026:Ready("Feed", 3) then
-                    Advanced2026:AutoFeedOnce()
-                elseif State.AutoFavorites and Advanced2026:Ready("Fav", 1) then
-                    Advanced2026:AutoFavoriteOnce()
-                end
-            end)
-            Advanced2026.Busy = false
-        end
-    end
-end)
-
---============================================================--
 -- LOOPS CENTRALIZADOS
 --============================================================--
 
 local FarmLoop = task.spawn(function()
     while Running do
-        if not State.AutoFarm then
-            task.wait(0.05)
-        elseif FarmBusy then
-            -- Um único ciclo por vez. Isso evita duas rotas brigando pelo personagem.
-            task.wait(0.05)
-        else
-            local ok, err = pcall(FarmOnce)
+        task.wait(
+            math.clamp(
+                tonumber(State.FarmLoopDelay) or 0.10,
+                0.05,
+                0.50
+            )
+        )
 
-            if not ok and FarmIsRunning() then
-                State.FarmFailures = (tonumber(State.FarmFailures) or 0) + 1
-                SetFarmPhase("Recuperando do erro")
-                LastFarmStatus = "Auto Farm error: " .. tostring(err)
-                warn("[MontarUmPet] Auto Farm:", err)
-                if State.FarmAutoRecover then
-                    ClearFarmTarget()
-                    task.wait(math.clamp(tonumber(State.FarmRetryAfterError) or 1.0, 0.25, 4.0))
-                end
-            elseif State.FarmAutoRecover and FarmIsRunning() and State.FarmPhase == "No target - hovering" then
-                task.wait(math.clamp(tonumber(State.FarmNoTargetDelay) or 1.0, 0.25, 5.0))
-            elseif FarmIsRunning() then
-                task.wait(math.clamp(tonumber(State.FarmCycleDelay) or 1.50, 0.25, 5.0))
-            end
+        if Running and State.AutoFarm and not FarmBusy then
+            FarmOnce()
         end
     end
 end)
-
---============================================================--
--- FARM WATCHDOG 2026
--- Recupera o motor se ele ficar parado em uma fase intermediária.
--- Não inicia um segundo worker: apenas limpa estado e libera o worker central.
---============================================================--
-local FarmWatchdogLoop = task.spawn(function()
-    local lastPhase = ""
-    local lastChange = os.clock()
-    while Running do
-        task.wait(0.75)
-        if not Running then break end
-        if State.AutoFarm and State.FarmWatchdog then
-            local phase = tostring(State.FarmPhase or "")
-            if phase ~= lastPhase then
-                lastPhase = phase
-                lastChange = os.clock()
-            end
-
-            local limit = math.clamp(tonumber(State.FarmWatchdogTimeout) or 4.0, 2.0, 12.0)
-            if not FarmBusy and (os.clock() - lastChange) >= limit then
-                if phase == "Starting" or phase == "Stopped" or phase == "Idle"
-                    or phase == "No target - hovering" or phase == "Scanning eggs" then
-                    ClearFarmTarget()
-                    State.FarmPhase = "Watchdog: reiniciando ciclo"
-                    LastFarmStatus = State.FarmPhase
-                end
-                lastChange = os.clock()
-            end
-        else
-            lastPhase = ""
-            lastChange = os.clock()
-        end
-    end
-end)
-
--- Dá um primeiro ciclo ao worker assim que o toggle for ligado sem criar um
--- segundo worker ou uma segunda UI.
-Track(RunService.Heartbeat:Connect(function()
-    if Running and State.AutoFarm and not FarmBusy and State.FarmPhase == "Starting" then
-        task.defer(function()
-            if Running and State.AutoFarm and not FarmBusy then
-                pcall(FarmOnce)
-            end
-        end)
-    end
-end))
 
 local PickupLoop = task.spawn(function()
     while Running do
@@ -6812,13 +4797,6 @@ StopHandler = function()
     State.InfiniteJump = false
     State.AntiAFK = false
     State.Flying = false
-    State.AutoPlaceEggs = false
-    State.AutoHatchEggs = false
-    State.AutoBestPets = false
-    State.AutoClaimIndex = false
-    State.AutoBuyFood = false
-    State.AutoFeedPets = false
-    State.AutoFavorites = false
     State.ESPEnabled = false
     State.PlayerESP = false
     State.HidePlayers = false
@@ -6893,7 +4871,7 @@ ENV[TOKEN_NAMES[1]] = {
 
 
 --============================================================--
--- v27 SAFE AUTOFARM LAYER
+-- v23.3 RECOVERY LAYER
 -- Base: v22 UI ORIGINAL v15 (INTACT)
 -- Regra: nenhuma lógica opcional é executada antes da interface.
 -- Qualquer extensão futura deve ser carregada depois que a UI existir.
@@ -6908,7 +4886,7 @@ task.defer(function()
     -- Fica disponível somente depois que Window/Tabs já foram criadas.
     pcall(function()
         ENV.__MUP_V23_CONTEXT = {
-            Version = "25-2026-verified",
+            Version = "23.3-recovery",
             Window = Window,
             TabFarm = TabFarm,
             TabOvos = TabOvos,
