@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v15 AUTOFARM FLIGHT + NOCLIP + SAFE APPROACH + CONFIG
+-- MONTAR UM PET - MASTER v16 AUTOFARM 300 + NEST DEPOSIT + SAFE APPROACH + CONFIG
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 (stable)
 -- Config: salvamento manual + persistência do Rayfield
@@ -228,7 +228,7 @@ local function LooksLikeOurRayfieldGui(gui)
                 or t:find("MASTER v6", 1, true)
                 or t:find("MASTER v7", 1, true)
                 or t:find("MASTER v14", 1, true)
-                or t:find("MASTER v15", 1, true) then
+                or t:find("MASTER v16", 1, true) then
                 hasHubSubtitle = true
             end
 
@@ -2322,23 +2322,356 @@ local function FailCurrentFarmTarget(message, cooldown)
     SetFarmPhase(message or "Changing target")
 end
 
+local function NormalizePromptText(value)
+    if value == nil then
+        return ""
+    end
+
+    local text = tostring(value):lower()
+    text = text:gsub("%s+", " ")
+    return text
+end
+
+local function IsEggPlacementPrompt(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then
+        return false
+    end
+
+    local action = NormalizePromptText(prompt.ActionText)
+    local object = NormalizePromptText(prompt.ObjectText)
+    local promptName = NormalizePromptText(prompt.Name)
+
+    -- Caminho preferencial: o texto oficial usado pelo jogo.
+    if action:find("place egg in nest", 1, true)
+        or object:find("place egg in nest", 1, true)
+        or promptName:find("place egg in nest", 1, true) then
+        return true
+    end
+
+    -- Fallback tolerante para pequenas mudanças de texto/UI.
+    local hasPlace = action:find("place", 1, true)
+        or object:find("place", 1, true)
+        or promptName:find("place", 1, true)
+    local hasEgg = action:find("egg", 1, true)
+        or object:find("egg", 1, true)
+        or promptName:find("egg", 1, true)
+    local hasNest = action:find("nest", 1, true)
+        or object:find("nest", 1, true)
+        or promptName:find("nest", 1, true)
+
+    return hasPlace and hasEgg and hasNest
+end
+
+local function GetPromptWorldPosition(prompt)
+    if not prompt or not prompt.Parent then
+        return nil
+    end
+
+    local parent = prompt.Parent
+    if parent:IsA("Attachment") then
+        return parent.WorldPosition
+    end
+
+    if parent:IsA("BasePart") then
+        return parent.Position
+    end
+
+    if parent:IsA("Model") then
+        local ok, pivot = pcall(function()
+            return parent:GetPivot()
+        end)
+        if ok and pivot then
+            return pivot.Position
+        end
+    end
+
+    local basePart = prompt:FindFirstAncestorWhichIsA("BasePart")
+    if basePart then
+        return basePart.Position
+    end
+
+    local model = prompt:FindFirstAncestorWhichIsA("Model")
+    if model then
+        local ok, pivot = pcall(function()
+            return model:GetPivot()
+        end)
+        if ok and pivot then
+            return pivot.Position
+        end
+    end
+
+    return nil
+end
+
+local function GetAvailableEggNestPrompts(plot)
+    local result = {}
+    if not plot then
+        return result
+    end
+
+    local seen = {}
+
+    for _, descendant in ipairs(plot:GetDescendants()) do
+        if descendant:IsA("ProximityPrompt") and not seen[descendant] then
+            seen[descendant] = true
+
+            if IsEggPlacementPrompt(descendant)
+                and descendant.Enabled then
+                local position = GetPromptWorldPosition(descendant)
+                if position then
+                    result[#result + 1] = {
+                        Prompt = descendant,
+                        Position = position,
+                    }
+                end
+            end
+        end
+    end
+
+    return result
+end
+
+local function FindBestEggNestPrompt(plot, fromPosition, excluded)
+    local prompts = GetAvailableEggNestPrompts(plot)
+    local best = nil
+    local bestDistance = math.huge
+
+    for _, entry in ipairs(prompts) do
+        local prompt = entry.Prompt
+        if prompt
+            and prompt.Parent
+            and prompt.Enabled
+            and not (excluded and excluded[prompt]) then
+
+            local distance = typeof(fromPosition) == "Vector3"
+                and (entry.Position - fromPosition).Magnitude
+                or 0
+
+            if distance < bestDistance then
+                bestDistance = distance
+                best = entry
+            end
+        end
+    end
+
+    return best
+end
+
+local function TriggerEggPlacementPrompt(prompt)
+    if not prompt or not prompt.Parent or not prompt.Enabled then
+        return false
+    end
+
+    local hold = math.max(tonumber(prompt.HoldDuration) or 0, 0)
+
+    if typeof(fireproximityprompt) == "function" then
+        local ok = pcall(function()
+            fireproximityprompt(prompt)
+        end)
+        if ok then
+            return true
+        end
+    end
+
+    -- Fallback para executores que não expõem fireproximityprompt.
+    local began = pcall(function()
+        prompt:InputHoldBegin()
+    end)
+
+    if not began then
+        return false
+    end
+
+    if hold > 0 then
+        task.wait(math.min(hold + 0.10, 3))
+    else
+        task.wait(0.10)
+    end
+
+    pcall(function()
+        prompt:InputHoldEnd()
+    end)
+
+    return true
+end
+
+local function WaitForEggPlaced(timeout)
+    local deadline = os.clock() + math.max(tonumber(timeout) or 3, 0.5)
+
+    while FarmIsRunning() and os.clock() < deadline do
+        if GetBasketCount() <= 0 then
+            return true
+        end
+        task.wait(0.05)
+    end
+
+    return GetBasketCount() <= 0
+end
+
+local function FindPlotEntryPosition(plot, nestPosition)
+    if not plot then
+        return nil
+    end
+
+    -- Prefer a real Baseplate because public scripts for this game use it
+    -- as the player's home surface.
+    local baseplate = plot:FindFirstChild("Baseplate", true)
+    if baseplate and baseplate:IsA("BasePart") then
+        local target = baseplate.Position
+        if typeof(nestPosition) == "Vector3" then
+            -- Stay inside the plot, using the nest as the final destination.
+            target = nestPosition
+        end
+        return target
+    end
+
+    if typeof(nestPosition) == "Vector3" then
+        return nestPosition
+    end
+
+    local ok, pivot = pcall(function()
+        return plot:GetPivot()
+    end)
+
+    return ok and pivot and pivot.Position or nil
+end
+
+local function FarmPlaceEggInNest(plot)
+    if not FarmIsRunning() or not plot or GetBasketCount() <= 0 then
+        return false
+    end
+
+    local _, root = GetCharacter()
+    if not root then
+        return false
+    end
+
+    local tried = {}
+
+    for _ = 1, 4 do
+        if not FarmIsRunning() or GetBasketCount() <= 0 then
+            return GetBasketCount() <= 0
+        end
+
+        local entry = FindBestEggNestPrompt(plot, root.Position, tried)
+        if not entry then
+            SetFarmPhase("Waiting for free nest")
+            task.wait(0.35)
+            continue
+        end
+
+        if tried[entry.Prompt] then
+            -- Há prompts, mas já tentamos todos os candidatos atuais.
+            SetFarmPhase("Nest interaction not confirmed")
+            task.wait(0.35)
+            continue
+        end
+        tried[entry.Prompt] = true
+
+        SetFarmPhase("Entering base / nest")
+        local entryPosition = FindPlotEntryPosition(plot, entry.Position)
+        if not entryPosition then
+            return false
+        end
+
+        -- A chegada à base tem uma parada proposital antes de entrar.
+        -- Isso evita passar direto pelo plot e dá tempo ao servidor de
+        -- registrar a posse/posição da cesta.
+        local _, currentRoot = GetCharacter()
+        if not currentRoot then
+            return false
+        end
+
+        local baseDistance = (currentRoot.Position - entryPosition).Magnitude
+        if baseDistance > math.clamp(tonumber(State.FarmPickupRadius) or 20, 8, 30) then
+            if not FarmFlyTo(
+                entryPosition,
+                State.FarmFlightSpeed,
+                true
+            ) then
+                return false
+            end
+        end
+
+        if not FarmIsRunning() then
+            return false
+        end
+
+        SetFarmPhase("Paused at base")
+        task.wait(math.clamp(
+            tonumber(State.FarmBasePause) or 2.50,
+            1.0,
+            5.0
+        ))
+
+        if not FarmIsRunning() then
+            return false
+        end
+
+        -- Aproximação final lenta ao ninho.
+        local finalPoint = GetSafeDescentPosition(entry.Position, 5)
+        if finalPoint then
+            local _, finalRoot = GetCharacter()
+            if not finalRoot then
+                return false
+            end
+
+            if (finalRoot.Position - finalPoint).Magnitude > 5 then
+                if not FarmFlyTo(finalPoint, 120, true) then
+                    return false
+                end
+            end
+        end
+
+        if not FarmIsRunning() then
+            return false
+        end
+
+        -- O jogo usa o prompt "Place Egg In Nest" para aceitar o ovo.
+        SetFarmPhase("Placing egg in nest")
+        TriggerEggPlacementPrompt(entry.Prompt)
+
+        if WaitForEggPlaced(math.max(tonumber(State.FarmDepositWait) or 3.5, 3)) then
+            SetFarmPhase("Egg placed - next target")
+            return true
+        end
+
+        -- Um segundo toque no mesmo prompt pode ser necessário se o
+        -- primeiro aconteceu antes de o personagem estabilizar.
+        task.wait(0.35)
+        if entry.Prompt and entry.Prompt.Parent and entry.Prompt.Enabled then
+            TriggerEggPlacementPrompt(entry.Prompt)
+            if WaitForEggPlaced(2.5) then
+                SetFarmPhase("Egg placed - next target")
+                return true
+            end
+        end
+    end
+
+    SetFarmPhase("Egg still in basket")
+    return false
+end
+
 local function FarmDeposit()
     if not FarmIsRunning() then
         return false
     end
 
+    if GetBasketCount() <= 0 then
+        return true
+    end
+
     local plot = GetMyPlot()
     if not plot then
-        SetFarmPhase("Base não encontrada")
+        SetFarmPhase("Base not found")
         return false
     end
 
     local okPivot, pivot = pcall(function()
         return plot:GetPivot()
     end)
-
     if not okPivot or not pivot then
-        SetFarmPhase("Posição da base indisponível")
+        SetFarmPhase("Base position unavailable")
         return false
     end
 
@@ -2348,20 +2681,11 @@ local function FarmDeposit()
         25,
         150
     )
-
     local hoverPosition = basePosition + Vector3.new(0, hoverHeight, 0)
-    local _, root = GetCharacter()
-    if not root then
-        return false
-    end
 
-    -- CHECKPOINT 1: sobe antes do retorno para nunca cortar o terreno.
-    SetFarmPhase("Subindo para voltar")
-    if not FarmFlyTo(
-        hoverPosition,
-        State.FarmFlightSpeed,
-        false
-    ) then
+    -- 1) Retorno rápido para cima da base.
+    SetFarmPhase("Returning to base")
+    if not FarmFlyTo(hoverPosition, State.FarmFlightSpeed, false) then
         return false
     end
 
@@ -2369,71 +2693,9 @@ local function FarmDeposit()
         return false
     end
 
-    -- CHECKPOINT 2: chega sobre a base em altitude.
-    local _, latestRoot = GetCharacter()
-    if not latestRoot then
-        return false
-    end
-
-    if (latestRoot.Position - hoverPosition).Magnitude > 20 then
-        SetFarmPhase("Posicionando sobre a base")
-        if not FarmFlyTo(
-            hoverPosition,
-            State.FarmFlightSpeed,
-            false
-        ) then
-            return false
-        end
-    end
-
-    if not FarmIsRunning() then
-        return false
-    end
-
-    -- CHECKPOINT 3: desce apenas até uma altura segura do piso.
-    SetFarmPhase("Descendo na base")
-    local depositPoint = GetSafeDescentPosition(
-        basePosition,
-        math.max(
-            tonumber(State.FarmFlightDescendHeight) or 6,
-            6
-        )
-    )
-
-    if not depositPoint then
-        return false
-    end
-
-    if not FarmFlyTo(
-        depositPoint,
-        math.min(State.FarmFlightSpeed, 180),
-        true
-    ) then
-        return false
-    end
-
-    -- CHECKPOINT 4: parada intencional. Dá tempo para o servidor registrar
-    -- a entrega antes de iniciar o próximo alvo.
-    SetFarmPhase("Estabilizando na base")
-
-    local settleDeadline = os.clock() + math.clamp(
-        tonumber(State.FarmDepositWait) or 3.5,
-        1.5,
-        6
-    )
-
-    while FarmIsRunning()
-        and os.clock() < settleDeadline
-        and GetBasketCount() > 0 do
-        EnforceFarmNoclip()
-        task.wait(0.08)
-    end
-
-    if not FarmIsRunning() then
-        return false
-    end
-
-    -- Mesmo que a cesta já esteja vazia, mantém a parada configurada.
+    -- 2) Parada no alto da base. É proposital: o usuário pediu que o
+    -- personagem pare alguns segundos antes de entrar no plot com o ovo.
+    SetFarmPhase("Pausing above base")
     task.wait(math.clamp(
         tonumber(State.FarmBasePause) or 2.50,
         1.0,
@@ -2444,38 +2706,66 @@ local function FarmDeposit()
         return false
     end
 
-    -- Última confirmação. Se ainda estiver carregando, faz uma única
-    -- reaproximação curta em baixa velocidade e espera novamente.
-    if GetBasketCount() > 0 then
-        SetFarmPhase("Confirmando entrega")
+    -- 3) Procura primeiro o prompt real do ninho. Assim evitamos voar para
+    -- um ponto arbitrário do plot e assumir que a entrega aconteceu.
+    local nest = FindBestEggNestPrompt(plot, basePosition)
 
-        local retryPoint = GetSafeDescentPosition(
-            basePosition,
-            6
-        )
+    if nest then
+        SetFarmPhase("Entering base")
+        local entryPoint = GetSafeDescentPosition(nest.Position, 5)
+        if entryPoint then
+            if not FarmFlyTo(
+                entryPoint,
+                math.min(State.FarmFlightSpeed, 180),
+                true
+            ) then
+                return false
+            end
+        end
 
-        if retryPoint and not FarmFlyTo(
-            retryPoint,
-            120,
-            true
-        ) then
+        if not FarmIsRunning() then
             return false
         end
 
-        task.wait(math.clamp(
-            tonumber(State.FarmBasePause) or 2.50,
-            1.0,
-            5.0
-        ))
+        -- 4) Pequena estabilização já dentro do plot, antes da interação.
+        SetFarmPhase("Inside base / stabilizing")
+        task.wait(0.35)
+
+        if not FarmIsRunning() then
+            return false
+        end
+
+        -- 5) Colocação real no ninho, confirmada pela Basket.
+        if FarmPlaceEggInNest(plot) then
+            return true
+        end
+
+        return false
     end
 
-    if GetBasketCount() <= 0 then
-        SetFarmPhase("Entregue - procurando próximo ovo")
-        return true
+    -- 6) Se a UI/ninho ainda não estiver carregada, entra no plot e espera,
+    -- mas NÃO finge que o ovo foi entregue.
+    SetFarmPhase("Inside base - waiting for nest")
+    local baseEntry = GetSafeDescentPosition(basePosition, 6)
+    if not baseEntry then
+        return false
     end
 
-    SetFarmPhase("Entrega não confirmada")
-    return false
+    if not FarmFlyTo(
+        baseEntry,
+        math.min(State.FarmFlightSpeed, 180),
+        true
+    ) then
+        return false
+    end
+
+    if not FarmIsRunning() then
+        return false
+    end
+
+    task.wait(0.40)
+
+    return FarmPlaceEggInNest(plot)
 end
 
 local function FarmOnce()
