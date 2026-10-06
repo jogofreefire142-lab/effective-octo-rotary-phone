@@ -1,22 +1,19 @@
 --============================================================--
--- MONTAR UM PET - MASTER v24 • UI ORIGINAL v15 • DELTA STABLE
+-- MONTAR UM PET - MASTER v25 • UI ORIGINAL v15 • DELTA STABLE
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
--- Foco: Delta Mobile + Auto Farm 2026 verificado + coleta/retorno/ninho + UI v15 estável
+-- Foco: Delta Mobile + Auto Farm 2026 verificado + automações avançadas + UI v15 estável
 --
--- Pesquisa usada para esta versão:
---   * VintHub / Ride a Pet.lua
---   * Iamdungx / roblox-lua / ride-a-pet.lua
---   * SixZensED / sixly-script / games/ride-a-pet.lua
+-- Pesquisa cruzada: Bac0nHck, SixZensED, VintHub e Iamdungx.
+-- Nesta versão, a UI v15 fica congelada; toda a camada 2026 nova é criada
+-- depois da UI e desabilitada por padrão. Se um módulo avançado falhar,
+-- a interface e o Auto Farm principal continuam independentes.
 --
--- Mecânicas implementadas com base em caminhos/remotes encontrados
--- publicamente: Game.EggPickup, Game.Mounting, GameData.Eggs,
--- ServerData.ActiveEggs, Plots.NestsOwnerLoaded, InVolcano, IsRiding.
---
--- Recursos anunciados por hubs públicos, mas sem remote/path confiável
--- confirmado nas fontes abertas consultadas (Auto Place/Hatch/Feed/Shop/
--- Rebirth etc.), NÃO recebem botões falsos nesta versão.
+-- APIs verificadas publicamente e usadas com confirmação de estado:
+-- EggPickup, EggPlaced, Hatch, PetDismount, PickupPet, PlacePet,
+-- FeedPet, BuyWithCash, FavoritePet, ClaimIndexReward, além de
+-- ActiveEggs, Basket, FreeNests, EggTimers e dados de pets/comida.
 --============================================================--
 
 -- Espera o cliente Roblox terminar de carregar antes de iniciar a UI.
@@ -347,6 +344,18 @@ local State = {
     FarmHoverHeight = 55,
     FarmLoopDelay = 0.10,
     FarmRequireMountedPet = false,
+
+    -- Automacoes 2026 verificadas (desligadas por padrao).
+    AutoPlaceEggs = false,
+    AutoHatchEggs = false,
+    AutoBestPets = false,
+    AutoClaimIndex = false,
+    AutoBuyFood = false,
+    AutoFeedPets = false,
+    AutoFavorites = false,
+    BestPetMetric = "Income",
+    AdvancedInterval = 1.0,
+    AdvancedStatus = "Aguardando modulos 2026",
 
     ESPEnabled = false,
     ESPOnlySelected = false,
@@ -4475,6 +4484,104 @@ TabFarm:CreateButton({
     end,
 })
 
+TabFarm:CreateSection({name = "Automações 2026 verificadas"})
+
+TabFarm:CreateToggle({
+    name = "Auto Place Eggs",
+    flag = "AutoPlaceEggs",
+    description = "Coloca ovos em ninhos livres; no Auto Farm principal, a entrega já faz parte do ciclo.",
+    value = State.AutoPlaceEggs,
+    callback = function(value)
+        State.AutoPlaceEggs = value
+    end,
+})
+
+TabFarm:CreateToggle({
+    name = "Auto Hatch Eggs",
+    flag = "AutoHatchEggs",
+    description = "Hatch eggs com timer concluído e confirma a remoção do ovo.",
+    value = State.AutoHatchEggs,
+    callback = function(value)
+        State.AutoHatchEggs = value
+    end,
+})
+
+TabFarm:CreateToggle({
+    name = "Auto Best Pets",
+    flag = "AutoBestPets",
+    description = "Reorganiza os pets colocados usando Income ou Speed.",
+    value = State.AutoBestPets,
+    callback = function(value)
+        State.AutoBestPets = value
+    end,
+})
+
+TabFarm:CreateDropdown({
+    name = "Melhor pet por",
+    flag = "BestPetMetric",
+    options = {"Income", "Speed"},
+    value = State.BestPetMetric,
+    callback = function(value)
+        if value == "Income" or value == "Speed" then
+            State.BestPetMetric = value
+        end
+    end,
+})
+
+TabFarm:CreateToggle({
+    name = "Auto Claim Index",
+    flag = "AutoClaimIndex",
+    description = "Resgata automaticamente o próximo reward de Index quando o objetivo já foi alcançado.",
+    value = State.AutoClaimIndex,
+    callback = function(value)
+        State.AutoClaimIndex = value
+    end,
+})
+
+TabFarm:CreateToggle({
+    name = "Auto Buy Food",
+    flag = "AutoBuyFood",
+    description = "Compra comida apenas quando o estoque e o dinheiro podem ser confirmados.",
+    value = State.AutoBuyFood,
+    callback = function(value)
+        State.AutoBuyFood = value
+    end,
+})
+
+TabFarm:CreateToggle({
+    name = "Auto Feed Pets",
+    flag = "AutoFeedPets",
+    description = "Alimenta um pet elegível com comida disponível; não interfere enquanto o Auto Farm estiver voando.",
+    value = State.AutoFeedPets,
+    callback = function(value)
+        State.AutoFeedPets = value
+    end,
+})
+
+TabFarm:CreateToggle({
+    name = "Auto Favorites",
+    flag = "AutoFavorites",
+    description = "Favorita pets de inventário usando o melhor pet disponível por sua métrica selecionada.",
+    value = State.AutoFavorites,
+    callback = function(value)
+        State.AutoFavorites = value
+    end,
+})
+
+TabFarm:CreateButton({
+    name = "Status 2026",
+    description = "Mostra quais módulos e APIs avançadas foram detectados.",
+    callback = function()
+        pcall(function()
+            Window:Notify({
+                title = "Automações 2026",
+                content = tostring(State.AdvancedStatus),
+                duration = 6,
+            })
+        end)
+    end,
+})
+
 --============================================================--
 -- OVOS TAB
 --============================================================--
@@ -5015,6 +5122,13 @@ TabConfig:CreateButton({
         State.InfiniteJump = false
         State.AntiAFK = false
         State.Flying = false
+        State.AutoPlaceEggs = false
+        State.AutoHatchEggs = false
+        State.AutoBestPets = false
+        State.AutoClaimIndex = false
+        State.AutoBuyFood = false
+        State.AutoFeedPets = false
+        State.AutoFavorites = false
 
         StopSpeed()
         CancelGlide()
@@ -5044,6 +5158,600 @@ TabConfig:CreateButton({
         end
     end,
 })
+
+--============================================================--
+-- CAMADA 2026 VERIFICADA (CARREGADA SOMENTE APOS A UI)
+-- Baseada em APIs concretas vistas no codigo publico atual do jogo.
+-- Todas as automacoes abaixo sao opt-in; qualquer falha fica confinada
+-- a esta camada e nao pode impedir a interface v15 de aparecer.
+--============================================================--
+
+local Advanced2026 = {
+    Ready = false,
+    Failed = false,
+    Busy = false,
+    Data = {},
+    Services = {},
+    Cooldowns = {},
+    FavoriteRequests = {},
+}
+
+function Advanced2026:SetStatus(message)
+    State.AdvancedStatus = tostring(message)
+end
+
+function Advanced2026:Ready(key, interval)
+    local now = os.clock()
+    if now < (self.Cooldowns[key] or 0) then
+        return false
+    end
+    self.Cooldowns[key] = now + interval
+    return true
+end
+
+function Advanced2026:Value(name, default)
+    local saved = LocalPlayer:FindFirstChild("SavedData")
+    local value = saved and saved:FindFirstChild(name)
+    return value and value.Value or default
+end
+
+function Advanced2026:Fire(name, ...)
+    local remotes = GetGameRemotes()
+    local remote = remotes and remotes:FindFirstChild(name)
+    if not remote or not remote:IsA("RemoteEvent") then
+        return false
+    end
+    local ok = pcall(function(...)
+        remote:FireServer(...)
+    end, ...)
+    return ok
+end
+
+function Advanced2026:WaitFor(predicate, timeout)
+    local deadline = os.clock() + (timeout or 3)
+    while Running and os.clock() < deadline do
+        local ok, result = pcall(predicate)
+        if ok and result then
+            return true
+        end
+        task.wait(0.10)
+    end
+    return false
+end
+
+function Advanced2026:Tools()
+    local result = {}
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    local character = LocalPlayer.Character
+    for _, container in ipairs({backpack, character}) do
+        if container then
+            for _, item in ipairs(container:GetChildren()) do
+                if item:IsA("Tool") then
+                    table.insert(result, item)
+                end
+            end
+        end
+    end
+    return result
+end
+
+function Advanced2026:ToolByPetKey(key)
+    for _, tool in ipairs(self:Tools()) do
+        if tool:GetAttribute("PetKey") == key then
+            return tool
+        end
+    end
+    return nil
+end
+
+function Advanced2026:Equip(tool)
+    local character, humanoid = GetCharacter()
+    if not character or not humanoid or not tool or not tool.Parent then
+        return false
+    end
+    return pcall(function()
+        humanoid:EquipTool(tool)
+    end)
+end
+
+function Advanced2026:EggTools()
+    local result = {}
+    for _, tool in ipairs(self:Tools()) do
+        if self.Data.Eggs and self.Data.Eggs[tool.Name] and not tool:GetAttribute("PetKey") then
+            table.insert(result, tool)
+        end
+    end
+    table.sort(result, function(a, b)
+        local la = (self.Data.Eggs[a.Name] and self.Data.Eggs[a.Name].Luck) or 0
+        local lb = (self.Data.Eggs[b.Name] and self.Data.Eggs[b.Name].Luck) or 0
+        if la == lb then
+            return a.Name < b.Name
+        end
+        return la > lb
+    end)
+    return result
+end
+
+function Advanced2026:FreeNests()
+    local plot = GetMyPlot()
+    local nests = plot and plot:FindFirstChild("Nests")
+    local result = {}
+    if not nests then
+        return result
+    end
+    for _, nest in ipairs(nests:GetChildren()) do
+        if nest:GetAttribute("Unlocked") and not nest:GetAttribute("Occupied") then
+            table.insert(result, nest)
+        end
+    end
+    table.sort(result, function(a, b)
+        return (tonumber(a.Name) or math.huge) < (tonumber(b.Name) or math.huge)
+    end)
+    return result
+end
+
+function Advanced2026:PetList()
+    local result, seen = {}, {}
+    local function add(object)
+        if not object then return end
+        local key = object:GetAttribute("PetKey")
+        local name = object:GetAttribute("PetName") or object.Name
+        local data = self.Data.Pets and self.Data.Pets[name]
+        if not key or not data or seen[key] then return end
+        seen[key] = true
+        local weight = tonumber(object:GetAttribute("Weight")) or 10
+        local age = tonumber(object:GetAttribute("Age")) or 1
+        local mutation = object:GetAttribute("Mutation")
+        local spawnMutation = object:GetAttribute("SpawnMutation")
+        local factor = 1
+        if self.Data.Mutations and type(self.Data.Mutations.CombinedFactor) == "function" then
+            local ok, value = pcall(self.Data.Mutations.CombinedFactor, mutation, spawnMutation)
+            if ok and type(value) == "number" then factor = value end
+        end
+        local income = (tonumber(data.Income) or 0) * weight / 10 * factor
+        local speed = tonumber(data.Speed) or 0
+        if self.Services.PetAging and type(self.Services.PetAging.DisplaySpeedFor) == "function" then
+            local ok, value = pcall(self.Services.PetAging.DisplaySpeedFor, data.Speed or 0, weight)
+            if ok and type(value) == "number" then speed = value * factor end
+        end
+        result[#result + 1] = {
+            Key = key,
+            Name = name,
+            Object = object,
+            Age = age,
+            Weight = weight,
+            Income = income,
+            Speed = speed,
+            Rarity = data.Rarity,
+            Favorite = object:GetAttribute("Favorited") == true,
+            Placed = not object:IsA("Tool"),
+        }
+    end
+
+    local plot = GetMyPlot()
+    local petsFolder = plot and plot:FindFirstChild("Pets")
+    if petsFolder then
+        for _, pet in ipairs(petsFolder:GetChildren()) do
+            add(pet)
+        end
+    end
+    for _, tool in ipairs(self:Tools()) do
+        if tool:GetAttribute("PetKey") then
+            add(tool)
+        end
+    end
+
+    table.sort(result, function(a, b)
+        local metric = State.BestPetMetric == "Speed" and "Speed" or "Income"
+        if a[metric] == b[metric] then
+            return a.Key < b.Key
+        end
+        return (a[metric] or 0) > (b[metric] or 0)
+    end)
+    return result
+end
+
+function Advanced2026:Dismount()
+    if not IsRidingPet() then
+        return true
+    end
+    if not self:Fire("PetDismount") then
+        return false
+    end
+    return self:WaitFor(function()
+        return not IsRidingPet()
+    end, 3)
+end
+
+function Advanced2026:PlaceEggs()
+    if not self.Ready or State.AutoFarm or GetBasketCount() <= 0 then
+        return false
+    end
+    local plot = GetMyPlot()
+    if not plot then
+        self:SetStatus("Aguardando seu plot")
+        return false
+    end
+
+    ReturnToPlot()
+    local toolReady = self:WaitFor(function()
+        return #self:EggTools() > 0
+    end, 4)
+    if not toolReady then
+        self:SetStatus("Auto Place: ovo ainda nao virou Tool na mochila")
+        return false
+    end
+
+    local nests = self:FreeNests()
+    local tools = self:EggTools()
+    if #nests == 0 then
+        self:SetStatus("Auto Place: aguardando ninho livre")
+        return false
+    end
+    if #tools == 0 then
+        self:SetStatus("Auto Place: aguardando ovo na mochila")
+        return false
+    end
+
+    for _, nest in ipairs(nests) do
+        if not Running or not State.AutoPlaceEggs or State.AutoFarm then break end
+        local tool = self:EggTools()[1]
+        if not tool then break end
+        if not self:Equip(tool) then
+            self:SetStatus("Auto Place: falha ao equipar ovo")
+            return false
+        end
+        task.wait(0.15)
+        if not self:Fire("EggPlaced", {NestId = nest.Name}) then
+            self:SetStatus("Auto Place: EggPlaced indisponivel")
+            return false
+        end
+        if not self:WaitFor(function()
+            return nest:GetAttribute("Occupied") == true
+        end, 3) then
+            self:SetStatus("Auto Place: colocacao nao confirmada")
+            return false
+        end
+    end
+
+    self:SetStatus("Auto Place: ovos colocados e confirmados")
+    return true
+end
+
+function Advanced2026:EggTimers()
+    local result = {}
+    local plot = GetMyPlot()
+    local eggs = plot and plot:FindFirstChild("Eggs")
+    if not eggs then return result end
+    for _, egg in ipairs(eggs:GetChildren()) do
+        local info = egg:FindFirstChild("EggData", true)
+        local data = self.Data.Eggs and self.Data.Eggs[egg.Name]
+        local start = info and info:FindFirstChild("PlaceTime")
+        local weight = info and info:FindFirstChild("Weight")
+        if data and start and start:IsA("NumberValue") and self.Services.DayNight and type(self.Services.DayNight.GrowthRealRemaining) == "function" then
+            local total = tonumber(data.GrowthTime) or 0
+            if self.Data.General and type(self.Data.General.GrowthTimeFor) == "function" then
+                local ok, value = pcall(self.Data.General.GrowthTimeFor, data.GrowthTime or 0, weight and weight.Value or 1)
+                if ok and type(value) == "number" then total = value end
+            end
+            local ok, remaining = pcall(self.Services.DayNight.GrowthRealRemaining, start.Value, total)
+            if ok and type(remaining) == "number" then
+                result[#result + 1] = {Object = egg, Key = egg:GetAttribute("EggKey"), Name = egg.Name, Remaining = remaining}
+            end
+        end
+    end
+    table.sort(result, function(a, b)
+        return (a.Remaining or math.huge) < (b.Remaining or math.huge)
+    end)
+    return result
+end
+
+function Advanced2026:AutoHatch()
+    if not self.Ready or State.AutoFarm or not State.AutoHatchEggs then
+        return false
+    end
+    local timers = self:EggTimers()
+    for _, egg in ipairs(timers) do
+        if egg.Remaining <= 0 and egg.Key then
+            local _, root = GetCharacter()
+            if not root then return false end
+            if (root.Position - egg.Object:GetPivot().Position).Magnitude > 12 then
+                if not GlideTo(egg.Object:GetPivot().Position, State.TravelSpeed) then
+                    self:SetStatus("Auto Hatch: falha no deslocamento")
+                    return false
+                end
+            end
+            if not self:Dismount() then
+                self:SetStatus("Auto Hatch: nao foi possivel desmontar")
+                return false
+            end
+            if not self:Fire("Hatch", {EggKey = egg.Key}) then
+                self:SetStatus("Auto Hatch: remote indisponivel")
+                return false
+            end
+            if self:WaitFor(function()
+                return not egg.Object.Parent
+            end, 8) then
+                self:SetStatus("Auto Hatch: ovo chocou " .. tostring(egg.Name))
+                return true
+            end
+        end
+    end
+    return false
+end
+
+function Advanced2026:AutoClaimIndex()
+    if not self.Ready or State.AutoFarm or not State.AutoClaimIndex or not self.Data.IndexRewards then
+        return false
+    end
+    local stage = tonumber(self:Value("IndexRewardStage", 0)) or 0
+    local reward
+    if type(self.Data.IndexRewards.StageAt) == "function" then
+        local ok, value = pcall(self.Data.IndexRewards.StageAt, stage)
+        if ok then reward = value end
+    end
+    if not reward then return false end
+    local count = 0
+    if type(self.Data.IndexRewards.DiscoveredCount) == "function" then
+        local ok, value = pcall(self.Data.IndexRewards.DiscoveredCount, self:Value("OwnedPets", ""))
+        if ok then count = tonumber(value) or 0 end
+    end
+    if count < (tonumber(reward.Goal) or math.huge) then return false end
+    if not self:Fire("ClaimIndexReward") then
+        self:SetStatus("Auto Index: remote indisponivel")
+        return false
+    end
+    if self:WaitFor(function()
+        return (tonumber(self:Value("IndexRewardStage", 0)) or 0) ~= stage
+    end, 2) then
+        self:SetStatus("Auto Index: reward resgatado")
+        return true
+    end
+    return false
+end
+
+function Advanced2026:AutoBestPets()
+    if not self.Ready or State.AutoFarm or not State.AutoBestPets then
+        return false
+    end
+    if not self:Dismount() then return false end
+    if not ReturnToPlot() then return false end
+    task.wait(0.35)
+    local plot = GetMyPlot()
+    if not plot then return false end
+    local pets = self:PetList()
+    if #pets == 0 then return false end
+    local capacity = tonumber(LocalPlayer:GetAttribute("MaxPets")) or tonumber(self:Value("MaxPets", 5)) or 5
+    capacity = math.max(1, math.floor(capacity))
+    table.sort(pets, function(a, b)
+        local metric = State.BestPetMetric == "Speed" and "Speed" or "Income"
+        if a[metric] == b[metric] then return a.Key < b.Key end
+        return (a[metric] or 0) > (b[metric] or 0)
+    end)
+    local desired = {}
+    for i = 1, math.min(capacity, #pets) do desired[pets[i].Key] = true end
+
+    for _, pet in ipairs(pets) do
+        if pet.Placed and not desired[pet.Key] then
+            if self:Fire("PickupPet", pet.Key) then
+                self:WaitFor(function() return self:ToolByPetKey(pet.Key) ~= nil end, 3)
+            end
+        end
+    end
+
+    local base = plot:FindFirstChild("Baseplate")
+    if not base then return false end
+    local cols = math.max(1, math.ceil(math.sqrt(capacity)))
+    local spacing = math.min(9, (math.min(base.Size.X, base.Size.Z) - 12) / cols)
+
+    for i = 1, math.min(capacity, #pets) do
+        local pet = pets[i]
+        local tool = self:ToolByPetKey(pet.Key)
+        if tool then
+            if not self:Equip(tool) then return false end
+            task.wait(0.15)
+            local pos = (base.CFrame * CFrame.new(
+                ((i - 1) % cols - (cols - 1) / 2) * spacing,
+                4,
+                math.floor((i - 1) / cols) * spacing
+            )).Position
+            if not self:Fire("PlacePet", pet.Key, pos) then
+                return false
+            end
+            if not self:WaitFor(function()
+                for _, current in ipairs(self:PetList()) do
+                    if current.Key == pet.Key and current.Placed then return true end
+                end
+                return false
+            end, 3) then
+                self:SetStatus("Auto Best Pets: colocacao nao confirmada")
+                return false
+            end
+        end
+    end
+
+    self:SetStatus("Auto Best Pets: " .. tostring(State.BestPetMetric))
+    return true
+end
+
+function Advanced2026:FoodTools(name)
+    local result = {}
+    for _, tool in ipairs(self:Tools()) do
+        if tool.Name == name then table.insert(result, tool) end
+    end
+    return result
+end
+
+function Advanced2026:FoodAmount(tool)
+    local data = tool and tool:FindFirstChild("Data")
+    local amount = data and data:FindFirstChild("Amount")
+    if amount and amount:IsA("ValueBase") then
+        return math.max(0, math.floor(tonumber(amount.Value) or 0))
+    end
+    return tool and tool.Parent and 1 or 0
+end
+
+function Advanced2026:FoodCount(name)
+    local total = 0
+    for _, tool in ipairs(self:FoodTools(name)) do
+        total = total + self:FoodAmount(tool)
+    end
+    return total
+end
+
+function Advanced2026:AutoBuyFoodOnce()
+    if not self.Ready or State.AutoFarm or not State.AutoBuyFood or not self.Data.Shop or not self.Data.Shop.Food then
+        return false
+    end
+    local main = LocalPlayer.PlayerGui:FindFirstChild("Main")
+    local shop = main and main:FindFirstChild("Shop")
+    local holders = shop and shop:FindFirstChild("Holders")
+    local foodHolder = holders and holders:FindFirstChild("Food")
+    for name, definition in pairs(self.Data.Shop.Food) do
+        if type(definition) == "table" and self.Data.Foods and self.Data.Foods[name] then
+            local card = foodHolder and foodHolder:FindFirstChild(name)
+            local stockLabel = card and card:FindFirstChild("Stock", true)
+            local stock = stockLabel and tonumber(stockLabel.Text:match("(%d+)"))
+            local cash = tonumber(self:Value("Cash", 0)) or 0
+            if stock and stock > 0 and cash >= (tonumber(definition.Price) or math.huge) then
+                local before = self:FoodCount(name)
+                if self:Fire("BuyWithCash", "Food", name) and self:WaitFor(function()
+                    return self:FoodCount(name) > before
+                end, 3) then
+                    self:SetStatus("Auto Buy Food: " .. tostring(name))
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+function Advanced2026:AutoFeedOnce()
+    if not self.Ready or State.AutoFarm or not State.AutoFeedPets then return false end
+    local foodName = nil
+    if self:FoodCount("Grass") > 0 then foodName = "Grass" end
+    if not foodName then return false end
+    local pets = self:PetList()
+    for _, pet in ipairs(pets) do
+        local maxAge = self.Services.PetAging and tonumber(self.Services.PetAging.MaxAge) or 100
+        if pet.Age < maxAge then
+            if pet.Placed and pet.Object:IsA("Model") then
+                local pos = pet.Object:GetPivot().Position
+                local _, root = GetCharacter()
+                if root and (root.Position - pos).Magnitude > 18 then
+                    if not GlideTo(pos, State.TravelSpeed) then return false end
+                end
+            end
+            local food = self:FoodTools(foodName)[1]
+            if not food or not self:Equip(food) then return false end
+            task.wait(0.15)
+            local before = self:FoodCount(foodName)
+            if not self:Fire("FeedPet", pet.Key, foodName) then return false end
+            if self:WaitFor(function() return self:FoodCount(foodName) < before end, 3) then
+                self:SetStatus("Auto Feed: " .. tostring(pet.Name))
+                return true
+            end
+        end
+    end
+    return false
+end
+
+function Advanced2026:AutoFavoriteOnce()
+    if not self.Ready or State.AutoFarm or not State.AutoFavorites or not self.Data.Pets then return false end
+    local pets = self:PetList()
+    table.sort(pets, function(a, b)
+        if a.Favorite ~= b.Favorite then return not a.Favorite end
+        local metric = State.BestPetMetric == "Speed" and "Speed" or "Income"
+        if a[metric] == b[metric] then return a.Key < b.Key end
+        return (a[metric] or 0) > (b[metric] or 0)
+    end)
+    for _, pet in ipairs(pets) do
+        if pet.Object:IsA("Tool") and not pet.Favorite and not self.FavoriteRequests[pet.Key] then
+            self.FavoriteRequests[pet.Key] = true
+            if not self:Fire("FavoritePet", pet.Key) then
+                self.FavoriteRequests[pet.Key] = nil
+                return false
+            end
+            if self:WaitFor(function()
+                local tool = self:ToolByPetKey(pet.Key)
+                return tool and tool:GetAttribute("Favorited") == true
+            end, 3) then
+                self.FavoriteRequests[pet.Key] = nil
+                self:SetStatus("Auto Favorites: " .. tostring(pet.Name))
+                return true
+            end
+            self.FavoriteRequests[pet.Key] = nil
+        end
+    end
+    return false
+end
+
+function Advanced2026:LoadModules()
+    local essentialOk, essentialErr = pcall(function()
+        local gameData = ReplicatedStorage:WaitForChild("GameData", 10)
+        local gameServices = ReplicatedStorage:WaitForChild("GameServices", 10)
+        self.Data.Eggs = require(gameData:WaitForChild("Eggs", 10))
+        self.Data.Pets = require(gameData:WaitForChild("Pets", 10))
+        self.Data.General = require(gameData:WaitForChild("General", 10))
+        self.Data.Mutations = require(gameData:WaitForChild("Mutations", 10))
+        self.Data.EggBaskets = require(gameData:WaitForChild("EggBaskets", 10))
+        self.Data.IndexRewards = require(gameData:WaitForChild("IndexRewards", 10))
+        self.Services.PetAging = require(gameServices:WaitForChild("PetAging", 10))
+        self.Services.DayNight = require(gameServices:WaitForChild("DayNight", 10))
+    end)
+    if not essentialOk then
+        self.Failed = true
+        self:SetStatus("Falha nos módulos essenciais 2026: " .. tostring(essentialErr))
+        return false
+    end
+
+    -- Food/Shop é opcional: se o jogo mudar esses módulos, as outras automações
+    -- continuam disponíveis.
+    pcall(function()
+        local gameData = ReplicatedStorage:FindFirstChild("GameData")
+        if gameData then
+            local foods = gameData:FindFirstChild("Foods")
+            local shop = gameData:FindFirstChild("Shop")
+            if foods and foods:IsA("ModuleScript") then self.Data.Foods = require(foods) end
+            if shop and shop:IsA("ModuleScript") then self.Data.Shop = require(shop) end
+        end
+    end)
+
+    self.Ready = true
+    self:SetStatus("Módulos 2026 essenciais carregados")
+    return true
+end
+
+task.defer(function()
+    if not Running then return end
+    local loaded = Advanced2026:LoadModules()
+    if not loaded then return end
+    while Running do
+        task.wait(math.clamp(tonumber(State.AdvancedInterval) or 1.0, 0.5, 5.0))
+        if Running and not Advanced2026.Failed and not Advanced2026.Busy and not State.AutoFarm then
+            Advanced2026.Busy = true
+            pcall(function()
+                if State.AutoPlaceEggs and GetBasketCount() > 0 then
+                    Advanced2026:PlaceEggs()
+                elseif State.AutoHatchEggs then
+                    Advanced2026:AutoHatch()
+                elseif State.AutoClaimIndex then
+                    Advanced2026:AutoClaimIndex()
+                elseif State.AutoBestPets and Advanced2026:Ready("Best", 25) then
+                    Advanced2026:AutoBestPets()
+                elseif State.AutoBuyFood and Advanced2026:Ready("BuyFood", 2) and Advanced2026.Data.Foods and Advanced2026.Data.Shop then
+                    Advanced2026:AutoBuyFoodOnce()
+                elseif State.AutoFeedPets and Advanced2026:Ready("Feed", 3) then
+                    Advanced2026:AutoFeedOnce()
+                elseif State.AutoFavorites and Advanced2026:Ready("Fav", 1) then
+                    Advanced2026:AutoFavoriteOnce()
+                end
+            end)
+            Advanced2026.Busy = false
+        end
+    end
+end)
 
 --============================================================--
 -- LOOPS CENTRALIZADOS
@@ -5096,6 +5804,13 @@ StopHandler = function()
     State.InfiniteJump = false
     State.AntiAFK = false
     State.Flying = false
+    State.AutoPlaceEggs = false
+    State.AutoHatchEggs = false
+    State.AutoBestPets = false
+    State.AutoClaimIndex = false
+    State.AutoBuyFood = false
+    State.AutoFeedPets = false
+    State.AutoFavorites = false
     State.ESPEnabled = false
     State.PlayerESP = false
     State.HidePlayers = false
@@ -5170,7 +5885,7 @@ ENV[TOKEN_NAMES[1]] = {
 
 
 --============================================================--
--- v23.3 RECOVERY LAYER
+-- v25 RECOVERY LAYER
 -- Base: v22 UI ORIGINAL v15 (INTACT)
 -- Regra: nenhuma lógica opcional é executada antes da interface.
 -- Qualquer extensão futura deve ser carregada depois que a UI existir.
@@ -5185,7 +5900,7 @@ task.defer(function()
     -- Fica disponível somente depois que Window/Tabs já foram criadas.
     pcall(function()
         ENV.__MUP_V23_CONTEXT = {
-            Version = "23.3-recovery",
+            Version = "25-2026-verified",
             Window = Window,
             TabFarm = TabFarm,
             TabOvos = TabOvos,
