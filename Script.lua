@@ -1,8 +1,8 @@
 --============================================================--
--- MONTAR UM PET - MASTER v5 CORRIGIDO
+-- MONTAR UM PET - MASTER v6 AUTOFARM CORRIGIDO
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 (stable)
--- Foco: Delta Mobile + baixo custo de polling + cleanup robusto
+-- Foco: Delta Mobile + baixo custo de polling + Auto Farm híbrido + cleanup robusto
 --
 -- Pesquisa usada para esta versão:
 --   * VintHub / Ride a Pet.lua
@@ -40,12 +40,13 @@ end
 local ENV = (getgenv and getgenv()) or _G
 
 --============================================================--
--- DUPLICAÇÃO: guard persistente no PlayerGui
--- O guard não renderiza nada e funciona mesmo quando getgenv() é isolado.
+-- SINGLETON ROBUSTO / ANTI-DUPLICAÇÃO
 --============================================================--
 
 local GUARD_NAME = "MontarUmPet_Master_Guard"
 local TOKEN_NAMES = {
+    "__MONTAR_UM_PET_MASTER_V7",
+    "__MONTAR_UM_PET_MASTER_V6",
     "__MONTAR_UM_PET_MASTER_V5",
     "__MONTAR_UM_PET_MASTER_V4",
     "__MONTAR_UM_PET_MASTER_V3",
@@ -61,6 +62,7 @@ local GUI_HINTS = {
 
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
+-- Para versões anteriores que já tenham um Stop exposto.
 for _, tokenName in ipairs(TOKEN_NAMES) do
     pcall(function()
         local oldToken = ENV[tokenName]
@@ -70,18 +72,20 @@ for _, tokenName in ipairs(TOKEN_NAMES) do
     end)
 end
 
+-- Compatibilidade com o guard das versões anteriores.
 pcall(function()
     local oldGuard = PlayerGui:FindFirstChild(GUARD_NAME)
     if oldGuard then
         local event = oldGuard:FindFirstChild("Shutdown")
         if event and event:IsA("BindableEvent") then
             event:Fire()
+            task.wait(0.05)
         end
         oldGuard:Destroy()
     end
 end)
 
--- Remove only known hub GUIs, never arbitrary game UI.
+-- Remove somente GUIs do nosso hub com nomes conhecidos.
 pcall(function()
     for _, obj in ipairs(PlayerGui:GetDescendants()) do
         for _, hint in ipairs(GUI_HINTS) do
@@ -93,6 +97,81 @@ pcall(function()
     end
 end)
 
+-- Controle persistente para execuções v7+.
+local CONTROL_NAME = "MontarUmPet_Singleton_Control"
+local ControlFolder = ReplicatedStorage:FindFirstChild(CONTROL_NAME)
+
+if not ControlFolder then
+    ControlFolder = Instance.new("Folder")
+    ControlFolder.Name = CONTROL_NAME
+    ControlFolder.Parent = ReplicatedStorage
+end
+
+local ReplaceEvent = ControlFolder:FindFirstChild("Replace")
+if not ReplaceEvent or not ReplaceEvent:IsA("BindableEvent") then
+    if ReplaceEvent then
+        ReplaceEvent:Destroy()
+    end
+
+    ReplaceEvent = Instance.new("BindableEvent")
+    ReplaceEvent.Name = "Replace"
+    ReplaceEvent.Parent = ControlFolder
+end
+
+-- Importantíssimo: dispara ANTES de conectar a execução nova.
+pcall(function()
+    ReplaceEvent:Fire()
+end)
+
+task.wait(0.10)
+
+local generation = tonumber(ControlFolder:GetAttribute("Generation")) or 0
+generation = generation + 1
+ControlFolder:SetAttribute("Generation", generation)
+local MY_GENERATION = generation
+
+local Running = true
+local StopHandler = nil
+
+local ReplaceConnection = ReplaceEvent.Event:Connect(function()
+    if not Running then
+        return
+    end
+
+    Running = false
+
+    if StopHandler then
+        task.spawn(function()
+            pcall(StopHandler)
+        end)
+    end
+end)
+
+-- Safety net contra corridas/execuções que perderem o evento.
+task.spawn(function()
+    while Running do
+        task.wait(0.20)
+
+        if not Running then
+            break
+        end
+
+        local currentGeneration = tonumber(ControlFolder:GetAttribute("Generation")) or 0
+        if currentGeneration ~= MY_GENERATION then
+            Running = false
+
+            if StopHandler then
+                task.spawn(function()
+                    pcall(StopHandler)
+                end)
+            end
+
+            break
+        end
+    end
+end)
+
+-- Guard auxiliar no PlayerGui para compatibilidade com versões antigas.
 local Guard = Instance.new("Folder")
 Guard.Name = GUARD_NAME
 Guard.Parent = PlayerGui
@@ -101,16 +180,94 @@ local GuardEvent = Instance.new("BindableEvent")
 GuardEvent.Name = "Shutdown"
 GuardEvent.Parent = Guard
 
-local Running = true
-local StopHandler = nil
-
 local GuardConnection = GuardEvent.Event:Connect(function()
+    if not Running then
+        return
+    end
+
+    Running = false
+
     if StopHandler then
-        pcall(StopHandler)
-    else
-        Running = false
+        task.spawn(function()
+            pcall(StopHandler)
+        end)
     end
 end)
+
+if not Running then
+    pcall(function()
+        if GuardConnection then
+            GuardConnection:Disconnect()
+        end
+        if Guard then
+            Guard:Destroy()
+        end
+    end)
+    return
+end
+
+-- Rayfield Gen2 usa um ScreenGui de nome aleatório. Para limpar uma
+-- janela antiga do nosso próprio hub, conferimos título + subtítulo.
+local function LooksLikeOurRayfieldGui(gui)
+    if not gui or not gui:IsA("ScreenGui") then
+        return false
+    end
+
+    local hasTitle = false
+    local hasHubSubtitle = false
+
+    for _, child in ipairs(gui:GetDescendants()) do
+        if child:IsA("TextLabel") then
+            local t = tostring(child.Text or "")
+
+            if t == "Montar um Pet" then
+                hasTitle = true
+            elseif t:find("MASTER v5", 1, true)
+                or t:find("MASTER v6", 1, true)
+                or t:find("MASTER v7", 1, true) then
+                hasHubSubtitle = true
+            end
+
+            if hasTitle and hasHubSubtitle then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+local function CleanupOldRayfield(container)
+    if not container then
+        return
+    end
+
+    pcall(function()
+        for _, child in ipairs(container:GetChildren()) do
+            if LooksLikeOurRayfieldGui(child) then
+                child:Destroy()
+            end
+        end
+    end)
+end
+
+pcall(function()
+    CleanupOldRayfield(game:GetService("CoreGui"))
+end)
+
+pcall(function()
+    if typeof(gethui) == "function" then
+        CleanupOldRayfield(gethui())
+    end
+end)
+
+pcall(function()
+    CleanupOldRayfield(PlayerGui)
+end)
+
+--============================================================--
+-- FIM DO SINGLETON
+--============================================================--
 
 --============================================================--
 -- ESTADO
@@ -136,6 +293,15 @@ local State = {
     ReturnToPlot = true,
     VolcanicSupport = true,
     TravelSpeed = 500,
+
+    -- Auto Farm engine
+    FarmMoveMode = "Instant",      -- Instant or Tween
+    FarmPickupMode = "Auto",       -- Auto, Prompt, Remote
+    FarmPickupRetries = 6,
+    FarmPickupWait = 0.25,
+    FarmPickupRadius = 12,
+    FarmRetryDelay = 0.30,
+    FarmReturnInstant = true,
 
     ESPEnabled = false,
     ESPOnlySelected = false,
@@ -179,6 +345,9 @@ local ActiveMove = nil
 local MovementToken = 0
 local NoclipOriginal = {}
 local HiddenPlayerObjects = {}
+
+local FailedFarmTargets = {}
+local LastFarmStatus = "Idle"
 
 local OriginalLighting = {
     Brightness = Lighting.Brightness,
@@ -441,6 +610,10 @@ local function GetActiveEggFolder()
     return serverData and serverData:FindFirstChild("ActiveEggs")
 end
 
+local function GetRenderedEggFolder()
+    return workspace:FindFirstChild("RenderedEggs", true)
+end
+
 local function GetEggPosition(instance)
     if not instance then
         return nil
@@ -470,22 +643,20 @@ local function GetEggPosition(instance)
         return instance.Position
     end
 
-    local root = instance:FindFirstChildWhichIsA("BasePart", true)
-    if root then
-        return root.Position
+    local part = instance:FindFirstChildWhichIsA("BasePart", true)
+    if part then
+        return part.Position
     end
 
     return nil
 end
 
 local function GetEggMutation(instance)
-    local names = {
-        "Mutation",
-        "MutationType",
-        "Mutated",
-    }
+    if not instance then
+        return nil
+    end
 
-    for _, attributeName in ipairs(names) do
+    for _, attributeName in ipairs({"Mutation", "SpawnMutation", "MutationType"}) do
         local value = instance:GetAttribute(attributeName)
 
         if type(value) == "string" and value ~= "" then
@@ -501,33 +672,96 @@ local function GetEggMutation(instance)
 end
 
 local function GetEggWeight(instance)
+    if not instance then
+        return nil
+    end
+
     local value = instance:GetAttribute("Weight")
     return type(value) == "number" and value or nil
 end
 
 local function GetEggLuck(instance)
+    if not instance then
+        return nil
+    end
+
     local value = instance:GetAttribute("Luck")
     return type(value) == "number" and value or nil
+end
+
+local function GetRealRenderedEggName(model)
+    if not model then
+        return nil
+    end
+
+    local directName = model.Name
+    if EggData[directName] then
+        return directName
+    end
+
+    local eggSpawns = workspace:FindFirstChild("EggSpawns")
+    local part = model:IsA("BasePart") and model or model:FindFirstChildWhichIsA("BasePart", true)
+
+    if eggSpawns and part then
+        for _, spawn in ipairs(eggSpawns:GetChildren()) do
+            local spawnPart = spawn:IsA("BasePart")
+                and spawn
+                or spawn:FindFirstChildWhichIsA("BasePart", true)
+
+            if spawnPart and (spawnPart.Position - part.Position).Magnitude < 15 then
+                return spawn.Name
+            end
+        end
+    end
+
+    return directName
+end
+
+local function FindActiveEggNear(position, radius)
+    local activeEggs = GetActiveEggFolder()
+    if not activeEggs or typeof(position) ~= "Vector3" then
+        return nil
+    end
+
+    local nearest = nil
+    local nearestDistance = radius or 15
+
+    for _, egg in ipairs(activeEggs:GetChildren()) do
+        if egg:IsA("Configuration") then
+            local eggPosition = GetEggPosition(egg)
+
+            if eggPosition then
+                local distance = (eggPosition - position).Magnitude
+
+                if distance <= nearestDistance then
+                    nearest = egg
+                    nearestDistance = distance
+                end
+            end
+        end
+    end
+
+    return nearest
 end
 
 local function IsMutationMatch(instance)
     if not State.OnlyMutated then
         return true
     end
+
     return GetEggMutation(instance) ~= nil
 end
 
-local function IsSelectedForFarm(eggName, instance)
+local function IsSelectedForFarm(eggName)
     if State.FarmMode == "Egg" then
         return State.SelectedEggs[eggName] == true
     end
 
-    local rarity = GetEggRarity(eggName, instance)
-    return State.SelectedRarities[rarity] == true
+    return State.SelectedRarities[GetEggRarity(eggName)] == true
 end
 
 local function MeetsFilters(instance, eggName)
-    if not IsSelectedForFarm(eggName, instance) then
+    if not IsSelectedForFarm(eggName) then
         return false
     end
 
@@ -553,43 +787,111 @@ local function MeetsFilters(instance, eggName)
 end
 
 local function GetCandidates()
-    local activeEggs = GetActiveEggFolder()
-    if not activeEggs then
-        return {}
-    end
-
     local _, root = GetCharacter()
     if not root then
         return {}
     end
 
     local result = {}
+    local seen = {}
 
-    for _, egg in ipairs(activeEggs:GetChildren()) do
-        local eggName = egg:GetAttribute("Egg")
+    -- Prefer the live ActiveEggs table because it contains the real server UID.
+    local activeEggs = GetActiveEggFolder()
 
-        if type(eggName) == "string"
-            and egg:IsA("Configuration")
-            and MeetsFilters(egg, eggName) then
+    if activeEggs then
+        for _, egg in ipairs(activeEggs:GetChildren()) do
+            if egg:IsA("Configuration") then
+                local eggName = egg:GetAttribute("Egg")
 
-            local position = GetEggPosition(egg)
+                if type(eggName) == "string"
+                    and MeetsFilters(egg, eggName) then
+
+                    local position = GetEggPosition(egg)
+
+                    if position then
+                        local distance = (position - root.Position).Magnitude
+                        local id = egg.Name
+
+                        if not FailedFarmTargets[id] or os.clock() >= FailedFarmTargets[id] then
+                            seen[id] = true
+
+                            table.insert(result, {
+                                Instance = egg,
+                                Rendered = nil,
+                                ID = id,
+                                Name = eggName,
+                                Position = position,
+                                Distance = distance,
+                                Weight = GetEggWeight(egg) or 0,
+                                Luck = GetEggLuck(egg) or 0,
+                                Rarity = GetEggRarity(eggName, egg),
+                                RarityScore = RarityPriority[GetEggRarity(eggName, egg)] or 0,
+                                Mutation = GetEggMutation(egg),
+                            })
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Enrich candidates with the matching RenderedEgg model for ProximityPrompt pickup.
+    local rendered = GetRenderedEggFolder()
+
+    if rendered then
+        for _, model in ipairs(rendered:GetChildren()) do
+            local position = GetEggPosition(model)
 
             if position then
-                local distance = (position - root.Position).Magnitude
-                local weight = GetEggWeight(egg) or 0
-                local luck = GetEggLuck(egg) or 0
+                local eggName = GetRealRenderedEggName(model)
 
-                table.insert(result, {
-                    Instance = egg,
-                    Name = eggName,
-                    Position = position,
-                    Distance = distance,
-                    Weight = weight,
-                    Luck = luck,
-                    Rarity = GetEggRarity(eggName, egg),
-                    RarityScore = RarityPriority[GetEggRarity(eggName, egg)] or 0,
-                    Mutation = GetEggMutation(egg),
-                })
+                if type(eggName) == "string" and EggData[eggName] then
+                    local active = FindActiveEggNear(position, 15)
+
+                    if active then
+                        local id = active.Name
+
+                        for _, candidate in ipairs(result) do
+                            if candidate.ID == id then
+                                candidate.Rendered = model
+                                candidate.Position = position
+                                candidate.Distance = (position - root.Position).Magnitude
+
+                                local mutation = GetEggMutation(model) or GetEggMutation(active)
+                                local weight = GetEggWeight(active) or GetEggWeight(model) or 0
+                                local luck = GetEggLuck(active) or GetEggLuck(model) or 0
+
+                                candidate.Mutation = mutation
+                                candidate.Weight = weight
+                                candidate.Luck = luck
+                                break
+                            end
+                        end
+                    else
+                        -- Fallback candidate when an ActiveEgg entry is momentarily delayed.
+                        if IsSelectedForFarm(eggName) and MeetsFilters(model, eggName) then
+                            local syntheticId = model:GetDebugId()
+                            if not seen[syntheticId] then
+                                seen[syntheticId] = true
+
+                                table.insert(result, {
+                                    Instance = model,
+                                    Rendered = model,
+                                    ID = model.Name,
+                                    Name = eggName,
+                                    Position = position,
+                                    Distance = (position - root.Position).Magnitude,
+                                    Weight = GetEggWeight(model) or 0,
+                                    Luck = GetEggLuck(model) or 0,
+                                    Rarity = GetEggRarity(eggName, model),
+                                    RarityScore = RarityPriority[GetEggRarity(eggName, model)] or 0,
+                                    Mutation = GetEggMutation(model),
+                                    Synthetic = true,
+                                })
+                            end
+                        end
+                    end
+                end
             end
         end
     end
@@ -616,8 +918,12 @@ local function SelectBestCandidate(candidates)
         else
             if candidate.RarityScore > best.RarityScore then
                 best = candidate
-            elseif candidate.RarityScore == best.RarityScore and candidate.Distance < best.Distance then
-                best = candidate
+            elseif candidate.RarityScore == best.RarityScore then
+                if candidate.Luck > best.Luck then
+                    best = candidate
+                elseif candidate.Luck == best.Luck and candidate.Distance < best.Distance then
+                    best = candidate
+                end
             end
         end
     end
@@ -876,51 +1182,372 @@ local function ReturnToSaved()
 end
 
 --============================================================--
--- FARM
+-- FARM ENGINE
 --============================================================--
 
 local FarmBusy = false
 local PickupBusy = false
 
+local function FarmIsRunning()
+    return Running and State.AutoFarm
+end
+
+local function FarmStatus(message)
+    LastFarmStatus = tostring(message)
+end
+
+local function GetBasketCount()
+    local basket = LocalPlayer:FindFirstChild("Basket")
+    if not basket then
+        return 0
+    end
+
+    return #basket:GetChildren()
+end
+
+local function SafeTeleport(position, offset)
+    local character, root = GetCharacter()
+
+    if not character or not root or typeof(position) ~= "Vector3" then
+        return false
+    end
+
+    local finalPosition = position + (offset or Vector3.zero)
+
+    return pcall(function()
+        root.CFrame = CFrame.new(finalPosition) * root.CFrame.Rotation
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
+end
+
+local function FindPromptOnEgg(candidate)
+    local model = candidate and candidate.Rendered
+
+    if not model or not model.Parent then
+        return nil
+    end
+
+    local ok, prompt = pcall(function()
+        return model:FindFirstChildWhichIsA("ProximityPrompt", true)
+    end)
+
+    if ok then
+        return prompt
+    end
+
+    return nil
+end
+
+local function ConfirmPickup(candidate, beforeCount, timeout)
+    local deadline = os.clock() + (timeout or 2)
+
+    while FarmIsRunning() and os.clock() < deadline do
+        if not candidate then
+            return false
+        end
+
+        if GetBasketCount() > beforeCount then
+            return true
+        end
+
+        if candidate.Rendered and not candidate.Rendered.Parent then
+            return true
+        end
+
+        if candidate.Instance and not candidate.Instance.Parent then
+            return true
+        end
+
+        task.wait(0.05)
+    end
+
+    return false
+end
+
+local function TryPromptPickup(candidate)
+    if not candidate or type(fireproximityprompt) ~= "function" then
+        return false
+    end
+
+    local prompt = FindPromptOnEgg(candidate)
+    if not prompt then
+        return false
+    end
+
+    local before = GetBasketCount()
+
+    local ok = pcall(function()
+        fireproximityprompt(prompt)
+    end)
+
+    if not ok then
+        return false
+    end
+
+    return ConfirmPickup(candidate, before, 2)
+end
+
+local function TryRemotePickup(candidate)
+    local remote = GetEggPickupRemote()
+
+    if not remote or not remote:IsA("RemoteEvent") then
+        return false
+    end
+
+    local pickupId = candidate.ID
+
+    if not pickupId then
+        return false
+    end
+
+    local before = GetBasketCount()
+
+    local ok = pcall(function()
+        remote:FireServer(pickupId)
+    end)
+
+    if not ok then
+        return false
+    end
+
+    return ConfirmPickup(candidate, before, 2)
+end
+
+local function AttemptPickup(candidate)
+    if not candidate then
+        return false
+    end
+
+    local retries = math.clamp(
+        math.floor(tonumber(State.FarmPickupRetries) or 6),
+        1,
+        10
+    )
+
+    local mode = State.FarmPickupMode
+
+    for attempt = 1, retries do
+        if not FarmIsRunning() then
+            return false
+        end
+
+        if mode == "Prompt" then
+            if TryPromptPickup(candidate) then
+                return true
+            end
+        elseif mode == "Remote" then
+            if TryRemotePickup(candidate) then
+                return true
+            end
+        else
+            -- AUTO: prefer the same ProximityPrompt path used by the
+            -- recent public VintHub implementation, then fall back to
+            -- the confirmed Game.EggPickup RemoteEvent path.
+            if TryPromptPickup(candidate) then
+                return true
+            end
+
+            if TryRemotePickup(candidate) then
+                return true
+            end
+        end
+
+        task.wait(math.max(0.05, tonumber(State.FarmPickupWait) or 0.25))
+
+        -- If the egg vanished, the pickup succeeded even when the Basket
+        -- update is delayed.
+        if candidate.Rendered and not candidate.Rendered.Parent then
+            return true
+        end
+
+        if candidate.Instance and not candidate.Instance.Parent then
+            return true
+        end
+    end
+
+    return false
+end
+
+local VOLCANO_FALLBACK = Vector3.new(
+    -4924.9033203125,
+    41287.4609375,
+    -3700.96435546875
+)
+
+local function EnterVolcano()
+    if not FarmIsRunning() then
+        return false
+    end
+
+    if IsInVolcano() then
+        return true
+    end
+
+    local volcano = workspace:FindFirstChild("Volcano")
+    local entrance = volcano and volcano:FindFirstChild("VolcanoEntrance")
+    local validate = volcano and volcano:FindFirstChild("VolcanoValidate")
+
+    if entrance and entrance:IsA("BasePart") then
+        if State.FarmMoveMode == "Instant" then
+            SafeTeleport(entrance.Position, Vector3.new(0, 3, 0))
+        else
+            GlideTo(
+                entrance.Position + Vector3.new(0, 3, 0),
+                math.min(State.TravelSpeed, 180),
+                FarmIsRunning
+            )
+        end
+    else
+        SafeTeleport(VOLCANO_FALLBACK, Vector3.new(0, 3, 0))
+    end
+
+    task.wait(0.25)
+
+    if not FarmIsRunning() then
+        return false
+    end
+
+    if not IsInVolcano() and validate and validate:IsA("BasePart") then
+        if State.FarmMoveMode == "Instant" then
+            SafeTeleport(validate.Position, Vector3.new(0, 2, 0))
+        else
+            GlideTo(
+                validate.Position + Vector3.new(0, 2, 0),
+                math.min(State.TravelSpeed, 150),
+                FarmIsRunning
+            )
+        end
+    else
+        SafeTeleport(VOLCANO_FALLBACK, Vector3.new(0, 2, 0))
+    end
+
+    local deadline = os.clock() + 3
+
+    while FarmIsRunning() and os.clock() < deadline do
+        if IsInVolcano() then
+            return true
+        end
+        task.wait(0.1)
+    end
+
+    return IsInVolcano()
+end
+
+local function ReturnFromVolcanoToPlot()
+    if not FarmIsRunning() then
+        return false
+    end
+
+    local volcano = workspace:FindFirstChild("Volcano")
+    local validate = volcano and volcano:FindFirstChild("VolcanoValidate")
+
+    if IsInVolcano() then
+        if validate and validate:IsA("BasePart") then
+            if State.FarmMoveMode == "Instant" then
+                SafeTeleport(validate.Position, Vector3.new(0, 2, 0))
+            else
+                GlideTo(
+                    validate.Position + Vector3.new(0, 2, 0),
+                    math.min(State.TravelSpeed, 150),
+                    FarmIsRunning
+                )
+            end
+            task.wait(0.25)
+        else
+            SafeTeleport(VOLCANO_FALLBACK, Vector3.new(0, 2, 0))
+            task.wait(0.25)
+        end
+    end
+
+    return true
+end
+
+local function FarmMoveTo(position)
+    if typeof(position) ~= "Vector3" then
+        return false
+    end
+
+    if not FarmIsRunning() then
+        return false
+    end
+
+    if State.FarmMoveMode == "Instant" then
+        local ok = SafeTeleport(position, Vector3.new(0, 3, 0))
+        if ok then
+            task.wait(0.10)
+        end
+        return ok
+    end
+
+    return GlideTo(
+        position + Vector3.new(0, 3, 0),
+        State.TravelSpeed,
+        FarmIsRunning
+    )
+end
+
+local function ReturnToPlotForFarm()
+    if not FarmIsRunning() then
+        return false
+    end
+
+    local plot = GetMyPlot()
+    if not plot then
+        return false
+    end
+
+    local ok, pivot = pcall(function()
+        return plot:GetPivot()
+    end)
+
+    if not ok or not pivot then
+        return false
+    end
+
+    if State.FarmReturnInstant then
+        return SafeTeleport(pivot.Position, Vector3.new(0, 3, 0))
+    end
+
+    return GlideTo(
+        pivot.Position + Vector3.new(0, 3, 0),
+        State.TravelSpeed,
+        FarmIsRunning
+    )
+end
+
 local function FarmOnce()
-    if not Running or not State.AutoFarm or FarmBusy then
+    if not FarmIsRunning() or FarmBusy then
         return
     end
 
     FarmBusy = true
+    FarmStatus("Scanning eggs...")
 
     local success = pcall(function()
-        if not Running or not State.AutoFarm then
+        if not FarmIsRunning() then
             return
         end
 
-        if IsCarryingEggs() then
-            if State.ReturnToPlot then
-                if State.VolcanicSupport and IsInVolcano() then
-                    local volcano = workspace:FindFirstChild("Volcano")
-                    local validate = volcano and volcano:FindFirstChild("VolcanoValidate")
-                    if validate and validate:IsA("BasePart") then
-                        GlideTo(validate.Position, math.min(State.TravelSpeed, 150), function()
-                            return Running and State.AutoFarm
-                        end)
-                    end
-                end
-
-                if Running and State.AutoFarm then
-                    ReturnToPlot()
-                end
+        -- If an egg is already carried, always finish the delivery first.
+        if GetBasketCount() > 0 then
+            FarmStatus("Returning to base...")
+            if IsInVolcano() then
+                ReturnFromVolcanoToPlot()
             end
+
+            ReturnToPlotForFarm()
             return
         end
 
+        -- Mount only once before collecting, matching the public game flow.
         if State.AutoMountPet and not IsRidingPet() then
-            if not MountBestPet() then
-                return
-            end
+            FarmStatus("Mounting pet...")
+            MountBestPet()
             task.wait(0.15)
         end
 
-        if not Running or not State.AutoFarm then
+        if not FarmIsRunning() then
             return
         end
 
@@ -928,137 +1555,150 @@ local function FarmOnce()
         local target = SelectBestCandidate(candidates)
 
         if not target then
+            FarmStatus("No matching egg found.")
             return
         end
 
-        local isVolcanic = target.Name == "Volcanic Egg"
+        local isVolcanic = string.lower(target.Name) == "volcanic egg"
 
         if isVolcanic and State.VolcanicSupport then
-            if not IsInVolcano() and IsCarryingEggs() then
-                ReturnToPlot()
-                return
-            end
-
-            if IsInVolcano() and IsCarryingEggs() then
-                local volcano = workspace:FindFirstChild("Volcano")
-                local validate = volcano and volcano:FindFirstChild("VolcanoValidate")
-
-                if validate and validate:IsA("BasePart") then
-                    GlideTo(validate.Position, math.min(State.TravelSpeed, 150), function()
-                        return Running and State.AutoFarm
-                    end)
-                end
-                return
-            end
+            FarmStatus("Entering volcano...")
 
             if not IsInVolcano() then
-                if not IsRidingPet() then
-                    if not MountBestPet() then
-                        return
-                    end
-                    task.wait(0.6)
+                if not EnterVolcano() then
+                    FarmStatus("Volcano entry failed.")
+                    return
                 end
-
-                local volcano = workspace:FindFirstChild("Volcano")
-                local entrance = volcano and volcano:FindFirstChild("VolcanoEntrance")
-                local validate = volcano and volcano:FindFirstChild("VolcanoValidate")
-
-                if entrance and entrance:IsA("BasePart") then
-                    GlideTo(entrance.Position, State.TravelSpeed, function()
-                        return Running and State.AutoFarm
-                    end)
-                end
-
-                if Running and State.AutoFarm and validate and validate:IsA("BasePart") and not IsInVolcano() then
-                    GlideTo(validate.Position, math.min(State.TravelSpeed, 150), function()
-                        return Running and State.AutoFarm
-                    end)
-                end
-
-                task.wait(0.25)
             end
-        else
-            if IsInVolcano() then
-                local volcano = workspace:FindFirstChild("Volcano")
-                local validate = volcano and volcano:FindFirstChild("VolcanoValidate")
-                if validate and validate:IsA("BasePart") then
-                    GlideTo(validate.Position, math.min(State.TravelSpeed, 150), function()
-                        return Running and State.AutoFarm
-                    end)
-                end
+        elseif IsInVolcano() then
+            ReturnFromVolcanoToPlot()
+            return
+        end
+
+        if not FarmIsRunning() then
+            return
+        end
+
+        local _, root = GetCharacter()
+        if not root then
+            FarmStatus("Character not ready.")
+            return
+        end
+
+        -- The candidate can disappear while the character is moving.
+        if target.Instance and not target.Instance.Parent and target.Synthetic ~= true then
+            FarmStatus("Target expired.")
+            return
+        end
+
+        local freshPosition = target.Position
+        if target.Instance and target.Instance.Parent then
+            freshPosition = GetEggPosition(target.Instance) or freshPosition
+        elseif target.Rendered and target.Rendered.Parent then
+            freshPosition = GetEggPosition(target.Rendered) or freshPosition
+        end
+
+        target.Position = freshPosition
+        target.Distance = (freshPosition - root.Position).Magnitude
+
+        local radius = math.clamp(
+            tonumber(State.FarmPickupRadius) or 12,
+            5,
+            30
+        )
+
+        if target.Distance > radius then
+            FarmStatus("Moving to " .. tostring(target.Name) .. "...")
+
+            if not FarmMoveTo(target.Position) then
+                FailedFarmTargets[target.ID] = os.clock() + 5
+                FarmStatus("Movement failed.")
                 return
             end
         end
 
-        if not Running or not State.AutoFarm then
+        if not FarmIsRunning() then
             return
         end
 
-        local _, currentRoot = GetCharacter()
-        if not currentRoot then
-            return
-        end
+        -- Refresh the rendered/active references after movement.
+        local candidatesAfterMove = GetCandidates()
+        local replacement = nil
 
-        local distance = (target.Position - currentRoot.Position).Magnitude
-
-        if distance > 8 then
-            local reached = GlideTo(target.Position, State.TravelSpeed, function()
-                return Running and State.AutoFarm
-            end)
-
-            if not reached then
-                return
+        for _, candidate in ipairs(candidatesAfterMove) do
+            if candidate.ID == target.ID then
+                replacement = candidate
+                break
             end
         end
 
-        if not Running or not State.AutoFarm then
+        if replacement then
+            target = replacement
+        end
+
+        FarmStatus("Collecting " .. tostring(target.Name) .. "...")
+
+        local pickedUp = AttemptPickup(target)
+
+        if not pickedUp then
+            FailedFarmTargets[target.ID] = os.clock() + 10
+            FarmStatus("Pickup failed; retrying later.")
+            task.wait(math.max(0.1, tonumber(State.FarmRetryDelay) or 0.30))
             return
         end
 
-        local EggPickupRemote = GetEggPickupRemote()
-        if not EggPickupRemote or not EggPickupRemote:IsA("RemoteEvent") then
+        FailedFarmTargets[target.ID] = nil
+        FarmStatus("Collected " .. tostring(target.Name))
+
+        task.wait(math.max(0.05, tonumber(State.FarmPickupWait) or 0.25))
+
+        if not FarmIsRunning() then
             return
         end
 
-        -- The public implementation uses the Configuration name as UID.
-        EggPickupRemote:FireServer(target.Instance.Name)
-        task.wait(0.2)
-
-        if Running and State.AutoFarm and IsCarryingEggs() and State.ReturnToPlot then
-            ReturnToPlot()
+        if GetBasketCount() > 0 then
+            if State.ReturnToPlot then
+                FarmStatus("Returning to base...")
+                if IsInVolcano() then
+                    ReturnFromVolcanoToPlot()
+                end
+                ReturnToPlotForFarm()
+            end
         end
     end)
 
     FarmBusy = false
 
     if not success then
-        task.wait(0.10)
+        FarmStatus("Farm cycle error; recovering...")
+        task.wait(math.max(0.1, tonumber(State.FarmRetryDelay) or 0.30))
     end
 end
 
 local function AutoPickupOnce()
-    if not Running or not State.AutoPickup or PickupBusy then
+    if not Running or not State.AutoPickup or PickupBusy or State.AutoFarm then
         return
     end
 
     PickupBusy = true
 
     pcall(function()
-        if IsCarryingEggs() then
-            return
-        end
-
         local candidates = GetCandidates()
         local target = SelectBestCandidate(candidates)
 
-        if not target or target.Distance > 20 then
+        if not target then
             return
         end
 
-        local EggPickupRemote = GetEggPickupRemote()
-        if EggPickupRemote and EggPickupRemote:IsA("RemoteEvent") then
-            EggPickupRemote:FireServer(target.Instance.Name)
+        if target.Distance > math.clamp(
+            tonumber(State.FarmPickupRadius) or 12,
+            5,
+            30
+        ) then
+            return
         end
+
+        AttemptPickup(target)
     end)
 
     PickupBusy = false
@@ -1954,6 +2594,27 @@ local okRayfield, Rayfield = pcall(function()
     return loader()
 end)
 
+-- Outra execução pode ter assumido o singleton enquanto o loader carregava.
+if not Running or (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
+    pcall(function()
+        if Rayfield and Rayfield.Destroy then
+            Rayfield:Destroy()
+        end
+    end)
+    pcall(function()
+        if GuardConnection then
+            GuardConnection:Disconnect()
+        end
+        if ReplaceConnection then
+            ReplaceConnection:Disconnect()
+        end
+        if Guard then
+            Guard:Destroy()
+        end
+    end)
+    return
+end
+
 if not okRayfield or type(Rayfield) ~= "table" then
     Running = false
     if GuardConnection then
@@ -1978,16 +2639,25 @@ if not Running then
     return
 end
 
+if not Running or (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
+    pcall(function()
+        if Rayfield and Rayfield.Destroy then
+            Rayfield:Destroy()
+        end
+    end)
+    return
+end
+
 local okWindow, Window = pcall(function()
     return Rayfield:CreateWindow({
         name = "Montar um Pet",
-        subtitle = "MASTER v5 • Delta Mobile",
+        subtitle = "MASTER v7 • Delta Mobile",
         sidebarLayout = true,
         toggleUIKeybind = "K",
         configuration = {
             autoSave = true,
             autoLoad = true,
-            fileName = "MontarUmPet_Master_v5",
+            fileName = "MontarUmPet_Master_v7",
         },
     })
 end)
@@ -2007,14 +2677,22 @@ if not okWindow or not Window then
     return
 end
 
-if not Running then
+if not Running or (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
     pcall(function()
-        if Rayfield.Destroy then
+        if Rayfield and Rayfield.Destroy then
             Rayfield:Destroy()
         end
     end)
     pcall(function()
-        Guard:Destroy()
+        if GuardConnection then
+            GuardConnection:Disconnect()
+        end
+        if ReplaceConnection then
+            ReplaceConnection:Disconnect()
+        end
+        if Guard then
+            Guard:Destroy()
+        end
     end)
     return
 end
@@ -2174,6 +2852,20 @@ TabFarm:CreateSlider({
 })
 
 TabFarm:CreateSection({name = "Controle"})
+
+TabFarm:CreateButton({
+    name = "Status do Auto Farm",
+    description = "Mostra o último estado interno do motor.",
+    callback = function()
+        pcall(function()
+            Window:Notify({
+                title = "Auto Farm",
+                content = LastFarmStatus,
+                duration = 4,
+            })
+        end)
+    end,
+})
 
 TabFarm:CreateButton({
     name = "Stop Farm agora",
@@ -2639,19 +3331,21 @@ TabConfig:CreateButton({
 -- LOOPS CENTRALIZADOS
 --============================================================--
 
-task.spawn(function()
+local FarmLoop = task.spawn(function()
     while Running do
-        task.wait(0.25)
-        if Running and State.AutoFarm then
+        task.wait(0.20)
+
+        if Running and State.AutoFarm and not FarmBusy then
             FarmOnce()
         end
     end
 end)
 
-task.spawn(function()
+local PickupLoop = task.spawn(function()
     while Running do
-        task.wait(0.20)
-        if Running and State.AutoPickup then
+        task.wait(0.25)
+
+        if Running and State.AutoPickup and not State.AutoFarm and not PickupBusy then
             AutoPickupOnce()
         end
     end
@@ -2728,12 +3422,20 @@ StopHandler = function()
     end)
 
     pcall(function()
-        Guard:Destroy()
+        if ReplaceConnection then
+            ReplaceConnection:Disconnect()
+            ReplaceConnection = nil
+        end
+    end)
+
+    pcall(function()
+        if Guard then
+            Guard:Destroy()
+        end
     end)
 end
 
 ENV[TOKEN_NAMES[1]] = {
     Stop = StopHandler,
 }
-ENV[TOKEN_NAME] = ENV[TOKEN_NAMES[1]]
 
