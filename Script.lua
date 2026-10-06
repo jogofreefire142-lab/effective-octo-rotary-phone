@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v32 • TOP HUB 2026 • UI ORIGINAL v15 • DELTA STABLE
+-- MONTAR UM PET - MASTER v33 • TOP HUB 2026 • HARDENED • UI ORIGINAL v15 • DELTA STABLE
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
@@ -535,19 +535,45 @@ local function GetGameRemotes()
     return remotesFolder and remotesFolder:FindFirstChild("Game")
 end
 
-local function GetEggPickupRemote()
+local function FindGameRemote(name)
     local gameRemotes = GetGameRemotes()
-    return gameRemotes and gameRemotes:FindFirstChild("EggPickup")
+    if gameRemotes then
+        local direct = gameRemotes:FindFirstChild(name)
+        if direct then
+            return direct
+        end
+
+        local ok, recursive = pcall(function()
+            return gameRemotes:FindFirstChild(name, true)
+        end)
+        if ok and recursive then
+            return recursive
+        end
+    end
+
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if remotes then
+        local ok, recursive = pcall(function()
+            return remotes:FindFirstChild(name, true)
+        end)
+        if ok and recursive then
+            return recursive
+        end
+    end
+
+    return nil
+end
+
+local function GetEggPickupRemote()
+    return FindGameRemote("EggPickup")
 end
 
 local function GetMountRemote()
-    local gameRemotes = GetGameRemotes()
-    return gameRemotes and gameRemotes:FindFirstChild("Mounting")
+    return FindGameRemote("Mounting")
 end
 
 local function GetEggPlacedRemote()
-    local gameRemotes = GetGameRemotes()
-    return gameRemotes and gameRemotes:FindFirstChild("EggPlaced")
+    return FindGameRemote("EggPlaced")
 end
 
 local EggData = {}
@@ -592,6 +618,11 @@ local FallbackEggNames = {
     "Volcanic Egg",
     "White Egg",
 }
+
+local FallbackEggNameSet = {}
+for _, eggName in ipairs(FallbackEggNames) do
+    FallbackEggNameSet[eggName] = true
+end
 
 local function SortEggNames()
     table.sort(EggNames, function(a, b)
@@ -672,6 +703,16 @@ local function LoadEggData()
 end
 
 LoadEggData()
+
+local function IsKnownEggName(name)
+    return type(name) == "string" and (EggData[name] ~= nil or FallbackEggNameSet[name] == true)
+end
+
+local function RefreshEggDataIfNeeded()
+    if next(EggData) == nil then
+        pcall(LoadEggData)
+    end
+end
 
 local RarityPriority = {
     Common = 1,
@@ -875,7 +916,7 @@ local function FindActiveEggNear(position, radius)
     local nearestDistance = radius or 15
 
     for _, egg in ipairs(activeEggs:GetChildren()) do
-        if egg:IsA("Configuration") then
+        if egg:GetAttribute("Egg") ~= nil then
             local eggPosition = GetEggPosition(egg)
 
             if eggPosition then
@@ -948,7 +989,7 @@ local function GetCandidates()
 
     if activeEggs then
         for _, egg in ipairs(activeEggs:GetChildren()) do
-            if egg:IsA("Configuration") then
+            if egg:GetAttribute("Egg") ~= nil then
                 local eggName = egg:GetAttribute("Egg")
 
                 if type(eggName) == "string"
@@ -993,7 +1034,7 @@ local function GetCandidates()
             if position then
                 local eggName = GetRealRenderedEggName(model)
 
-                if type(eggName) == "string" and EggData[eggName] then
+                if IsKnownEggName(eggName) then
                     local active = FindActiveEggNear(position, 15)
 
                     if active then
@@ -1084,6 +1125,8 @@ end
 --============================================================--
 
 local function GetFarmCandidates()
+    RefreshEggDataIfNeeded()
+
     local _, root = GetCharacter()
     if not root then
         return {}
@@ -1097,7 +1140,7 @@ local function GetFarmCandidates()
     -- Caminho principal: ServerData.ActiveEggs (UID real do servidor).
     if activeEggs then
         for _, egg in ipairs(activeEggs:GetChildren()) do
-            if egg:IsA("Configuration") then
+            if egg:GetAttribute("Egg") ~= nil then
                 local eggName = egg:GetAttribute("Egg")
                 local privateTo = egg:GetAttribute("PrivateTo")
                 local collected = tostring(LocalPlayer:GetAttribute("CollectedEggs") or "")
@@ -1154,7 +1197,7 @@ local function GetFarmCandidates()
                 local position = GetEggPosition(model)
                 local eggName = GetRealRenderedEggName(model)
 
-                if position and type(eggName) == "string" and EggData[eggName]
+                if position and IsKnownEggName(eggName)
                     and IsSelectedForFarm(eggName)
                     and MeetsFilters(model, eggName) then
 
@@ -2293,30 +2336,28 @@ local function TryRemotePickup(candidate)
     return ConfirmFarmPickup(candidate, beforeBasket, 2)
 end
 
-local function FindPromptOnEgg(candidate)
-    local model = candidate and candidate.Rendered
-    if not model or not model.Parent then
-        return nil
-    end
-
-    return model:FindFirstChildWhichIsA("ProximityPrompt", true)
-end
-
 local function TryPromptPickup(candidate)
-    if type(fireproximityprompt) ~= "function" then
-        return false
-    end
-
     local prompt = FindPromptOnEgg(candidate)
     if not prompt then
         return false
     end
 
     local beforeBasket = GetBasketCount()
+    local ok = false
 
-    local ok = pcall(function()
-        fireproximityprompt(prompt)
-    end)
+    if type(fireproximityprompt) == "function" then
+        ok = pcall(function()
+            fireproximityprompt(prompt)
+        end)
+    else
+        ok = pcall(function()
+            prompt.RequiresLineOfSight = false
+            prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 1000)
+            prompt:InputHoldBegin()
+            task.wait(math.max(0.05, tonumber(prompt.HoldDuration) or 0.05))
+            prompt:InputHoldEnd()
+        end)
+    end
 
     if not ok then
         return false
@@ -3232,6 +3273,13 @@ local function FarmOnce()
             return
         end
 
+        local _, preflightRoot = GetCharacter()
+        if not preflightRoot then
+            SetFarmPhase("Waiting for character")
+            task.wait(0.25)
+            return
+        end
+
         -- HOLDING / PENDING DELIVERY
         if GetBasketCount() > 0 or next(State.FarmPendingEggs) ~= nil then
             SetFarmPhase(GetBasketCount() > 0 and "Carrying egg" or "Pending egg delivery")
@@ -3278,8 +3326,8 @@ local function FarmOnce()
             target = ChooseAndCommitFarmTarget()
 
             if not target then
-                SetFarmPhase("No target - hovering")
-                HoverAbovePlot()
+                SetFarmPhase("No target - waiting")
+                StopFarmNoclip()
                 task.wait(math.clamp(
                     tonumber(State.FarmNoTargetDelay) or 1.00,
                     0.25,
@@ -4547,7 +4595,9 @@ TabFarm:CreateToggle({
         State.AutoFarm = value
 
         if value then
-            StartFarmNoclip()
+            -- Noclip fica desligado enquanto o worker apenas procura um alvo.
+            -- A sessão de voo é a única responsável por ativá-lo.
+            StopFarmNoclip()
             ClearFarmTarget()
             State.FarmPhase = "Starting"
             LastFarmStatus = "Starting Auto Farm"
@@ -6679,14 +6729,16 @@ local FarmLoop = task.spawn(function()
 
             if not ok and FarmIsRunning() then
                 State.FarmFailures = (tonumber(State.FarmFailures) or 0) + 1
+                DestroyFarmFlightMovers()
+                StopFarmNoclip()
+                ClearFarmTarget()
                 SetFarmPhase("Recuperando do erro")
                 LastFarmStatus = "Auto Farm error: " .. tostring(err)
                 warn("[MontarUmPet] Auto Farm:", err)
                 if State.FarmAutoRecover then
-                    ClearFarmTarget()
                     task.wait(math.clamp(tonumber(State.FarmRetryAfterError) or 1.0, 0.25, 4.0))
                 end
-            elseif State.FarmAutoRecover and FarmIsRunning() and State.FarmPhase == "No target - hovering" then
+            elseif State.FarmAutoRecover and FarmIsRunning() and State.FarmPhase == "No target - waiting" then
                 task.wait(math.clamp(tonumber(State.FarmNoTargetDelay) or 1.0, 0.25, 5.0))
             elseif FarmIsRunning() then
                 task.wait(math.clamp(tonumber(State.FarmCycleDelay) or 1.50, 0.25, 5.0))
@@ -6716,7 +6768,9 @@ local FarmWatchdogLoop = task.spawn(function()
             local limit = math.clamp(tonumber(State.FarmWatchdogTimeout) or 4.0, 2.0, 12.0)
             if not FarmBusy and (os.clock() - lastChange) >= limit then
                 if phase == "Starting" or phase == "Stopped" or phase == "Idle"
-                    or phase == "No target - hovering" or phase == "Scanning eggs" then
+                    or phase == "No target - waiting" or phase == "Scanning eggs" then
+                    DestroyFarmFlightMovers()
+                    StopFarmNoclip()
                     ClearFarmTarget()
                     State.FarmPhase = "Watchdog: reiniciando ciclo"
                     LastFarmStatus = State.FarmPhase
@@ -6730,18 +6784,8 @@ local FarmWatchdogLoop = task.spawn(function()
     end
 end)
 
--- Dá um primeiro ciclo ao worker assim que o toggle for ligado sem criar um
--- segundo worker ou uma segunda UI.
-Track(RunService.Heartbeat:Connect(function()
-    if Running and State.AutoFarm and not FarmBusy and State.FarmPhase == "Starting" then
-        task.defer(function()
-            if Running and State.AutoFarm and not FarmBusy then
-                pcall(FarmOnce)
-            end
-        end)
-    end
-end))
-
+-- O worker centralizado abaixo inicia o primeiro ciclo. Não existe um segundo
+-- disparador por Heartbeat, evitando corrida entre dois FarmOnce().
 local PickupLoop = task.spawn(function()
     while Running do
         task.wait(0.25)
@@ -6854,7 +6898,7 @@ ENV[TOKEN_NAMES[1]] = {
 
 
 --============================================================--
--- v27 SAFE AUTOFARM LAYER
+-- v33 HARDENED AUTOFARM LAYER
 -- Base: v22 UI ORIGINAL v15 (INTACT)
 -- Regra: nenhuma lógica opcional é executada antes da interface.
 -- Qualquer extensão futura deve ser carregada depois que a UI existir.
@@ -6869,7 +6913,7 @@ task.defer(function()
     -- Fica disponível somente depois que Window/Tabs já foram criadas.
     pcall(function()
         ENV.__MUP_V23_CONTEXT = {
-            Version = "25-2026-verified",
+            Version = "33-2026-hardened",
             Window = Window,
             TabFarm = TabFarm,
             TabOvos = TabOvos,
