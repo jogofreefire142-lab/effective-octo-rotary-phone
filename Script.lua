@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v16 AUTOFARM 300 + NEST DEPOSIT + SAFE APPROACH + CONFIG
+-- MONTAR UM PET - MASTER v17 AUTOFARM 300 + NEST DEPOSIT + OPCOES COMPLETAS + SAFE APPROACH + CONFIG
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 (stable)
 -- Config: salvamento manual + persistência do Rayfield
@@ -228,7 +228,8 @@ local function LooksLikeOurRayfieldGui(gui)
                 or t:find("MASTER v6", 1, true)
                 or t:find("MASTER v7", 1, true)
                 or t:find("MASTER v14", 1, true)
-                or t:find("MASTER v16", 1, true) then
+                or t:find("MASTER v16", 1, true)
+                or t:find("MASTER v17", 1, true) then
                 hasHubSubtitle = true
             end
 
@@ -4015,13 +4016,13 @@ end
 local okWindow, Window = pcall(function()
     return Rayfield:CreateWindow({
         name = "Montar um Pet",
-        subtitle = "MASTER v15 • Delta Mobile",
+        subtitle = "MASTER v17 • Delta Mobile",
         sidebarLayout = true,
         toggleUIKeybind = "K",
         configuration = {
             autoSave = true,
             autoLoad = true,
-            fileName = "MontarUmPet_Master_v15",
+            fileName = "MontarUmPet_Master_v17",
         },
     })
 end)
@@ -4071,6 +4072,175 @@ local TabMove = Window:CreateTab({name = "Movimento"})
 local TabVisual = Window:CreateTab({name = "Visual"})
 local TabPerf = Window:CreateTab({name = "Performance"})
 local TabConfig = Window:CreateTab({name = "Config"})
+local TabOptions = Window:CreateTab({name = "Opções"})
+
+--============================================================--
+-- OPCOES TAB
+--============================================================--
+
+TabOptions:CreateSection({name = "Auto Farm avançado"})
+
+TabOptions:CreateSlider({
+    name = "Tentativas de coleta",
+    flag = "FarmPickupRetries",
+    range = {1, 10},
+    increment = 1,
+    value = State.FarmPickupRetries,
+    suffix = " tentativas",
+    callback = function(value)
+        State.FarmPickupRetries = math.clamp(math.floor(tonumber(value) or 6), 1, 10)
+    end,
+})
+
+TabOptions:CreateSlider({
+    name = "Espera da coleta",
+    flag = "FarmPickupWait",
+    range = {0.10, 1.00},
+    increment = 0.05,
+    value = State.FarmPickupWait,
+    suffix = " s",
+    callback = function(value)
+        State.FarmPickupWait = math.clamp(tonumber(value) or 0.25, 0.10, 1.00)
+    end,
+})
+
+TabOptions:CreateSlider({
+    name = "Atraso entre tentativas",
+    flag = "FarmRetryDelay",
+    range = {0.10, 1.50},
+    increment = 0.05,
+    value = State.FarmRetryDelay,
+    suffix = " s",
+    callback = function(value)
+        State.FarmRetryDelay = math.clamp(tonumber(value) or 0.30, 0.10, 1.50)
+    end,
+})
+
+TabOptions:CreateSlider({
+    name = "Raio de chegada do voo",
+    flag = "FarmFlightArriveRadius",
+    range = {1, 12},
+    increment = 1,
+    value = State.FarmFlightArriveRadius,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmFlightArriveRadius = math.clamp(math.floor(tonumber(value) or 4), 1, 12)
+    end,
+})
+
+TabOptions:CreateSlider({
+    name = "Raio de aproximação da base",
+    flag = "FarmHoverRadius",
+    range = {8, 50},
+    increment = 1,
+    value = State.FarmHoverRadius,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmHoverRadius = math.clamp(math.floor(tonumber(value) or 18), 8, 50)
+    end,
+})
+
+TabOptions:CreateSlider({
+    name = "Intervalo do motor",
+    flag = "FarmLoopDelay",
+    range = {0.05, 0.50},
+    increment = 0.05,
+    value = State.FarmLoopDelay,
+    suffix = " s",
+    callback = function(value)
+        State.FarmLoopDelay = math.clamp(tonumber(value) or 0.10, 0.05, 0.50)
+    end,
+})
+
+TabOptions:CreateToggle({
+    name = "Exigir pet montado",
+    flag = "FarmRequireMountedPetAdvanced",
+    value = State.FarmRequireMountedPet,
+    callback = function(value)
+        State.FarmRequireMountedPet = value
+    end,
+})
+
+TabOptions:CreateToggle({
+    name = "Reaproximar se a coleta falhar",
+    flag = "FarmPickupRetryApproachAdvanced",
+    value = State.FarmPickupRetryApproach,
+    callback = function(value)
+        State.FarmPickupRetryApproach = value
+    end,
+})
+
+TabOptions:CreateSection({name = "Renderização local"})
+
+TabOptions:CreateToggle({
+    name = "Fullbright",
+    flag = "Fullbright",
+    value = State.Fullbright,
+    callback = function(value)
+        SetFullbright(value)
+    end,
+})
+
+TabOptions:CreateToggle({
+    name = "Sem neblina",
+    flag = "NoFog",
+    value = State.NoFog,
+    callback = function(value)
+        SetNoFog(value)
+    end,
+})
+
+TabOptions:CreateToggle({
+    name = "Desativar renderização 3D",
+    flag = "Disable3D",
+    value = State.Disable3D,
+    callback = function(value)
+        Set3DDisabled(value)
+    end,
+})
+
+TabOptions:CreateButton({
+    name = "Aplicar renderização atual",
+    callback = function()
+        ApplyLightingState()
+        Set3DDisabled(State.Disable3D)
+        pcall(function()
+            Window:Notify({
+                title = "Opções",
+                content = "Configurações de renderização aplicadas.",
+                duration = 3,
+            })
+        end)
+    end,
+})
+
+TabOptions:CreateSection({name = "Voo do Auto Farm"})
+
+TabOptions:CreateSlider({
+    name = "Velocidade do voo",
+    flag = "FarmFlightSpeedAdvanced",
+    range = {50, 1200},
+    increment = 25,
+    value = State.FarmFlightSpeed,
+    suffix = " studs/s",
+    callback = function(value)
+        State.FarmFlightSpeed = math.clamp(math.floor(tonumber(value) or 300), 50, 1200)
+    end,
+})
+
+TabOptions:CreateSlider({
+    name = "Altura de voo",
+    flag = "FarmFlightHeightAdvanced",
+    range = {20, 200},
+    increment = 5,
+    value = State.FarmFlightHeight,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmFlightHeight = math.clamp(math.floor(tonumber(value) or 90), 20, 200)
+    end,
+})
+
+TabOptions:CreateLabel("As opções originais das abas Farm, Ovos, Movimento, Visual, Performance e Config continuam disponíveis.")
 
 --============================================================--
 -- FARM TAB
@@ -4796,7 +4966,7 @@ TabPerf:CreateButton({
 TabConfig:CreateSection({name = "Configuração"})
 
 local CONFIG_FOLDER = "MontarUmPet"
-local CONFIG_FILE = "MontarUmPet_MASTER_v15_config.json"
+local CONFIG_FILE = "MontarUmPet_MASTER_v17_config.json"
 
 local function CanUseConfigFiles()
     return type(writefile) == "function"
@@ -4830,7 +5000,7 @@ local function SaveConfigNow()
     if CanUseConfigFiles() then
         EnsureConfigFolder()
 
-        local data = { __version = 15 }
+        local data = { __version = 17 }
         pcall(function()
             for flagName, flag in pairs(Rayfield.Flags or {}) do
                 if type(flag) == "table" then
