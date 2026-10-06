@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v32 • TOP HUB 2026 • UI ORIGINAL v15 • DELTA STABLE
+-- MONTAR UM PET - MASTER v36 • UI v32 RESURRECTION • TOP HUB 2026 • UI ORIGINAL v15 • DELTA STABLE
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
@@ -519,12 +519,12 @@ local function RefreshCharacter()
     Character, RootPart = GetCharacter()
 end
 
-RefreshCharacter()
+pcall(RefreshCharacter)
 
-Track(LocalPlayer.CharacterAdded:Connect(function(character)
+pcall(function() Track(LocalPlayer.CharacterAdded:Connect(function(character)
     Character = character
     RootPart = character:WaitForChild("HumanoidRootPart", 5) or character.PrimaryPart
-end))
+end) end)
 
 --============================================================--
 -- DESCOBERTA DO GAME API
@@ -671,7 +671,12 @@ local function LoadEggData()
     ResetRarities()
 end
 
-LoadEggData()
+pcall(LoadEggData)
+if #EggNames == 0 then
+    for _, eggName in ipairs(FallbackEggNames) do table.insert(EggNames, eggName) end
+    SortEggNames()
+    ResetRarities()
+end
 
 local RarityPriority = {
     Common = 1,
@@ -4059,7 +4064,7 @@ local function SetEggESPEnabled(enabled)
     end
 end
 
-AttachRenderedEggs()
+task.defer(function() pcall(AttachRenderedEggs) end)
 
 task.spawn(function()
     while Running do
@@ -4413,10 +4418,29 @@ end
 --============================================================--
 
 local okRayfield, Rayfield = pcall(function()
-    local source = game:HttpGet("https://sirius.menu/gen2")
-    local loader = loadstring(source)
-    assert(type(loader) == "function", "Rayfield Gen2 loader inválido")
-    return loader()
+    local urls = {
+        "https://sirius.menu/gen2",
+        "https://sirius.menu/rayfield",
+        "https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua",
+    }
+
+    local lastError = "Rayfield loader indisponível"
+    for _, url in ipairs(urls) do
+        local ok, result = pcall(function()
+            local source = game:HttpGet(url)
+            local loader = loadstring(source)
+            assert(type(loader) == "function", "loader inválido")
+            return loader()
+        end)
+
+        if ok and type(result) == "table" then
+            return result
+        end
+
+        lastError = tostring(result)
+    end
+
+    error(lastError)
 end)
 
 -- Outra execução pode ter assumido o singleton enquanto o loader carregava.
@@ -4486,6 +4510,21 @@ local okWindow, Window = pcall(function()
         },
     })
 end)
+
+if not okWindow or not Window then
+    okWindow, Window = pcall(function()
+        return Rayfield:CreateWindow({
+            Name = "Montar um Pet",
+            Subtitle = "MASTER v15 • Delta Mobile",
+            ShowText = "Montar um Pet",
+            ToggleUIKeybind = "K",
+            ConfigurationSaving = {
+                Enabled = true,
+                FileName = "MontarUmPet_Master_v15",
+            },
+        })
+    end)
+end
 
 if not okWindow or not Window then
     Running = false
