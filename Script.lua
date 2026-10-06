@@ -1,7 +1,7 @@
 --============================================================--
 -- MONTAR UM PET - MASTER v15.2026 AUTOFARM + PROGRESSION + DYNAMIC GAME API
 -- PlaceId: 124216119978534
--- UI: Rayfield Gen2 (stable)
+-- UI: Native Delta Mobile 2026 (no external UI dependency)
 -- Config: salvamento manual + persistência do Rayfield + flags 2026
 -- Foco: Delta Mobile + Auto Farm por estados + camada 2026 dinâmica + cleanup robusto
 --
@@ -63,6 +63,7 @@ local GUI_HINTS = {
     "MontarUmPetVelocidade",
     "MontarUmPet_Master",
     "MontarUmPet_RayfieldGen2",
+    "MontarUmPet_2026_DeltaUI",
 }
 
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -4395,130 +4396,780 @@ end)
 
 
 --============================================================--
--- GUI: RAYFIELD GEN2
+-- GUI: MONTAR UM PET 2026 / DELTA NATIVE MOBILE UI
+-- Sem dependência externa de biblioteca de interface.
+-- A API abaixo mantém o mesmo formato usado pelo restante do hub:
+-- Window:CreateTab, Tab:CreateToggle/Slider/Dropdown/Input/Button...
 --============================================================--
 
-local okRayfield, Rayfield = pcall(function()
-    local source = game:HttpGet("https://sirius.menu/gen2")
-    local loader = loadstring(source)
-    assert(type(loader) == "function", "Rayfield Gen2 loader inválido")
-    return loader()
+local UI_PARENT = PlayerGui
+
+pcall(function()
+    if typeof(gethui) == "function" then
+        local h = gethui()
+        if h then
+            UI_PARENT = h
+            return
+        end
+    end
 end)
 
--- Outra execução pode ter assumido o singleton enquanto o loader carregava.
-if not Running or (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
-    pcall(function()
-        if Rayfield and Rayfield.Destroy then
-            Rayfield:Destroy()
-        end
-    end)
-    pcall(function()
-        if GuardConnection then
-            GuardConnection:Disconnect()
-        end
-        if ReplaceConnection then
-            ReplaceConnection:Disconnect()
-        end
-        if Guard then
-            Guard:Destroy()
-        end
-    end)
-    return
-end
+local GUI_NAME = "MontarUmPet_2026_DeltaUI"
 
-if not okRayfield or type(Rayfield) ~= "table" then
-    Running = false
-    if GuardConnection then
-        GuardConnection:Disconnect()
-    end
-    Guard:Destroy()
-    warn("Montar um Pet: não foi possível carregar Rayfield Gen2.")
-    return
-end
-
--- Se outra execução pediu shutdown enquanto a biblioteca carregava,
--- não continue criando uma segunda interface.
-if not Running then
-    pcall(function()
-        if Rayfield.Destroy then
-            Rayfield:Destroy()
-        end
-    end)
-    pcall(function()
-        Guard:Destroy()
-    end)
-    return
-end
-
-if not Running or (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
-    pcall(function()
-        if Rayfield and Rayfield.Destroy then
-            Rayfield:Destroy()
-        end
-    end)
-    return
-end
-
-local okWindow, Window = pcall(function()
-    return Rayfield:CreateWindow({
-        name = "Montar um Pet",
-        subtitle = "MASTER v15.2026 • Delta Mobile • Dynamic API",
-        sidebarLayout = true,
-        toggleUIKeybind = "K",
-        configuration = {
-            autoSave = true,
-            autoLoad = true,
-            fileName = "MontarUmPet_Master_v15_2026",
-        },
-    })
+pcall(function()
+    local old = UI_PARENT:FindFirstChild(GUI_NAME)
+    if old then old:Destroy() end
 end)
 
-if not okWindow or not Window then
-    Running = false
-    pcall(function()
-        if Rayfield.Destroy then
-            Rayfield:Destroy()
+pcall(function()
+    local old = PlayerGui:FindFirstChild(GUI_NAME)
+    if old then old:Destroy() end
+end)
+
+local UI_COLORS = {
+    Background = Color3.fromRGB(10, 12, 18),
+    Panel = Color3.fromRGB(17, 20, 29),
+    Panel2 = Color3.fromRGB(22, 26, 37),
+    Panel3 = Color3.fromRGB(28, 33, 46),
+    Stroke = Color3.fromRGB(53, 61, 82),
+    Text = Color3.fromRGB(245, 247, 252),
+    Muted = Color3.fromRGB(157, 166, 185),
+    Accent = Color3.fromRGB(103, 146, 255),
+    Accent2 = Color3.fromRGB(76, 112, 226),
+    Success = Color3.fromRGB(71, 205, 132),
+    Danger = Color3.fromRGB(241, 91, 91),
+}
+
+local function UICorner(parent, radius)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, radius or 10)
+    c.Parent = parent
+    return c
+end
+
+local function UIStroke(parent, color, transparency)
+    local s = Instance.new("UIStroke")
+    s.Color = color or UI_COLORS.Stroke
+    s.Transparency = transparency or 0
+    s.Thickness = 1
+    s.Parent = parent
+    return s
+end
+
+local function makeText(parent, text, size, color, bold)
+    local label = Instance.new("TextLabel")
+    label.BackgroundTransparency = 1
+    label.Text = tostring(text or "")
+    label.TextColor3 = color or UI_COLORS.Text
+    label.TextSize = size or 14
+    label.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextYAlignment = Enum.TextYAlignment.Center
+    label.Parent = parent
+    return label
+end
+
+local function makeButton(parent, text, height)
+    local b = Instance.new("TextButton")
+    b.AutoButtonColor = false
+    b.BackgroundColor3 = UI_COLORS.Panel3
+    b.TextColor3 = UI_COLORS.Text
+    b.Text = tostring(text or "")
+    b.TextSize = 13
+    b.Font = Enum.Font.GothamMedium
+    b.Size = UDim2.new(1, 0, 0, height or 40)
+    b.Parent = parent
+    UICorner(b, 9)
+    UIStroke(b, UI_COLORS.Stroke, 0.15)
+    b.MouseEnter:Connect(function()
+        pcall(function() b.BackgroundColor3 = UI_COLORS.Panel2 end)
+    end)
+    b.MouseLeave:Connect(function()
+        pcall(function() b.BackgroundColor3 = UI_COLORS.Panel3 end)
+    end)
+    b.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            b.BackgroundColor3 = UI_COLORS.Panel2
         end
     end)
-    if GuardConnection then
-        GuardConnection:Disconnect()
+    return b
+end
+
+local function uiViewport()
+    local camera = workspace.CurrentCamera
+    return camera and camera.ViewportSize or Vector2.new(800, 600)
+end
+
+local function clampUiSize()
+    local v = uiViewport()
+    if v.X < 600 then
+        return UDim2.new(0.94, 0, 0.82, 0)
     end
-    Guard:Destroy()
-    warn("Montar um Pet: não foi possível criar a janela.")
-    return
+    return UDim2.new(0, 520, 0, 640)
 end
 
-if not Running or (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
-    pcall(function()
-        if Rayfield and Rayfield.Destroy then
-            Rayfield:Destroy()
-        end
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = GUI_NAME
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+ScreenGui.DisplayOrder = 100000
+ScreenGui.Parent = UI_PARENT
+
+local Root = Instance.new("Frame")
+Root.Name = "Root"
+Root.AnchorPoint = Vector2.new(0.5, 0.5)
+Root.Position = UDim2.fromScale(0.5, 0.5)
+Root.Size = clampUiSize()
+Root.BackgroundColor3 = UI_COLORS.Background
+Root.BorderSizePixel = 0
+Root.Parent = ScreenGui
+UICorner(Root, 16)
+UIStroke(Root, UI_COLORS.Stroke, 0)
+
+local Scale = Instance.new("UIScale")
+Scale.Scale = 1
+Scale.Parent = Root
+
+local Header = Instance.new("Frame")
+Header.BackgroundColor3 = UI_COLORS.Panel
+Header.BorderSizePixel = 0
+Header.Size = UDim2.new(1, 0, 0, 58)
+Header.Parent = Root
+UICorner(Header, 16)
+
+local HeaderCover = Instance.new("Frame")
+HeaderCover.BackgroundColor3 = UI_COLORS.Panel
+HeaderCover.BorderSizePixel = 0
+HeaderCover.Position = UDim2.new(0, 0, 1, -16)
+HeaderCover.Size = UDim2.new(1, 0, 0, 16)
+HeaderCover.Parent = Header
+
+local Title = makeText(Header, "MONTAR UM PET", 16, UI_COLORS.Text, true)
+Title.Position = UDim2.new(0, 18, 0, 6)
+Title.Size = UDim2.new(1, -150, 0, 22)
+
+local Subtitle = makeText(Header, "V15.2026 • DELTA • MOBILE", 10, UI_COLORS.Muted, false)
+Subtitle.Position = UDim2.new(0, 19, 0, 30)
+Subtitle.Size = UDim2.new(1, -150, 0, 17)
+
+local MinBtn = makeButton(Header, "—", 34)
+MinBtn.Position = UDim2.new(1, -86, 0, 12)
+MinBtn.Size = UDim2.fromOffset(32, 34)
+local CloseBtn = makeButton(Header, "×", 34)
+CloseBtn.Position = UDim2.new(1, -48, 0, 12)
+CloseBtn.Size = UDim2.fromOffset(32, 34)
+
+local Body = Instance.new("Frame")
+Body.BackgroundTransparency = 1
+Body.Position = UDim2.new(0, 10, 0, 68)
+Body.Size = UDim2.new(1, -20, 1, -78)
+Body.Parent = Root
+
+local TabBar = Instance.new("ScrollingFrame")
+TabBar.BackgroundTransparency = 1
+TabBar.BorderSizePixel = 0
+TabBar.Size = UDim2.new(1, 0, 0, 42)
+TabBar.CanvasSize = UDim2.new(0, 0, 0, 0)
+TabBar.AutomaticCanvasSize = Enum.AutomaticSize.X
+TabBar.ScrollingDirection = Enum.ScrollingDirection.X
+TabBar.ScrollBarThickness = 0
+TabBar.Parent = Body
+
+local TabList = Instance.new("UIListLayout")
+TabList.FillDirection = Enum.FillDirection.Horizontal
+TabList.Padding = UDim.new(0, 6)
+TabList.SortOrder = Enum.SortOrder.LayoutOrder
+TabList.Parent = TabBar
+
+local PageHolder = Instance.new("Frame")
+PageHolder.BackgroundTransparency = 1
+PageHolder.Position = UDim2.new(0, 0, 0, 48)
+PageHolder.Size = UDim2.new(1, 0, 1, -48)
+PageHolder.Parent = Body
+
+local ToastHolder = Instance.new("Frame")
+ToastHolder.BackgroundTransparency = 1
+ToastHolder.AnchorPoint = Vector2.new(1, 0)
+ToastHolder.Position = UDim2.new(1, -12, 0, 74)
+ToastHolder.Size = UDim2.fromOffset(280, 300)
+ToastHolder.Parent = ScreenGui
+local ToastLayout = Instance.new("UIListLayout")
+ToastLayout.Padding = UDim.new(0, 6)
+ToastLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+ToastLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+ToastLayout.Parent = ToastHolder
+
+local Floating = makeButton(ScreenGui, "PET", 44)
+Floating.Size = UDim2.fromOffset(64, 44)
+Floating.AnchorPoint = Vector2.new(1, 1)
+Floating.Position = UDim2.new(1, -14, 1, -14)
+Floating.BackgroundColor3 = UI_COLORS.Accent2
+Floating.Visible = false
+Floating.ZIndex = 1000
+
+local function showToast(title, content, duration)
+    local card = Instance.new("Frame")
+    card.Size = UDim2.new(1, 0, 0, 62)
+    card.BackgroundColor3 = UI_COLORS.Panel
+    card.BorderSizePixel = 0
+    card.Parent = ToastHolder
+    UICorner(card, 10)
+    UIStroke(card, UI_COLORS.Stroke, 0.1)
+
+    local t = makeText(card, title, 12, UI_COLORS.Text, true)
+    t.Position = UDim2.new(0, 12, 0, 7)
+    t.Size = UDim2.new(1, -20, 0, 18)
+
+    local c = makeText(card, content, 10, UI_COLORS.Muted, false)
+    c.Position = UDim2.new(0, 12, 0, 27)
+    c.Size = UDim2.new(1, -20, 0, 28)
+    c.TextWrapped = true
+
+    task.delay(duration or 4, function()
+        pcall(function() card:Destroy() end)
     end)
-    pcall(function()
-        if GuardConnection then
-            GuardConnection:Disconnect()
-        end
-        if ReplaceConnection then
-            ReplaceConnection:Disconnect()
-        end
-        if Guard then
-            Guard:Destroy()
-        end
-    end)
-    return
 end
 
---============================================================--
--- TABS
---============================================================--
+local function beginDrag(frame, handle)
+    local dragging = false
+    local dragStart
+    local startPos
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            local conn
+            conn = input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                    if conn then conn:Disconnect() end
+                end
+            end)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end)
+end
 
+beginDrag(Root, Header)
+
+local Window = {}
+local Rayfield = { Flags = {} }
+local Tabs = {}
+local CurrentTab
+local WindowDestroyed = false
+
+local function createPage(name)
+    local page = Instance.new("ScrollingFrame")
+    page.Name = "Page_" .. tostring(name)
+    page.BackgroundTransparency = 1
+    page.BorderSizePixel = 0
+    page.Size = UDim2.fromScale(1, 1)
+    page.CanvasSize = UDim2.new(0, 0, 0, 0)
+    page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    page.ScrollBarThickness = 4
+    page.ScrollBarImageColor3 = UI_COLORS.Stroke
+    page.Visible = false
+    page.Parent = PageHolder
+
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 8)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = page
+
+    local pad = Instance.new("UIPadding")
+    pad.PaddingLeft = UDim.new(0, 2)
+    pad.PaddingRight = UDim.new(0, 4)
+    pad.PaddingBottom = UDim.new(0, 16)
+    pad.Parent = page
+
+    return page
+end
+
+local function controlCard(tabPage, height)
+    local card = Instance.new("Frame")
+    card.BackgroundColor3 = UI_COLORS.Panel
+    card.BorderSizePixel = 0
+    card.Size = UDim2.new(1, -6, 0, height or 54)
+    card.Parent = tabPage
+    UICorner(card, 11)
+    UIStroke(card, UI_COLORS.Stroke, 0.25)
+    return card
+end
+
+local function addFlag(RayfieldStub, flagName, api)
+    if flagName and flagName ~= "" then
+        RayfieldStub.Flags[flagName] = api
+    end
+end
+
+local function numericValue(v, fallback)
+    local n = tonumber(v)
+    if n == nil then return fallback end
+    return n
+end
+
+function Window:CreateTab(settings)
+    local name = type(settings) == "table" and settings.name or tostring(settings)
+    name = name or "Tab"
+
+    local page = createPage(name)
+    local tabButton = makeButton(TabBar, name, 38)
+    tabButton.Size = UDim2.fromOffset(math.max(84, #tostring(name) * 8 + 26), 38)
+
+    local tab = {}
+    tab.Name = name
+    tab.Page = page
+    tab.Button = tabButton
+    tab.Window = Window
+
+    tabButton.MouseButton1Click:Connect(function()
+        for _, data in pairs(Tabs) do
+            data.Page.Visible = false
+            data.Button.BackgroundColor3 = UI_COLORS.Panel3
+        end
+        page.Visible = true
+        tabButton.BackgroundColor3 = UI_COLORS.Accent2
+        CurrentTab = tab
+    end)
+
+    function tab:CreateSection(cfg)
+        local section = Instance.new("Frame")
+        section.BackgroundTransparency = 1
+        section.Size = UDim2.new(1, -6, 0, 26)
+        section.Parent = page
+        local label = makeText(section, "  " .. tostring(cfg and cfg.name or ""), 11, UI_COLORS.Accent, true)
+        label.Size = UDim2.fromScale(1, 1)
+        return {Set = function(_, text) label.Text = "  " .. tostring(text or "") end}
+    end
+
+    function tab:CreateLabel(text)
+        local card = controlCard(page, 44)
+        card.BackgroundTransparency = 0.15
+        local label = makeText(card, text, 11, UI_COLORS.Muted, false)
+        label.Position = UDim2.new(0, 12, 0, 5)
+        label.Size = UDim2.new(1, -24, 1, -10)
+        label.TextWrapped = true
+        return { Set = function(_, value) label.Text = tostring(value or "") end }
+    end
+
+    function tab:CreateButton(cfg)
+        local card = controlCard(page, cfg and cfg.description and 70 or 54)
+        local title = makeText(card, cfg.name, 13, UI_COLORS.Text, true)
+        title.Position = UDim2.new(0, 12, 0, cfg.description and 7 or 0)
+        title.Size = UDim2.new(1, -108, 0, 24)
+        local click = makeButton(card, "ABRIR", 34)
+        click.AnchorPoint = Vector2.new(1, 0.5)
+        click.Position = UDim2.new(1, -10, 0.5, 0)
+        click.Size = UDim2.fromOffset(76, 34)
+        if cfg.description then
+            local desc = makeText(card, cfg.description, 10, UI_COLORS.Muted, false)
+            desc.Position = UDim2.new(0, 12, 0, 34)
+            desc.Size = UDim2.new(1, -100, 0, 28)
+            desc.TextWrapped = true
+        end
+        click.MouseButton1Click:Connect(function()
+            local ok, err = pcall(cfg.callback or function() end)
+            if not ok then showToast("Erro", tostring(err), 5) end
+        end)
+        return click
+    end
+
+    function tab:CreateToggle(cfg)
+        local value = cfg.value == true
+        local card = controlCard(page, cfg.description and 70 or 54)
+        local title = makeText(card, cfg.name, 13, UI_COLORS.Text, true)
+        title.Position = UDim2.new(0, 12, 0, cfg.description and 7 or 0)
+        title.Size = UDim2.new(1, -96, 0, 24)
+
+        local switch = makeButton(card, value and "ON" or "OFF", 32)
+        switch.AnchorPoint = Vector2.new(1, 0.5)
+        switch.Position = UDim2.new(1, -10, 0.5, 0)
+        switch.Size = UDim2.fromOffset(58, 32)
+
+        local desc
+        if cfg.description then
+            desc = makeText(card, cfg.description, 10, UI_COLORS.Muted, false)
+            desc.Position = UDim2.new(0, 12, 0, 34)
+            desc.Size = UDim2.new(1, -90, 0, 28)
+            desc.TextWrapped = true
+        end
+
+        local api = { CurrentValue = value }
+        function api:Set(newValue, silent)
+            value = newValue == true
+            api.CurrentValue = value
+            switch.Text = value and "ON" or "OFF"
+            switch.BackgroundColor3 = value and UI_COLORS.Success or UI_COLORS.Panel3
+            if not silent then
+                local ok, err = pcall(cfg.callback or function() end, value)
+                if not ok then showToast("Erro em " .. tostring(cfg.name), tostring(err), 5) end
+            end
+        end
+        switch.MouseButton1Click:Connect(function() api:Set(not value) end)
+        api:Set(value, true)
+        addFlag(Rayfield, cfg.flag, api)
+        return api
+    end
+
+    function tab:CreateInput(cfg)
+        local value = tostring(cfg.value or "")
+        local card = controlCard(page, cfg.description and 78 or 58)
+        local title = makeText(card, cfg.name, 13, UI_COLORS.Text, true)
+        title.Position = UDim2.new(0, 12, 0, 7)
+        title.Size = UDim2.new(0.42, 0, 0, 22)
+
+        local box = Instance.new("TextBox")
+        box.BackgroundColor3 = UI_COLORS.Panel3
+        box.TextColor3 = UI_COLORS.Text
+        box.PlaceholderColor3 = UI_COLORS.Muted
+        box.Text = value
+        box.PlaceholderText = cfg.placeholder or "digite..."
+        box.TextSize = 12
+        box.Font = Enum.Font.Gotham
+        box.ClearTextOnFocus = false
+        box.Size = UDim2.new(0.52, 0, 0, 34)
+        box.Position = UDim2.new(0.46, 0, 0, 6)
+        box.Parent = card
+        UICorner(box, 9)
+        UIStroke(box, UI_COLORS.Stroke, 0.2)
+
+        if cfg.description then
+            local desc = makeText(card, cfg.description, 10, UI_COLORS.Muted, false)
+            desc.Position = UDim2.new(0, 12, 0, 42)
+            desc.Size = UDim2.new(1, -24, 0, 26)
+            desc.TextWrapped = true
+        end
+
+        local api = { CurrentValue = value }
+        local function commit()
+            value = box.Text
+            api.CurrentValue = value
+            local out = value
+            if cfg.numeric then out = tonumber(value) or 0 end
+            local ok, err = pcall(cfg.callback or function() end, out)
+            if not ok then showToast("Erro em " .. tostring(cfg.name), tostring(err), 5) end
+        end
+        function api:Set(newValue, silent)
+            value = tostring(newValue or "")
+            api.CurrentValue = value
+            box.Text = value
+            if not silent then commit() end
+        end
+        box.FocusLost:Connect(function() commit() end)
+        addFlag(Rayfield, cfg.flag, api)
+        return api
+    end
+
+    function tab:CreateDropdown(cfg)
+        local current = cfg.value
+        local multi = cfg.multiSelect == true
+        local options = type(cfg.options) == "table" and cfg.options or {}
+        local cardHeight = cfg.description and 76 or 58
+        local card = controlCard(page, cardHeight)
+        local title = makeText(card, cfg.name, 13, UI_COLORS.Text, true)
+        title.Position = UDim2.new(0, 12, 0, 7)
+        title.Size = UDim2.new(0.40, 0, 0, 22)
+
+        local display = Instance.new("TextLabel")
+        display.BackgroundColor3 = UI_COLORS.Panel3
+        display.TextColor3 = UI_COLORS.Text
+        display.TextSize = 11
+        display.Font = Enum.Font.Gotham
+        display.TextXAlignment = Enum.TextXAlignment.Left
+        display.TextTruncate = Enum.TextTruncate.AtEnd
+        display.Size = UDim2.new(0.54, 0, 0, 34)
+        display.Position = UDim2.new(0.44, 0, 0, 6)
+        display.Parent = card
+        UICorner(display, 9)
+        UIStroke(display, UI_COLORS.Stroke, 0.2)
+
+        local open = makeButton(card, "⌄", 30)
+        open.AnchorPoint = Vector2.new(1, 0.5)
+        open.Position = UDim2.new(1, -8, 0.5, 0)
+        open.Size = UDim2.fromOffset(28, 30)
+
+        local list = Instance.new("Frame")
+        list.BackgroundColor3 = UI_COLORS.Panel2
+        list.BorderSizePixel = 0
+        list.Visible = false
+        list.Position = UDim2.new(0, 8, 1, 5)
+        list.Size = UDim2.new(1, -16, 0, math.min(180, math.max(40, #options * 32 + 10)))
+        list.ZIndex = 20
+        list.Parent = card
+        UICorner(list, 9)
+        UIStroke(list, UI_COLORS.Stroke, 0.1)
+
+        local optScroll = Instance.new("ScrollingFrame")
+        optScroll.BackgroundTransparency = 1
+        optScroll.BorderSizePixel = 0
+        optScroll.Size = UDim2.fromScale(1, 1)
+        optScroll.ScrollBarThickness = 3
+        optScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+        optScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        optScroll.ZIndex = 21
+        optScroll.Parent = list
+        local optLayout = Instance.new("UIListLayout")
+        optLayout.Padding = UDim.new(0, 4)
+        optLayout.Parent = optScroll
+        local optPad = Instance.new("UIPadding")
+        optPad.PaddingTop = UDim.new(0, 5)
+        optPad.PaddingLeft = UDim.new(0, 5)
+        optPad.PaddingRight = UDim.new(0, 5)
+        optPad.PaddingBottom = UDim.new(0, 5)
+        optPad.Parent = optScroll
+
+        local selected = {}
+        if multi then
+            if type(current) == "table" then
+                for _, item in ipairs(current) do selected[item] = true end
+            end
+        else
+            if type(current) == "table" then current = current[1] end
+            if current ~= nil then selected[tostring(current)] = true end
+        end
+
+        local api = { CurrentOption = current }
+        local function selectedText()
+            if multi then
+                local out = {}
+                for _, option in ipairs(options) do
+                    if selected[option] then table.insert(out, tostring(option)) end
+                end
+                if #out == 0 then return cfg.placeholder or "Nenhum" end
+                if #out == 1 then return out[1] end
+                if #out <= 3 then return table.concat(out, ", ") end
+                return tostring(#out) .. " selecionados"
+            end
+            for _, option in ipairs(options) do
+                if selected[option] then return tostring(option) end
+            end
+            return cfg.placeholder or "Nenhum"
+        end
+
+        local function syncDisplay()
+            display.Text = "  " .. selectedText()
+            for _, child in ipairs(optScroll:GetChildren()) do
+                if child:IsA("TextButton") then
+                    local on = selected[child.Name] == true
+                    child.BackgroundColor3 = on and UI_COLORS.Accent2 or UI_COLORS.Panel3
+                end
+            end
+            if multi then
+                local out = {}
+                for _, option in ipairs(options) do if selected[option] then table.insert(out, option) end end
+                api.CurrentOption = out
+            else
+                api.CurrentOption = selectedText()
+            end
+        end
+
+        for _, option in ipairs(options) do
+            local b = makeButton(optScroll, tostring(option), 28)
+            b.Name = tostring(option)
+            b.LayoutOrder = #optScroll:GetChildren()
+            b.ZIndex = 22
+            b.MouseButton1Click:Connect(function()
+                if multi then
+                    selected[option] = not selected[option]
+                else
+                    for key in pairs(selected) do selected[key] = nil end
+                    selected[option] = true
+                    list.Visible = false
+                end
+                syncDisplay()
+                local ok, err = pcall(cfg.callback or function() end, api.CurrentOption)
+                if not ok then showToast("Erro em " .. tostring(cfg.name), tostring(err), 5) end
+            end)
+        end
+
+        open.MouseButton1Click:Connect(function()
+            list.Visible = not list.Visible
+        end)
+
+        function api:Set(newValue, silent)
+            for key in pairs(selected) do selected[key] = nil end
+            if multi then
+                local values = type(newValue) == "table" and newValue or {newValue}
+                for _, item in ipairs(values) do selected[item] = true end
+            else
+                local item = type(newValue) == "table" and newValue[1] or newValue
+                if item ~= nil then selected[item] = true end
+            end
+            syncDisplay()
+            if not silent then
+                local ok, err = pcall(cfg.callback or function() end, api.CurrentOption)
+                if not ok then showToast("Erro em " .. tostring(cfg.name), tostring(err), 5) end
+            end
+        end
+        syncDisplay()
+        addFlag(Rayfield, cfg.flag, api)
+        return api
+    end
+
+    function tab:CreateSlider(cfg)
+        local min = tonumber(cfg.range and cfg.range[1]) or 0
+        local max = tonumber(cfg.range and cfg.range[2]) or 100
+        local step = tonumber(cfg.increment) or 1
+        local value = numericValue(cfg.value, min)
+        value = math.clamp(value, min, max)
+        local card = controlCard(page, 72)
+
+        local title = makeText(card, cfg.name, 13, UI_COLORS.Text, true)
+        title.Position = UDim2.new(0, 12, 0, 7)
+        title.Size = UDim2.new(1, -112, 0, 20)
+
+        local valBox = Instance.new("TextBox")
+        valBox.BackgroundColor3 = UI_COLORS.Panel3
+        valBox.TextColor3 = UI_COLORS.Text
+        valBox.Text = string.format("%s", tostring(value))
+        valBox.TextSize = 11
+        valBox.Font = Enum.Font.GothamMedium
+        valBox.Size = UDim2.fromOffset(82, 28)
+        valBox.Position = UDim2.new(1, -94, 0, 5)
+        valBox.Parent = card
+        UICorner(valBox, 8)
+        UIStroke(valBox, UI_COLORS.Stroke, 0.2)
+
+        local minus = makeButton(card, "−", 28)
+        minus.Position = UDim2.new(0, 10, 0, 37)
+        minus.Size = UDim2.fromOffset(30, 28)
+        local plus = makeButton(card, "+", 28)
+        plus.AnchorPoint = Vector2.new(1, 0)
+        plus.Position = UDim2.new(1, -10, 0, 37)
+        plus.Size = UDim2.fromOffset(30, 28)
+
+        local bar = Instance.new("Frame")
+        bar.BackgroundColor3 = UI_COLORS.Panel3
+        bar.BorderSizePixel = 0
+        bar.Position = UDim2.new(0, 48, 0, 49)
+        bar.Size = UDim2.new(1, -96, 0, 5)
+        bar.Parent = card
+        UICorner(bar, 5)
+
+        local fill = Instance.new("Frame")
+        fill.BackgroundColor3 = UI_COLORS.Accent
+        fill.BorderSizePixel = 0
+        fill.Size = UDim2.new(0, 0, 1, 0)
+        fill.Parent = bar
+        UICorner(fill, 5)
+
+        local api = { CurrentValue = value }
+        local function commit(newValue, silent)
+            newValue = math.clamp(newValue, min, max)
+            local steps = math.floor(((newValue - min) / step) + 0.5)
+            newValue = min + steps * step
+            newValue = math.clamp(newValue, min, max)
+            value = newValue
+            api.CurrentValue = value
+            valBox.Text = tostring(value)
+            local alpha = (max == min) and 0 or ((value - min) / (max - min))
+            fill.Size = UDim2.new(alpha, 0, 1, 0)
+            if not silent then
+                local ok, err = pcall(cfg.callback or function() end, value)
+                if not ok then showToast("Erro em " .. tostring(cfg.name), tostring(err), 5) end
+            end
+        end
+        function api:Set(newValue, silent)
+            commit(numericValue(newValue, min), silent)
+        end
+        minus.MouseButton1Click:Connect(function() commit(value - step, false) end)
+        plus.MouseButton1Click:Connect(function() commit(value + step, false) end)
+        valBox.FocusLost:Connect(function() commit(numericValue(valBox.Text, value), false) end)
+
+        local dragging = false
+        local function setFromInput(input)
+            local x = input.Position.X
+            local left = bar.AbsolutePosition.X
+            local width = bar.AbsoluteSize.X
+            if width <= 0 then return end
+            local alpha = math.clamp((x - left) / width, 0, 1)
+            commit(min + (max - min) * alpha, false)
+        end
+        bar.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                setFromInput(input)
+            end
+        end)
+        UserInputService.InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                setFromInput(input)
+            end
+        end)
+        UserInputService.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+        commit(value, true)
+        addFlag(Rayfield, cfg.flag, api)
+        return api
+    end
+
+    table.insert(Tabs, tab)
+    if not CurrentTab then
+        tabButton.BackgroundColor3 = UI_COLORS.Accent2
+        page.Visible = true
+        CurrentTab = tab
+    end
+    return tab
+end
+
+function Window:Notify(cfg)
+    showToast(cfg and cfg.title or "Montar um Pet", cfg and cfg.content or "", cfg and cfg.duration or 4)
+end
+
+function Window:Destroy()
+    WindowDestroyed = true
+    pcall(function() ScreenGui:Destroy() end)
+end
+
+function Window:SetVisibility(value)
+    if WindowDestroyed then return end
+    Root.Visible = value == true
+    Floating.Visible = value ~= true
+end
+
+function Window:IsVisible()
+    return Root.Visible
+end
+
+Rayfield.Destroy = function(self)
+    Window:Destroy()
+end
+
+MinBtn.MouseButton1Click:Connect(function()
+    Window:SetVisibility(false)
+end)
+CloseBtn.MouseButton1Click:Connect(function()
+    if StopHandler then
+        pcall(StopHandler)
+    end
+end)
+Floating.MouseButton1Click:Connect(function()
+    Window:SetVisibility(true)
+end)
+
+-- Cria as abas imediatamente; a UI fica disponível mesmo se uma automação
+-- posterior falhar. O restante do script usa a mesma API de elementos.
 local TabFarm = Window:CreateTab({name = "Farm"})
 local TabOvos = Window:CreateTab({name = "Ovos"})
 local TabMove = Window:CreateTab({name = "Movimento"})
 local TabVisual = Window:CreateTab({name = "Visual"})
 local TabPerf = Window:CreateTab({name = "Performance"})
 local TabConfig = Window:CreateTab({name = "Config"})
-
 --============================================================--
 -- FARM TAB
 --============================================================--
@@ -4674,7 +5325,7 @@ TabFarm:CreateToggle({
 TabFarm:CreateToggle({
     name = "Auto Mount Pet",
     flag = "AutoMountPet",
-    description = "Usa o pet com menor Weight encontrado na mochila, conforme a implementação pública pesquisada.",
+    description = "Prioriza o pet com maior Speed; usa Income como desempate.",
     value = State.AutoMountPet,
     callback = function(value)
         State.AutoMountPet = value
