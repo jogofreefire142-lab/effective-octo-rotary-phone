@@ -1,8 +1,8 @@
 --============================================================--
--- MONTAR UM PET - MASTER v10 AUTOFARM STATE MACHINE
+-- MONTAR UM PET - MASTER v11 AUTOFARM FLIGHT + NOCLIP + DEPOSIT
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 (stable)
--- Foco: Delta Mobile + baixo custo de polling + Auto Farm híbrido + cleanup robusto
+-- Foco: Delta Mobile + Auto Farm por estados + voo sem colisão + retorno/entrega robustos + cleanup robusto
 --
 -- Pesquisa usada para esta versão:
 --   * VintHub / Ride a Pet.lua
@@ -305,7 +305,7 @@ local State = {
 
     -- Auto Farm Flight
     FarmFlightSpeed = 750,
-    FarmFlightHeight = 60,
+    FarmFlightHeight = 90,
     FarmFlightDescendHeight = 3,
     FarmFlightArriveRadius = 4,
 
@@ -1353,6 +1353,63 @@ end
 
 local FarmFlightVelocity = nil
 local FarmFlightGyro = nil
+local FarmNoclipConnection = nil
+local FarmCollisionOriginal = {}
+
+local function RestoreFarmCollision()
+    for part, original in pairs(FarmCollisionOriginal) do
+        if part and part.Parent then
+            pcall(function()
+                part.CanCollide = original
+            end)
+        end
+    end
+    table.clear(FarmCollisionOriginal)
+end
+
+local function EnforceFarmNoclip()
+    local character = LocalPlayer.Character
+    if not character then
+        return
+    end
+
+    for _, obj in ipairs(character:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            if FarmCollisionOriginal[obj] == nil then
+                FarmCollisionOriginal[obj] = obj.CanCollide
+            end
+            obj.CanCollide = false
+        end
+    end
+end
+
+local function StopFarmNoclip()
+    if FarmNoclipConnection then
+        pcall(function()
+            FarmNoclipConnection:Disconnect()
+        end)
+        FarmNoclipConnection = nil
+    end
+
+    RestoreFarmCollision()
+end
+
+local function StartFarmNoclip()
+    if FarmNoclipConnection then
+        EnforceFarmNoclip()
+        return
+    end
+
+    EnforceFarmNoclip()
+
+    FarmNoclipConnection = Track(RunService.Stepped:Connect(function()
+        if not Running or not State.AutoFarm then
+            return
+        end
+
+        EnforceFarmNoclip()
+    end))
+end
 
 local function DestroyFarmFlightMovers()
     if FarmFlightVelocity then
@@ -1411,6 +1468,8 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
         return false
     end
 
+    StartFarmNoclip()
+
     if not FarmFlightVelocity or FarmFlightVelocity.Parent ~= root
         or not FarmFlightGyro or FarmFlightGyro.Parent ~= root then
 
@@ -1435,15 +1494,21 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
     local timeout = math.clamp(
         (distance / maxSpeed) * (timeoutMultiplier or 2.5) + 2,
         3,
-        30
+        35
     )
 
     local started = os.clock()
+    local lastSampleTime = started
+    local lastSamplePosition = root.Position
+    local stalledFor = 0
+    local rescueCount = 0
 
     while FarmIsRunning()
         and character.Parent
         and root.Parent
         and os.clock() - started < timeout do
+
+        EnforceFarmNoclip()
 
         local delta = targetPosition - root.Position
         local remaining = delta.Magnitude
@@ -1452,6 +1517,7 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
             pcall(function()
                 FarmFlightVelocity.Velocity = Vector3.zero
                 root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
             end)
             return true
         end
@@ -1461,9 +1527,51 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
         -- Diminui a velocidade perto do ponto final para não passar direto.
         local currentSpeed = math.clamp(
             remaining * 8,
-            45,
+            55,
             maxSpeed
         )
+
+        -- Anti-engasgo: se a física não avançar, sobe e atravessa sem
+        -- depender de colisão local. Não usa teleport.
+        local now = os.clock()
+        if now - lastSampleTime >= 0.30 then
+            local moved = (root.Position - lastSamplePosition).Magnitude
+            if moved < 1.5 and remaining > arrivedRadius + 3 then
+                stalledFor = stalledFor + (now - lastSampleTime)
+            else
+                stalledFor = 0
+            end
+
+            lastSampleTime = now
+            lastSamplePosition = root.Position
+
+            if stalledFor >= 0.30 then
+                rescueCount = rescueCount + 1
+                stalledFor = 0
+
+                pcall(function()
+                    FarmFlightVelocity.Velocity =
+                        direction * math.max(currentSpeed, 160)
+                        + Vector3.new(0, 130, 0)
+
+                    root.AssemblyLinearVelocity =
+                        direction * math.max(currentSpeed, 160)
+                        + Vector3.new(0, 130, 0)
+                end)
+
+                if rescueCount >= 3 then
+                    DestroyFarmFlightMovers()
+                    task.wait(0.05)
+                    if not FarmIsRunning() then
+                        return false
+                    end
+                    if not CreateFarmFlightMovers(root) then
+                        return false
+                    end
+                    rescueCount = 0
+                end
+            end
+        end
 
         pcall(function()
             FarmFlightVelocity.Velocity = direction * currentSpeed
@@ -1471,6 +1579,7 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
                 root.Position,
                 root.Position + direction
             )
+            root.AssemblyLinearVelocity = direction * currentSpeed
         end)
 
         RunService.Heartbeat:Wait()
@@ -1500,15 +1609,15 @@ local function FarmFlyTo(targetPosition, speed, descend)
         return false
     end
 
+    StartFarmNoclip()
+
     if not CreateFarmFlightMovers(root) then
         return false
     end
 
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
     local oldPlatformStand = nil
     local oldAutoRotate = nil
-    local oldCollision = {}
-
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
 
     if humanoid then
         oldPlatformStand = humanoid.PlatformStand
@@ -1517,18 +1626,13 @@ local function FarmFlyTo(targetPosition, speed, descend)
         humanoid.AutoRotate = false
     end
 
-    -- Durante o voo do farm, evita o personagem bater em obstáculos.
-    for _, obj in ipairs(character:GetDescendants()) do
-        if obj:IsA("BasePart") then
-            oldCollision[obj] = obj.CanCollide
-            obj.CanCollide = false
-        end
-    end
+    -- Noclip persistente durante todo o ciclo do Auto Farm.
+    EnforceFarmNoclip()
 
     local flightHeight = math.clamp(
-        tonumber(State.FarmFlightHeight) or 60,
+        tonumber(State.FarmFlightHeight) or 90,
         20,
-        200
+        300
     )
 
     local descendHeight = math.clamp(
@@ -1537,12 +1641,13 @@ local function FarmFlyTo(targetPosition, speed, descend)
         8
     )
 
+    -- Mantém o voo acima do ponto mais alto entre origem e destino.
     local cruiseY = math.max(
         root.Position.Y,
         targetPosition.Y
     ) + flightHeight
 
-    -- 1. Sobe.
+    -- 1. Sobe verticalmente.
     local upPoint = Vector3.new(
         root.Position.X,
         cruiseY,
@@ -1555,7 +1660,7 @@ local function FarmFlyTo(targetPosition, speed, descend)
         2
     )
 
-    -- 2. Voa horizontalmente em altitude.
+    -- 2. Voa rápido acima do ovo/base.
     if ok and FarmIsRunning() then
         local cruisePoint = Vector3.new(
             targetPosition.X,
@@ -1570,7 +1675,7 @@ local function FarmFlyTo(targetPosition, speed, descend)
         )
     end
 
-    -- 3. Desce somente quando está sobre o alvo.
+    -- 3. Só desce quando está exatamente na coluna do destino.
     if ok and FarmIsRunning() and descend ~= false then
         local dropPoint = Vector3.new(
             targetPosition.X,
@@ -1582,7 +1687,7 @@ local function FarmFlyTo(targetPosition, speed, descend)
             dropPoint,
             math.min(
                 speed or State.FarmFlightSpeed,
-                260
+                300
             ),
             2
         )
@@ -1590,20 +1695,16 @@ local function FarmFlyTo(targetPosition, speed, descend)
 
     DestroyFarmFlightMovers()
 
-    for part, canCollide in pairs(oldCollision) do
-        if part and part.Parent then
-            pcall(function()
-                part.CanCollide = canCollide
-            end)
-        end
-    end
-
     if humanoid and humanoid.Parent then
         pcall(function()
             humanoid.PlatformStand = oldPlatformStand
             humanoid.AutoRotate = oldAutoRotate
         end)
     end
+
+    -- Não restaura colisão aqui. O noclip continua ativo até o Auto Farm parar,
+    -- evitando que árvore/estrutura faça o personagem travar no próximo trecho.
+    EnforceFarmNoclip()
 
     return ok
 end
@@ -2135,6 +2236,111 @@ local function FailCurrentFarmTarget(message, cooldown)
 
     ClearFarmTarget()
     SetFarmPhase(message or "Changing target")
+end
+
+local function FarmDeposit()
+    if not FarmIsRunning() then
+        return false
+    end
+
+    local plot = GetMyPlot()
+    if not plot then
+        SetFarmPhase("Base não encontrada")
+        return false
+    end
+
+    local okPivot, pivot = pcall(function()
+        return plot:GetPivot()
+    end)
+
+    if not okPivot or not pivot then
+        SetFarmPhase("Posição da base indisponível")
+        return false
+    end
+
+    local basePosition = pivot.Position
+    local hoverHeight = math.clamp(
+        tonumber(State.FarmHoverHeight) or 55,
+        25,
+        150
+    )
+
+    local hoverPosition = basePosition + Vector3.new(0, hoverHeight, 0)
+    local _, root = GetCharacter()
+    if not root then
+        return false
+    end
+
+    -- Depois de pegar o ovo: sobe, volta voando até a coluna da base e desce.
+    SetFarmPhase("Subindo para voltar")
+    if (root.Position - hoverPosition).Magnitude > 18 then
+        if not FarmFlyTo(
+            hoverPosition,
+            State.FarmFlightSpeed,
+            false
+        ) then
+            return false
+        end
+    end
+
+    if not FarmIsRunning() then
+        return false
+    end
+
+    SetFarmPhase("Descendo na base")
+    local depositPoint = basePosition + Vector3.new(
+        0,
+        math.max(2, tonumber(State.FarmFlightDescendHeight) or 3),
+        0
+    )
+
+    if not FarmFlyTo(
+        depositPoint,
+        math.min(State.FarmFlightSpeed, 350),
+        true
+    ) then
+        return false
+    end
+
+    -- O jogo deposita ao chegar na área da base; confirma a cesta esvaziando.
+    local deadline = os.clock() + 3.5
+    while FarmIsRunning()
+        and os.clock() < deadline
+        and GetBasketCount() > 0 do
+        EnforceFarmNoclip()
+        task.wait(0.08)
+    end
+
+    if GetBasketCount() > 0 and FarmIsRunning() then
+        -- Uma segunda aproximação curta evita ficar parado por pequenas
+        -- diferenças entre o pivot da plot e a área real de entrega.
+        SetFarmPhase("Confirmando entrega")
+        local _, latestRoot = GetCharacter()
+        if latestRoot then
+            local retryPoint = basePosition + Vector3.new(0, 5, 0)
+            FarmFlyTo(
+                retryPoint,
+                math.min(State.FarmFlightSpeed, 300),
+                true
+            )
+        end
+
+        local retryDeadline = os.clock() + 2
+        while FarmIsRunning()
+            and os.clock() < retryDeadline
+            and GetBasketCount() > 0 do
+            EnforceFarmNoclip()
+            task.wait(0.08)
+        end
+    end
+
+    if GetBasketCount() <= 0 then
+        SetFarmPhase("Entregue - procurando próximo ovo")
+        return true
+    end
+
+    SetFarmPhase("Aguardando entrega")
+    return false
 end
 
 local function FarmOnce()
@@ -3330,7 +3536,7 @@ local okWindow, Window = pcall(function()
         configuration = {
             autoSave = true,
             autoLoad = true,
-            fileName = "MontarUmPet_Master_v10",
+            fileName = "MontarUmPet_Master_v11",
         },
     })
 end)
@@ -3395,12 +3601,14 @@ TabFarm:CreateToggle({
         State.AutoFarm = value
 
         if value then
+            StartFarmNoclip()
             ClearFarmTarget()
             State.FarmPhase = "Starting"
             LastFarmStatus = "Starting Auto Farm"
         else
             CancelGlide()
             DestroyFarmFlightMovers()
+            StopFarmNoclip()
             ClearFarmTarget()
             State.FarmPhase = "Stopped"
             FarmBusy = false
@@ -3604,22 +3812,6 @@ TabFarm:CreateSlider({
             math.floor(tonumber(value) or 55),
             25,
             150
-        )
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Raio para coletar",
-    flag = "FarmPickupRadius",
-    range = {8, 30},
-    increment = 1,
-    value = State.FarmPickupRadius,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmPickupRadius = math.clamp(
-            math.floor(tonumber(value) or 20),
-            8,
-            30
         )
     end,
 })
@@ -4111,6 +4303,7 @@ TabConfig:CreateButton({
         StopInfiniteJump()
         StopAntiAFK()
         StopFly()
+        StopFarmNoclip()
     end,
 })
 
@@ -4194,6 +4387,7 @@ StopHandler = function()
 
     pcall(StopSpeed)
     pcall(StopNoclip)
+    pcall(StopFarmNoclip)
     pcall(StopInfiniteJump)
     pcall(StopAntiAFK)
     pcall(StopFly)
