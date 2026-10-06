@@ -71,7 +71,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 for _, tokenName in ipairs(TOKEN_NAMES) do
     pcall(function()
         local oldToken = ENV[tokenName]
-        if oldToken and oldToken.Stop then
+        if oldToken and type(oldToken.Stop) == "function" then
             oldToken:Stop()
         end
     end)
@@ -128,7 +128,21 @@ pcall(function()
     ReplaceEvent:Fire()
 end)
 
-task.wait(0.10)
+-- Dá tempo para a execução anterior destruir explicitamente a janela antes
+-- de a nova execução chegar ao CreateWindow.
+task.wait(0.20)
+
+pcall(function()
+    CleanupOldRayfield(game:GetService("CoreGui"))
+end)
+pcall(function()
+    if typeof(gethui) == "function" then
+        CleanupOldRayfield(gethui())
+    end
+end)
+pcall(function()
+    CleanupOldRayfield(PlayerGui)
+end)
 
 local generation = tonumber(ControlFolder:GetAttribute("Generation")) or 0
 generation = generation + 1
@@ -231,7 +245,10 @@ local function LooksLikeOurRayfieldGui(gui)
                 or t:find("MASTER v6", 1, true)
                 or t:find("MASTER v7", 1, true)
                 or t:find("MASTER v14", 1, true)
-                or t:find("MASTER v27 • Auto Farm Seguro 2026", 1, true) then
+                or t:find("MASTER v27 • Auto Farm Seguro 2026", 1, true)
+                or t:find("MASTER v15 • Delta Mobile", 1, true)
+                or t:find("MASTER v15", 1, true)
+                or t:find("Delta Mobile", 1, true) then
                 hasHubSubtitle = true
             end
 
@@ -361,6 +378,8 @@ local State = {
     FarmHoverRadius = 18,
     FarmHoverHeight = 55,
     FarmLoopDelay = 0.10,
+    FarmCycleDelay = 1.50,
+    FarmNoTargetDelay = 1.00,
     FarmRequireMountedPet = false,
 
 
@@ -3151,6 +3170,11 @@ local function FarmOnce()
             if not target then
                 SetFarmPhase("No target - hovering")
                 HoverAbovePlot()
+                task.wait(math.clamp(
+                    tonumber(State.FarmNoTargetDelay) or 1.00,
+                    0.25,
+                    5.00
+                ))
                 return
             end
         end
@@ -4417,12 +4441,8 @@ TabFarm:CreateToggle({
             ClearFarmTarget()
             State.FarmPhase = "Starting"
             LastFarmStatus = "Starting Auto Farm"
-            task.spawn(function()
-                task.wait(0.05)
-                if Running and State.AutoFarm and not FarmBusy then
-                    FarmOnce()
-                end
-            end)
+            -- O trabalhador centralizado inicia o ciclo.
+            -- Não fazemos uma segunda chamada manual aqui para evitar corrida.
         else
             CancelGlide()
             DestroyFarmFlightMovers()
@@ -4834,6 +4854,30 @@ TabFarm:CreateSlider({
     end,
 })
 
+TabFarm:CreateSlider({
+    name = "Pausa entre ciclos",
+    flag = "FarmCycleDelay",
+    range = {0.50, 5.00},
+    increment = 0.25,
+    value = State.FarmCycleDelay,
+    suffix = " s",
+    callback = function(value)
+        State.FarmCycleDelay = math.clamp(tonumber(value) or 1.50, 0.50, 5.00)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Espera sem ovo alvo",
+    flag = "FarmNoTargetDelay",
+    range = {0.25, 5.00},
+    increment = 0.25,
+    value = State.FarmNoTargetDelay,
+    suffix = " s",
+    callback = function(value)
+        State.FarmNoTargetDelay = math.clamp(tonumber(value) or 1.00, 0.25, 5.00)
+    end,
+})
+
 TabFarm:CreateToggle({
     name = "Proteção contra atravessar o chão",
     flag = "FarmFloorGuard",
@@ -5043,9 +5087,13 @@ TabFarm:CreateButton({
     callback = function()
         State.AutoFarm = false
         State.AutoPickup = false
-        FarmBusy = false
-        PickupBusy = false
         CancelGlide()
+        DestroyFarmFlightMovers()
+        StopFarmNoclip()
+        ClearFarmTarget()
+        State.FarmPhase = "Stopped"
+        LastFarmStatus = "Auto Farm parado"
+        -- FarmBusy fica sob controle do ciclo atual até ele sair naturalmente.
     end,
 })
 
@@ -6331,16 +6379,30 @@ end)
 
 local FarmLoop = task.spawn(function()
     while Running do
-        task.wait(
-            math.clamp(
-                tonumber(State.FarmLoopDelay) or 0.10,
-                0.05,
-                0.50
-            )
-        )
+        if not State.AutoFarm then
+            task.wait(0.20)
+        elseif FarmBusy then
+            -- Um único ciclo por vez. Isso evita duas rotas brigando pelo personagem.
+            task.wait(0.10)
+        else
+            local beforePhase = State.FarmPhase
+            local ok = pcall(FarmOnce)
 
-        if Running and State.AutoFarm and not FarmBusy then
-            FarmOnce()
+            if not ok and FarmIsRunning() then
+                SetFarmPhase("Recuperando do erro")
+            end
+
+            if Running and State.AutoFarm then
+                -- Depois de uma entrega completa, deixa o jogo estabilizar antes
+                -- de selecionar o próximo ovo.
+                task.wait(math.clamp(
+                    tonumber(State.FarmCycleDelay) or 1.50,
+                    0.50,
+                    5.00
+                ))
+            else
+                task.wait(0.10)
+            end
         end
     end
 end)
