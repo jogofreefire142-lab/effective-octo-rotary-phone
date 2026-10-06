@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v25 • UI ORIGINAL v15 • DELTA STABLE
+-- MONTAR UM PET - MASTER v26 • UI ORIGINAL v15 • DELTA STABLE
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
@@ -330,6 +330,19 @@ local State = {
     FarmPickupRetryApproach = true,
     FarmBasePause = 2.50,
     FarmDepositWait = 3.50,
+    -- Rota de retorno 2026: chega acima do lado da base, desce ao lado,
+    -- faz uma pequena pausa, entra no plot e só então procura o ninho.
+    FarmBaseSideOffset = 26,
+    FarmBaseSideHeight = 6,
+    FarmBaseEntryInset = 14,
+    FarmBaseEntryHeight = 7,
+    FarmBaseSidePause = 0.60,
+    FarmBaseEntryPause = 0.80,
+    FarmBaseApproachSpeed = 140,
+    FarmBaseEntrySpeed = 110,
+    FarmNestApproachSpeed = 100,
+    FarmNestApproachHeight = 6,
+    FarmBaseConfirmTimeout = 2.50,
     FarmNestWait = 8.0,
     FarmNestPoll = 0.25,
     FarmPendingEggs = {},
@@ -2399,6 +2412,162 @@ local function HoverAbovePlot()
     )
 end
 
+local function GetBaseRoutePoints()
+    local plot = GetMyPlot()
+    if not plot then
+        return nil
+    end
+
+    local baseplate = plot:FindFirstChild("Baseplate")
+    if not baseplate or not baseplate:IsA("BasePart") then
+        return nil
+    end
+
+    local _, root = GetCharacter()
+    if not root then
+        return nil
+    end
+
+    local cf = baseplate.CFrame
+    local size = baseplate.Size
+    local halfX = math.max(4, size.X * 0.5)
+    local halfZ = math.max(4, size.Z * 0.5)
+    local topY = baseplate.Position.Y + (size.Y * 0.5)
+
+    local localRoot = cf:PointToObjectSpace(root.Position)
+    local useX = math.abs(localRoot.X) >= math.abs(localRoot.Z)
+    local sideSign
+    local sideAxisSize
+
+    if useX then
+        sideSign = localRoot.X >= 0 and 1 or -1
+        sideAxisSize = halfX
+        if math.abs(localRoot.X) < 2 then
+            sideSign = -1
+        end
+    else
+        sideSign = localRoot.Z >= 0 and 1 or -1
+        sideAxisSize = halfZ
+        if math.abs(localRoot.Z) < 2 then
+            sideSign = -1
+        end
+    end
+
+    local sideOffset = math.clamp(
+        tonumber(State.FarmBaseSideOffset) or 26,
+        8,
+        60
+    )
+
+    local sideHeight = math.clamp(
+        tonumber(State.FarmBaseSideHeight) or 6,
+        3,
+        15
+    )
+
+    local entryInset = math.clamp(
+        tonumber(State.FarmBaseEntryInset) or 14,
+        4,
+        math.max(4, sideAxisSize - 3)
+    )
+
+    local entryHeight = math.clamp(
+        tonumber(State.FarmBaseEntryHeight) or 7,
+        3,
+        15
+    )
+
+    local hoverHeight = math.clamp(
+        tonumber(State.FarmHoverHeight) or 55,
+        20,
+        150
+    )
+
+    local sideLocal
+    local entryLocal
+
+    if useX then
+        sideLocal = Vector3.new(sideSign * (halfX + sideOffset), 0, 0)
+        entryLocal = Vector3.new(sideSign * math.max(0, halfX - entryInset), 0, 0)
+    else
+        sideLocal = Vector3.new(0, 0, sideSign * (halfZ + sideOffset))
+        entryLocal = Vector3.new(0, 0, sideSign * math.max(0, halfZ - entryInset))
+    end
+
+    local sideGround = cf:PointToWorldSpace(sideLocal + Vector3.new(0, topY - cf.Position.Y + sideHeight, 0))
+    local sideAir = Vector3.new(sideGround.X, topY + hoverHeight, sideGround.Z)
+    local entryPoint = cf:PointToWorldSpace(entryLocal + Vector3.new(0, topY - cf.Position.Y + entryHeight, 0))
+
+    return {
+        Plot = plot,
+        Baseplate = baseplate,
+        SideAir = sideAir,
+        SideGround = sideGround,
+        EntryPoint = entryPoint,
+        TopY = topY,
+    }
+end
+
+local function IsInsideMyPlot(position)
+    if typeof(position) ~= "Vector3" then
+        return false
+    end
+
+    local route = GetBaseRoutePoints()
+    if not route or not route.Baseplate then
+        return false
+    end
+
+    local localPosition = route.Baseplate.CFrame:PointToObjectSpace(position)
+    local margin = 2.5
+    return math.abs(localPosition.X) <= (route.Baseplate.Size.X * 0.5) - margin
+        and math.abs(localPosition.Z) <= (route.Baseplate.Size.Z * 0.5) - margin
+end
+
+local function ConfirmPlotEntry(timeout)
+    local deadline = os.clock() + math.clamp(
+        tonumber(timeout) or State.FarmBaseConfirmTimeout or 2.5,
+        0.5,
+        5.0
+    )
+
+    while FarmIsRunning() and os.clock() < deadline do
+        local _, root = GetCharacter()
+        if root and IsInsideMyPlot(root.Position) then
+            return true
+        end
+        task.wait(0.08)
+    end
+
+    local _, root = GetCharacter()
+    return root and IsInsideMyPlot(root.Position) or false
+end
+
+local function GetNestWorldPosition(nest)
+    if not nest or not nest.Parent then
+        return nil
+    end
+
+    local ok, pivot = pcall(function()
+        return nest:GetPivot()
+    end)
+
+    if ok and pivot then
+        return pivot.Position
+    end
+
+    if nest:IsA("BasePart") then
+        return nest.Position
+    end
+
+    local part = nest:FindFirstChildWhichIsA("BasePart", true)
+    if part then
+        return part.Position
+    end
+
+    return nil
+end
+
 local function ResolveFarmTarget(uid, fallbackName)
     if not uid then
         return nil
@@ -2578,6 +2747,24 @@ function FarmUtil.PlaceEggToolsInNests(expected, beforeTools)
                     break
                 end
 
+                local nestPosition = GetNestWorldPosition(nest)
+                if not nestPosition then
+                    continue
+                end
+
+                SetFarmPhase("Indo até o ninho " .. tostring(nest.Name))
+                if not FarmFlyTo(
+                    nestPosition,
+                    math.clamp(tonumber(State.FarmNestApproachSpeed) or 100, 60, 180),
+                    true
+                ) then
+                    return false
+                end
+
+                if not FarmIsRunning() then
+                    return false
+                end
+
                 SetFarmPhase("Equipando " .. tostring(tool.Name) .. " no ninho " .. tostring(nest.Name))
 
                 if not FarmUtil.EquipEggTool(tool) then
@@ -2648,15 +2835,9 @@ local function FarmDeposit()
         return false
     end
 
-    local plot = GetMyPlot()
-    if not plot then
+    local route = GetBaseRoutePoints()
+    if not route then
         SetFarmPhase("Base não encontrada")
-        return false
-    end
-
-    local baseplate = plot:FindFirstChild("Baseplate")
-    if not baseplate or not baseplate:IsA("BasePart") then
-        SetFarmPhase("Baseplate não encontrada")
         return false
     end
 
@@ -2671,19 +2852,11 @@ local function FarmDeposit()
 
     local beforeTools = FarmUtil.SnapshotEggTools()
 
-    local basePosition = baseplate.Position
-    local hoverHeight = math.clamp(
-        tonumber(State.FarmHoverHeight) or 55,
-        25,
-        150
-    )
-    local hoverPosition = basePosition + Vector3.new(0, hoverHeight, 0)
-
-    -- Phase 1: return above the ranch.
-    SetFarmPhase("Voltando para a base")
+    -- ETAPA 1: chega acima do lado da base usando a velocidade de cruzeiro.
+    SetFarmPhase("Voltando para a base • acima do lado")
     if not FarmFlyTo(
-        hoverPosition,
-        State.FarmFlightSpeed,
+        route.SideAir,
+        math.clamp(tonumber(State.FarmFlightSpeed) or 300, 50, 350),
         false
     ) then
         return false
@@ -2693,20 +2866,11 @@ local function FarmDeposit()
         return false
     end
 
-    -- Phase 2: descend inside the plot, then pause exactly as requested.
-    local depositPoint = GetSafeDescentPosition(
-        basePosition,
-        math.max(tonumber(State.FarmFlightDescendHeight) or 6, 5)
-    )
-
-    if not depositPoint then
-        return false
-    end
-
-    SetFarmPhase("Entrando na base")
+    -- ETAPA 2: desce do lado da base, fora do plot, sem mergulhar no centro.
+    SetFarmPhase("Descendo ao lado da base")
     if not FarmFlyTo(
-        depositPoint,
-        math.min(State.FarmFlightSpeed, 180),
+        route.SideGround,
+        math.clamp(tonumber(State.FarmBaseApproachSpeed) or 140, 60, 220),
         true
     ) then
         return false
@@ -2716,18 +2880,61 @@ local function FarmDeposit()
         return false
     end
 
-    SetFarmPhase("Parando na base")
     task.wait(math.clamp(
-        tonumber(State.FarmBasePause) or 2.50,
-        1.0,
-        5.0
+        tonumber(State.FarmBaseSidePause) or 0.60,
+        0.20,
+        2.0
     ))
 
     if not FarmIsRunning() then
         return false
     end
 
-    -- Phase 3: wait for the server to move basket eggs into egg tools.
+    -- ETAPA 3: entra fisicamente no plot a partir do lado escolhido.
+    SetFarmPhase("Entrando no plot")
+    if not FarmFlyTo(
+        route.EntryPoint,
+        math.clamp(tonumber(State.FarmBaseEntrySpeed) or 110, 60, 180),
+        true
+    ) then
+        return false
+    end
+
+    if not FarmIsRunning() then
+        return false
+    end
+
+    -- Confirma que realmente cruzamos o limite do Baseplate.
+    if not ConfirmPlotEntry(State.FarmBaseConfirmTimeout) then
+        SetFarmPhase("Entrada do plot não confirmada")
+
+        -- Uma única reaproximação controlada para corrigir a entrada.
+        if not FarmFlyTo(
+            route.EntryPoint,
+            math.clamp(tonumber(State.FarmBaseEntrySpeed) or 110, 60, 180),
+            true
+        ) then
+            return false
+        end
+
+        if not ConfirmPlotEntry(1.5) then
+            SetFarmPhase("Falha ao entrar no plot")
+            return false
+        end
+    end
+
+    SetFarmPhase("Dentro do plot • confirmando")
+    task.wait(math.clamp(
+        tonumber(State.FarmBaseEntryPause) or 0.80,
+        0.20,
+        2.0
+    ))
+
+    if not FarmIsRunning() then
+        return false
+    end
+
+    -- ETAPA 4: espera a Basket ser convertida pelo jogo nos EggTools.
     SetFarmPhase("Confirmando ovo na base")
     local returned = FarmUtil.WaitForReturnedEggTools(
         expected,
@@ -2736,15 +2943,19 @@ local function FarmDeposit()
     )
 
     if not returned and GetBasketCount() > 0 then
-        -- One controlled re-approach, never a remote spam loop.
-        SetFarmPhase("Reaproximando da base")
-        if not FarmFlyTo(depositPoint, 120, true) then
-            return false
+        -- Não cria uma nova rota: somente revalida a posição interna uma vez.
+        SetFarmPhase("Reconfirmando ovo dentro da base")
+        local _, root = GetCharacter()
+        if not root or not IsInsideMyPlot(root.Position) then
+            if not FarmFlyTo(route.EntryPoint, 100, true) then
+                return false
+            end
         end
+
         task.wait(math.clamp(
-            tonumber(State.FarmBasePause) or 2.50,
-            1.0,
-            5.0
+            tonumber(State.FarmBaseEntryPause) or 0.80,
+            0.20,
+            2.0
         ))
 
         returned = FarmUtil.WaitForReturnedEggTools(
@@ -2761,7 +2972,7 @@ local function FarmDeposit()
 
     State.FarmPendingEggs = FarmUtil.CopyCountMap(expected)
 
-    -- Phase 4: actual placement. This was the missing step in the old engine.
+    -- ETAPA 5: procura um ninho livre e vai fisicamente até ele antes do Remote.
     SetFarmPhase("Procurando ninho livre")
     local placed = FarmUtil.PlaceEggToolsInNests(expected, beforeTools)
 
@@ -2770,9 +2981,9 @@ local function FarmDeposit()
         return false
     end
 
-    -- Final confirmation: basket empty and no pending eggs remain.
+    -- ETAPA 6: só libera o próximo ciclo quando a entrega estiver limpa.
     if GetBasketCount() <= 0 and next(State.FarmPendingEggs) == nil then
-        SetFarmPhase("Ovo entregue - procurando próximo")
+        SetFarmPhase("Ovo entregue • próximo alvo")
         return true
     end
 
@@ -4433,6 +4644,104 @@ TabFarm:CreateSlider({
     end,
 })
 
+TabFarm:CreateSection({name = "Rota segura 2026"})
+
+TabFarm:CreateSlider({
+    name = "Distância do lado da base",
+    flag = "FarmBaseSideOffset",
+    range = {8, 60},
+    increment = 1,
+    value = State.FarmBaseSideOffset,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmBaseSideOffset = math.clamp(math.floor(tonumber(value) or 26), 8, 60)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Altura ao cair ao lado",
+    flag = "FarmBaseSideHeight",
+    range = {3, 15},
+    increment = 1,
+    value = State.FarmBaseSideHeight,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmBaseSideHeight = math.clamp(math.floor(tonumber(value) or 6), 3, 15)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Entrada no plot",
+    flag = "FarmBaseEntryInset",
+    range = {4, 40},
+    increment = 1,
+    value = State.FarmBaseEntryInset,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmBaseEntryInset = math.clamp(math.floor(tonumber(value) or 14), 4, 40)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Velocidade para entrar",
+    flag = "FarmBaseEntrySpeed",
+    range = {60, 180},
+    increment = 5,
+    value = State.FarmBaseEntrySpeed,
+    suffix = " studs/s",
+    callback = function(value)
+        State.FarmBaseEntrySpeed = math.clamp(math.floor(tonumber(value) or 110), 60, 180)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Pausa ao lado da base",
+    flag = "FarmBaseSidePause",
+    range = {0.20, 2.0},
+    increment = 0.10,
+    value = State.FarmBaseSidePause,
+    suffix = " s",
+    callback = function(value)
+        State.FarmBaseSidePause = math.clamp(tonumber(value) or 0.60, 0.20, 2.0)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Pausa dentro do plot",
+    flag = "FarmBaseEntryPause",
+    range = {0.20, 2.0},
+    increment = 0.10,
+    value = State.FarmBaseEntryPause,
+    suffix = " s",
+    callback = function(value)
+        State.FarmBaseEntryPause = math.clamp(tonumber(value) or 0.80, 0.20, 2.0)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Velocidade até o ninho",
+    flag = "FarmNestApproachSpeed",
+    range = {60, 180},
+    increment = 5,
+    value = State.FarmNestApproachSpeed,
+    suffix = " studs/s",
+    callback = function(value)
+        State.FarmNestApproachSpeed = math.clamp(math.floor(tonumber(value) or 100), 60, 180)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Confirmação do plot",
+    flag = "FarmBaseConfirmTimeout",
+    range = {0.5, 5.0},
+    increment = 0.25,
+    value = State.FarmBaseConfirmTimeout,
+    suffix = " s",
+    callback = function(value)
+        State.FarmBaseConfirmTimeout = math.clamp(tonumber(value) or 2.50, 0.5, 5.0)
+    end,
+})
+
 TabFarm:CreateSection({name = "Controle"})
 
 TabFarm:CreateButton({
@@ -5885,7 +6194,7 @@ ENV[TOKEN_NAMES[1]] = {
 
 
 --============================================================--
--- v25 RECOVERY LAYER
+-- v26 RECOVERY LAYER
 -- Base: v22 UI ORIGINAL v15 (INTACT)
 -- Regra: nenhuma lógica opcional é executada antes da interface.
 -- Qualquer extensão futura deve ser carregada depois que a UI existir.
