@@ -1,9 +1,9 @@
 --============================================================--
--- MONTAR UM PET - MASTER v16 AUTOFARM FLIGHT + NOCLIP + STATE MACHINE + SAFE HOLD
+-- MONTAR UM PET - MASTER v15 AUTOFARM FLIGHT + NOCLIP + SAFE APPROACH + CONFIG
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 (stable)
 -- Config: salvamento manual + persistência do Rayfield
--- Foco: Delta Mobile + Auto Farm por estados + voo sem colisão + hold físico + recuperação por etapa + entrega robusta
+-- Foco: Delta Mobile + Auto Farm por estados + voo sem colisão + retorno/entrega robustos + cleanup robusto
 --
 -- Pesquisa usada para esta versão:
 --   * VintHub / Ride a Pet.lua
@@ -228,7 +228,7 @@ local function LooksLikeOurRayfieldGui(gui)
                 or t:find("MASTER v6", 1, true)
                 or t:find("MASTER v7", 1, true)
                 or t:find("MASTER v14", 1, true)
-                or t:find("MASTER v16", 1, true) then
+                or t:find("MASTER v15", 1, true) then
                 hasHubSubtitle = true
             end
 
@@ -325,14 +325,8 @@ local State = {
     FarmPickupPause = 0.45,
     FarmPickupApproachHeight = 6,
     FarmPickupRetryApproach = true,
-    FarmPickupConfirmWait = 3.00,
-    FarmBasePause = 3.00,
+    FarmBasePause = 2.50,
     FarmDepositWait = 3.50,
-    FarmSafeClearance = 7,
-    FarmTargetMaxRetries = 3,
-    FarmNoTargetPause = 0.35,
-    FarmRecoveryEnabled = true,
-    FarmRecoveryRise = 28,
 
     -- Auto Farm state machine
     FarmPhase = "Idle",
@@ -393,7 +387,6 @@ local FailedFarmTargets = {}
 local LastFarmStatus = "Idle"
 
 local FarmIsRunning
-local GetPlotHoverPosition
 
 local OriginalLighting = {
     Brightness = Lighting.Brightness,
@@ -1444,112 +1437,6 @@ local function StartFarmNoclip()
     end))
 end
 
-local FarmHoldVelocity = nil
-local FarmHoldGyro = nil
-
-local function DestroyFarmHoldMovers()
-    if FarmHoldVelocity then
-        pcall(function() FarmHoldVelocity:Destroy() end)
-        FarmHoldVelocity = nil
-    end
-    if FarmHoldGyro then
-        pcall(function() FarmHoldGyro:Destroy() end)
-        FarmHoldGyro = nil
-    end
-end
-
--- Hold físico durante as etapas que precisam de confirmação. Com noclip ativo,
--- zerar a velocidade não basta: o personagem poderia cair atravessando o solo.
-local function HoldFarmPosition(position, duration, stopWhen)
-    local character, root = GetCharacter()
-    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-    if not character or not root or not humanoid or not FarmIsRunning() then
-        return false
-    end
-
-    local holdPosition = typeof(position) == "Vector3" and position or root.Position
-    local holdRotation = root.CFrame.Rotation
-
-    DestroyFarmHoldMovers()
-    StartFarmNoclip()
-    EnforceFarmNoclip()
-
-    local oldPlatformStand = humanoid.PlatformStand
-    local oldAutoRotate = humanoid.AutoRotate
-    humanoid.PlatformStand = true
-    humanoid.AutoRotate = false
-
-    local ok = pcall(function()
-        local velocity = Instance.new("BodyVelocity")
-        velocity.Name = "MontarUmPetFarmHoldVelocity"
-        velocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-        velocity.P = 40000
-        velocity.Velocity = Vector3.zero
-        velocity.Parent = root
-
-        local gyro = Instance.new("BodyGyro")
-        gyro.Name = "MontarUmPetFarmHoldGyro"
-        gyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-        gyro.P = 60000
-        gyro.D = 1800
-        gyro.CFrame = CFrame.new(root.Position) * holdRotation
-        gyro.Parent = root
-
-        FarmHoldVelocity = velocity
-        FarmHoldGyro = gyro
-    end)
-
-    if not ok then
-        humanoid.PlatformStand = oldPlatformStand
-        humanoid.AutoRotate = oldAutoRotate
-        return false
-    end
-
-    local limit = math.clamp(tonumber(duration) or 0, 0, 8)
-    local started = os.clock()
-    while FarmIsRunning() and os.clock() - started < limit do
-        EnforceFarmNoclip()
-
-        if type(stopWhen) == "function" then
-            local shouldStop = false
-            pcall(function() shouldStop = stopWhen() == true end)
-            if shouldStop then break end
-        end
-
-        if not root.Parent then break end
-
-        local delta = holdPosition - root.Position
-        local correction = Vector3.zero
-        if delta.Magnitude > 0.35 then
-            correction = delta.Unit * math.clamp(delta.Magnitude * 12, 0, 160)
-        end
-
-        pcall(function()
-            if FarmHoldVelocity then FarmHoldVelocity.Velocity = correction end
-            if FarmHoldGyro then FarmHoldGyro.CFrame = CFrame.new(root.Position) * holdRotation end
-            root.AssemblyLinearVelocity = correction
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
-
-        RunService.Heartbeat:Wait()
-    end
-
-    DestroyFarmHoldMovers()
-    if humanoid and humanoid.Parent then
-        pcall(function()
-            humanoid.PlatformStand = oldPlatformStand
-            humanoid.AutoRotate = oldAutoRotate
-        end)
-    end
-    if root and root.Parent then
-        pcall(function()
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
-    end
-    return true
-end
-
 local function DestroyFarmFlightMovers()
     if FarmFlightVelocity then
         pcall(function()
@@ -1600,18 +1487,10 @@ local function GetSafeDescentPosition(targetPosition, extraHeight)
     local character = LocalPlayer.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
-    -- Altura mínima conservadora para não colocar o RootPart/pés dentro do solo.
-    local configuredClearance = math.max(
-        5,
-        tonumber(State.FarmSafeClearance) or 7
-    )
-
-    local bodyClearance = configuredClearance
+    -- Altura mínima conservadora para não colocar o RootPart dentro do solo.
+    local bodyClearance = 6
     if humanoid then
-        bodyClearance = math.max(
-            configuredClearance,
-            (tonumber(humanoid.HipHeight) or 2) + 3
-        )
+        bodyClearance = math.max(6, (tonumber(humanoid.HipHeight) or 2) + 3)
     end
 
     local desiredHeight = math.max(
@@ -1626,21 +1505,7 @@ local function GetSafeDescentPosition(targetPosition, extraHeight)
     pcall(function()
         local params = RaycastParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
-
-        local ignore = character and {character} or {}
-
-        -- Não deixa a própria malha do ovo ser interpretada como chão.
-        local renderedEggs = GetRenderedEggFolder()
-        if renderedEggs then
-            table.insert(ignore, renderedEggs)
-        end
-
-        local eggSpawns = workspace:FindFirstChild("EggSpawns")
-        if eggSpawns then
-            table.insert(ignore, eggSpawns)
-        end
-
-        params.FilterDescendantsInstances = ignore
+        params.FilterDescendantsInstances = character and {character} or {}
         params.IgnoreWater = false
 
         local origin = targetPosition + Vector3.new(0, 160, 0)
@@ -1751,24 +1616,18 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
             lastSampleTime = now
             lastSamplePosition = root.Position
 
-            if stalledFor >= 0.30 and State.FarmRecoveryEnabled then
+            if stalledFor >= 0.30 then
                 rescueCount = rescueCount + 1
                 stalledFor = 0
-
-                local recoveryRise = math.clamp(
-                    tonumber(State.FarmRecoveryRise) or 28,
-                    10,
-                    60
-                )
 
                 pcall(function()
                     FarmFlightVelocity.Velocity =
                         direction * math.max(currentSpeed, 120)
-                        + Vector3.new(0, recoveryRise, 0)
+                        + Vector3.new(0, 90, 0)
 
                     root.AssemblyLinearVelocity =
                         direction * math.max(currentSpeed, 120)
-                        + Vector3.new(0, recoveryRise, 0)
+                        + Vector3.new(0, 90, 0)
                 end)
 
                 if rescueCount >= 3 then
@@ -1914,16 +1773,10 @@ local function FarmFlyTo(targetPosition, speed, descend)
 
     DestroyFarmFlightMovers()
 
-    -- Hold real de estabilização: impede queda/atravessamento durante a
-    -- pequena pausa que antecede a coleta ou a entrega.
+    -- Pequena estabilização após pousar na coluna do alvo/base para dar
+    -- tempo ao jogo de registrar a posição e processar a interação.
     if ok and descend ~= false and FarmIsRunning() then
-        local _, holdRoot = GetCharacter()
-        if holdRoot then
-            HoldFarmPosition(
-                holdRoot.Position,
-                math.clamp(tonumber(State.FarmArrivalPause) or 0.35, 0.10, 1.00)
-            )
-        end
+        task.wait(math.clamp(tonumber(State.FarmArrivalPause) or 0.35, 0.10, 0.80))
     end
 
     if humanoid and humanoid.Parent then
@@ -2046,28 +1899,22 @@ local function GetLiveActiveEgg(uid)
 end
 
 local function ConfirmFarmPickup(candidate, beforeBasket, timeout)
-    local confirmTime = math.clamp(
-        tonumber(timeout) or State.FarmPickupConfirmWait or 3.0,
-        1.0,
-        5.0
-    )
+    local deadline = os.clock() + (timeout or 2)
 
-    local confirmed = false
-    local _, root = GetCharacter()
-
-    HoldFarmPosition(
-        root and root.Position or nil,
-        confirmTime,
-        function()
-            if GetBasketCount() > beforeBasket then
-                confirmed = true
-                return true
-            end
-            return false
+    while FarmIsRunning() and os.clock() < deadline do
+        if GetBasketCount() > beforeBasket then
+            return true
         end
-    )
 
-    return confirmed
+        if candidate and candidate.UID
+            and not GetLiveActiveEgg(candidate.UID) then
+            return true
+        end
+
+        task.wait(0.05)
+    end
+
+    return false
 end
 
 local function TryRemotePickup(candidate)
@@ -2092,10 +1939,17 @@ local function TryRemotePickup(candidate)
         return false
     end
 
-    return ConfirmFarmPickup(candidate, beforeBasket, State.FarmPickupConfirmWait)
+    return ConfirmFarmPickup(candidate, beforeBasket, 2)
 end
 
+local function FindPromptOnEgg(candidate)
+    local model = candidate and candidate.Rendered
+    if not model or not model.Parent then
+        return nil
+    end
 
+    return model:FindFirstChildWhichIsA("ProximityPrompt", true)
+end
 
 local function TryPromptPickup(candidate)
     if type(fireproximityprompt) ~= "function" then
@@ -2117,7 +1971,7 @@ local function TryPromptPickup(candidate)
         return false
     end
 
-    return ConfirmFarmPickup(candidate, beforeBasket, State.FarmPickupConfirmWait)
+    return ConfirmFarmPickup(candidate, beforeBasket, 2)
 end
 
 local function AttemptPickup(candidate)
@@ -2320,7 +2174,7 @@ local function ReturnToPlotForFarm()
     )
 end
 
-GetPlotHoverPosition = function()
+local function GetPlotHoverPosition()
     local plot = GetMyPlot()
     if not plot then
         return nil
@@ -2558,29 +2412,33 @@ local function FarmDeposit()
         return false
     end
 
-    -- CHECKPOINT 4: hold físico na base enquanto o servidor registra a entrega.
-    SetFarmPhase("Estabilizando e entregando na base")
+    -- CHECKPOINT 4: parada intencional. Dá tempo para o servidor registrar
+    -- a entrega antes de iniciar o próximo alvo.
+    SetFarmPhase("Estabilizando na base")
 
-    local _, depositRoot = GetCharacter()
-    local depositPosition = depositRoot and depositRoot.Position or depositPoint
-
-    HoldFarmPosition(
-        depositPosition,
-        math.clamp(tonumber(State.FarmDepositWait) or 3.5, 1.5, 6),
-        function()
-            return GetBasketCount() <= 0
-        end
+    local settleDeadline = os.clock() + math.clamp(
+        tonumber(State.FarmDepositWait) or 3.5,
+        1.5,
+        6
     )
+
+    while FarmIsRunning()
+        and os.clock() < settleDeadline
+        and GetBasketCount() > 0 do
+        EnforceFarmNoclip()
+        task.wait(0.08)
+    end
 
     if not FarmIsRunning() then
         return false
     end
 
-    SetFarmPhase("Pausa na base")
-    HoldFarmPosition(
-        depositPosition,
-        math.clamp(tonumber(State.FarmBasePause) or 3.0, 1.0, 6.0)
-    )
+    -- Mesmo que a cesta já esteja vazia, mantém a parada configurada.
+    task.wait(math.clamp(
+        tonumber(State.FarmBasePause) or 2.50,
+        1.0,
+        5.0
+    ))
 
     if not FarmIsRunning() then
         return false
@@ -2604,21 +2462,14 @@ local function FarmDeposit()
             return false
         end
 
-        HoldFarmPosition(
-            retryPoint,
-            math.clamp(tonumber(State.FarmBasePause) or 3.0, 1.0, 6.0),
-            function()
-                return GetBasketCount() <= 0
-            end
-        )
+        task.wait(math.clamp(
+            tonumber(State.FarmBasePause) or 2.50,
+            1.0,
+            5.0
+        ))
     end
 
     if GetBasketCount() <= 0 then
-        SetFarmPhase("Entregue - subindo da base")
-        local plotHover = GetPlotHoverPosition()
-        if plotHover and not FarmFlyTo(plotHover, State.FarmFlightSpeed, false) then
-            return false
-        end
         SetFarmPhase("Entregue - procurando próximo ovo")
         return true
     end
@@ -2683,13 +2534,6 @@ local function FarmOnce()
             if not target then
                 SetFarmPhase("No target - hovering")
                 HoverAbovePlot()
-                local _, holdRoot = GetCharacter()
-                if holdRoot then
-                    HoldFarmPosition(
-                        holdRoot.Position,
-                        math.clamp(tonumber(State.FarmNoTargetPause) or 0.35, 0.10, 1.00)
-                    )
-                end
                 return
             end
         end
@@ -2802,16 +2646,8 @@ local function FarmOnce()
             end
         end
 
-        SetFarmPhase("Stabilizing for pickup: " .. tostring(target.Name))
-        local _, pickupRoot = GetCharacter()
-        if pickupRoot then
-            HoldFarmPosition(
-                pickupRoot.Position,
-                math.clamp(tonumber(State.FarmPickupPause) or 0.45, 0.20, 1.20)
-            )
-        end
-
         SetFarmPhase("Collecting " .. tostring(target.Name))
+        task.wait(math.clamp(tonumber(State.FarmPickupPause) or 0.45, 0.20, 1.00))
 
         -- Revalida o alvo imediatamente antes do remote.
         local liveBeforePickup = GetCurrentFarmTarget()
@@ -2851,7 +2687,7 @@ local function FarmOnce()
             State.FarmTargetRetries =
                 State.FarmTargetRetries + 1
 
-            if State.FarmTargetRetries >= math.clamp(math.floor(tonumber(State.FarmTargetMaxRetries) or 3), 1, 8) then
+            if State.FarmTargetRetries >= 3 then
                 FailCurrentFarmTarget(
                     "Pickup failed - changing target",
                     6
@@ -3889,7 +3725,7 @@ end
 local okWindow, Window = pcall(function()
     return Rayfield:CreateWindow({
         name = "Montar um Pet",
-        subtitle = "MASTER v16 • Delta Mobile",
+        subtitle = "MASTER v15 • Delta Mobile",
         sidebarLayout = true,
         toggleUIKeybind = "K",
         configuration = {
@@ -3952,7 +3788,7 @@ local TabConfig = Window:CreateTab({name = "Config"})
 
 TabFarm:CreateSection({name = "Automação principal"})
 
-TabFarm:CreateLabel("Ciclo: validar base → selecionar/confirmar alvo → subir → cruzar obstáculos → alinhar → descer com margem segura → estabilizar → coletar e confirmar → subir → voltar à base → estabilizar → entregar → pausar → subir → repetir.")
+TabFarm:CreateLabel("Ciclo: subir → voar → descer com segurança → coletar → subir → base → pausar → entregar → repetir.")
 
 TabFarm:CreateToggle({
     name = "Auto Farm",
@@ -4282,51 +4118,6 @@ TabFarm:CreateSlider({
     suffix = " s",
     callback = function(value)
         State.FarmDepositWait = math.clamp(tonumber(value) or 3.50, 1.5, 6.0)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Confirmação da coleta",
-    flag = "FarmPickupConfirmWait",
-    range = {1.0, 5.0},
-    increment = 0.25,
-    value = State.FarmPickupConfirmWait,
-    suffix = " s",
-    callback = function(value)
-        State.FarmPickupConfirmWait = math.clamp(tonumber(value) or 3.0, 1.0, 5.0)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Tentativas por ovo",
-    flag = "FarmTargetMaxRetries",
-    range = {1, 8},
-    increment = 1,
-    value = State.FarmTargetMaxRetries,
-    suffix = "x",
-    callback = function(value)
-        State.FarmTargetMaxRetries = math.clamp(math.floor(tonumber(value) or 3), 1, 8)
-    end,
-})
-
-TabFarm:CreateSlider({
-    name = "Margem segura do chão",
-    flag = "FarmSafeClearance",
-    range = {5, 12},
-    increment = 1,
-    value = State.FarmSafeClearance,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmSafeClearance = math.clamp(math.floor(tonumber(value) or 7), 5, 12)
-    end,
-})
-
-TabFarm:CreateToggle({
-    name = "Recuperação anti-travamento",
-    flag = "FarmRecoveryEnabled",
-    value = State.FarmRecoveryEnabled,
-    callback = function(value)
-        State.FarmRecoveryEnabled = value
     end,
 })
 
@@ -4717,7 +4508,7 @@ TabPerf:CreateButton({
 TabConfig:CreateSection({name = "Configuração"})
 
 local CONFIG_FOLDER = "MontarUmPet"
-local CONFIG_FILE = "MontarUmPet_MASTER_config.json"
+local CONFIG_FILE = "MontarUmPet_MASTER_v15_config.json"
 
 local function CanUseConfigFiles()
     return type(writefile) == "function"
@@ -4751,7 +4542,7 @@ local function SaveConfigNow()
     if CanUseConfigFiles() then
         EnsureConfigFolder()
 
-        local data = { __version = 16 }
+        local data = { __version = 15 }
         pcall(function()
             for flagName, flag in pairs(Rayfield.Flags or {}) do
                 if type(flag) == "table" then
@@ -4929,7 +4720,6 @@ TabConfig:CreateButton({
         StopAntiAFK()
         StopFly()
         StopFarmNoclip()
-        DestroyFarmHoldMovers()
     end,
 })
 
@@ -4993,7 +4783,6 @@ StopHandler = function()
 
     CancelGlide()
     DestroyFarmFlightMovers()
-    DestroyFarmHoldMovers()
     ClearFarmTarget()
     Running = false
 
