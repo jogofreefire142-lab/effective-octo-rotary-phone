@@ -1,9 +1,9 @@
 --============================================================--
--- MONTAR UM PET - MASTER v26 • UI ORIGINAL v15 • DELTA STABLE
+-- MONTAR UM PET - MASTER v27 • UI ORIGINAL v15 • DELTA STABLE
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
--- Foco: Delta Mobile + Auto Farm 2026 verificado + automações avançadas + UI v15 estável
+-- Foco: Delta Mobile + Auto Farm Seguro 2026 + automações verificadas + UI v15 estável
 --
 -- Pesquisa cruzada: Bac0nHck, SixZensED, VintHub e Iamdungx.
 -- Nesta versão, a UI v15 fica congelada; toda a camada 2026 nova é criada
@@ -231,7 +231,7 @@ local function LooksLikeOurRayfieldGui(gui)
                 or t:find("MASTER v6", 1, true)
                 or t:find("MASTER v7", 1, true)
                 or t:find("MASTER v14", 1, true)
-                or t:find("MASTER v24 • Auto Farm 2026", 1, true) then
+                or t:find("MASTER v27 • Auto Farm Seguro 2026", 1, true) then
                 hasHubSubtitle = true
             end
 
@@ -311,10 +311,7 @@ local State = {
     -- Auto Farm engine
     FarmMoveMode = "Instant",      -- Instant or Tween
     FarmPickupMode = "Remote",     -- Auto, Prompt, Remote
-    FarmPickupRetries = 6,
-    FarmPickupWait = 0.25,
     FarmPickupRadius = 12,
-    FarmRetryDelay = 0.30,
     FarmReturnInstant = true,
 
     -- Auto Farm Flight
@@ -323,7 +320,6 @@ local State = {
     -- Mantém o HumanoidRootPart alguns studs acima do ovo/solo.
     -- Isso evita que os pés atravessem o chão quando o noclip está ativo.
     FarmFlightDescendHeight = 6,
-    FarmFlightArriveRadius = 4,
     FarmArrivalPause = 0.45,
     FarmPickupPause = 0.45,
     FarmPickupApproachHeight = 6,
@@ -335,16 +331,25 @@ local State = {
     FarmBaseSideOffset = 26,
     FarmBaseSideHeight = 6,
     FarmBaseEntryInset = 14,
-    FarmBaseEntryHeight = 7,
     FarmBaseSidePause = 0.60,
     FarmBaseEntryPause = 0.80,
-    FarmBaseApproachSpeed = 140,
     FarmBaseEntrySpeed = 110,
     FarmNestApproachSpeed = 100,
-    FarmNestApproachHeight = 6,
     FarmBaseConfirmTimeout = 2.50,
     FarmNestWait = 8.0,
+    -- Controles internos expostos na UI.
+    FarmPickupRetries = 6,
+    FarmPickupWait = 0.25,
+    FarmRetryDelay = 0.30,
+    FarmFlightArriveRadius = 4,
+    FarmBaseEntryHeight = 7,
+    FarmBaseApproachSpeed = 140,
+    FarmNestApproachHeight = 6,
     FarmNestPoll = 0.25,
+    -- Proteção adicional contra atravessar o chão.
+    FarmFloorGuard = true,
+    FarmFloorClearance = 6,
+    FarmMaxDescendSpeed = 70,
     FarmPendingEggs = {},
 
     -- Auto Farm state machine
@@ -357,6 +362,7 @@ local State = {
     FarmHoverHeight = 55,
     FarmLoopDelay = 0.10,
     FarmRequireMountedPet = false,
+
 
     -- Automacoes 2026 verificadas (desligadas por padrao).
     AutoPlaceEggs = false,
@@ -1667,7 +1673,7 @@ local function GetSafeDescentPosition(targetPosition, extraHeight)
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
     -- Altura mínima conservadora para não colocar o RootPart dentro do solo.
-    local bodyClearance = 6
+    local bodyClearance = math.max(3, tonumber(State.FarmFloorClearance) or 6)
     if humanoid then
         bodyClearance = math.max(6, (tonumber(humanoid.HipHeight) or 2) + 3)
     end
@@ -1703,7 +1709,68 @@ local function GetSafeDescentPosition(targetPosition, extraHeight)
     )
 end
 
-local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
+local function GetFarmFloorY(position, rayLength)
+    if typeof(position) ~= "Vector3" then
+        return nil
+    end
+
+    local character = LocalPlayer.Character
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = character and {character} or {}
+    params.IgnoreWater = false
+
+    local origin = position + Vector3.new(0, 18, 0)
+    local direction = Vector3.new(0, -(rayLength or 140), 0)
+    local ok, hit = pcall(function()
+        return workspace:Raycast(origin, direction, params)
+    end)
+
+    if ok and hit and hit.Position then
+        return hit.Position.Y
+    end
+
+    return nil
+end
+
+local function EnforceFarmFloorSafety(root)
+    if not State.FarmFloorGuard or not root or not root.Parent then
+        return
+    end
+
+    local floorY = GetFarmFloorY(root.Position, 140)
+    if not floorY then
+        return
+    end
+
+    local clearance = math.max(3, tonumber(State.FarmFloorClearance) or 6)
+    local minimumY = floorY + clearance
+    local velocity = root.AssemblyLinearVelocity
+    local safeVertical = velocity.Y
+
+    -- Nunca deixa a queda passar do limite configurado.
+    if safeVertical < -math.abs(tonumber(State.FarmMaxDescendSpeed) or 70) then
+        safeVertical = -math.abs(tonumber(State.FarmMaxDescendSpeed) or 70)
+    end
+
+    -- Se já estiver muito próximo do chão, corta a componente descendente
+    -- e aplica uma pequena correção ascendente via física. Não teleporta.
+    if root.Position.Y <= minimumY + 1.5 then
+        safeVertical = math.max(safeVertical, 12)
+    end
+
+    if safeVertical ~= velocity.Y then
+        pcall(function()
+            root.AssemblyLinearVelocity = Vector3.new(velocity.X, safeVertical, velocity.Z)
+            if FarmFlightVelocity then
+                local current = FarmFlightVelocity.Velocity
+                FarmFlightVelocity.Velocity = Vector3.new(current.X, safeVertical, current.Z)
+            end
+        end)
+    end
+end
+
+local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier, allowNoclip)
     local character, root = GetCharacter()
 
     if not character or not root then
@@ -1718,7 +1785,12 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
         return false
     end
 
-    StartFarmNoclip()
+    local useNoclip = allowNoclip ~= false or not State.FarmFloorGuard
+    if useNoclip then
+        StartFarmNoclip()
+    else
+        StopFarmNoclip()
+    end
 
     if not FarmFlightVelocity or FarmFlightVelocity.Parent ~= root
         or not FarmFlightGyro or FarmFlightGyro.Parent ~= root then
@@ -1758,7 +1830,10 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
         and root.Parent
         and os.clock() - started < timeout do
 
-        EnforceFarmNoclip()
+        if useNoclip then
+            EnforceFarmNoclip()
+        end
+        EnforceFarmFloorSafety(root)
 
         local delta = targetPosition - root.Position
         local remaining = delta.Magnitude
@@ -1800,13 +1875,17 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
                 stalledFor = 0
 
                 pcall(function()
-                    FarmFlightVelocity.Velocity =
-                        direction * math.max(currentSpeed, 120)
+                    local rescueVelocity = direction * math.max(currentSpeed, 120)
                         + Vector3.new(0, 90, 0)
-
-                    root.AssemblyLinearVelocity =
-                        direction * math.max(currentSpeed, 120)
-                        + Vector3.new(0, 90, 0)
+                    if State.FarmFloorGuard then
+                        rescueVelocity = Vector3.new(
+                            rescueVelocity.X,
+                            math.max(rescueVelocity.Y, 40),
+                            rescueVelocity.Z
+                        )
+                    end
+                    FarmFlightVelocity.Velocity = rescueVelocity
+                    root.AssemblyLinearVelocity = rescueVelocity
                 end)
 
                 if rescueCount >= 3 then
@@ -1824,12 +1903,20 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
         end
 
         pcall(function()
-            FarmFlightVelocity.Velocity = direction * currentSpeed
+            local velocityVector = direction * currentSpeed
+            if State.FarmFloorGuard then
+                velocityVector = Vector3.new(
+                    velocityVector.X,
+                    math.max(velocityVector.Y, -math.abs(tonumber(State.FarmMaxDescendSpeed) or 70)),
+                    velocityVector.Z
+                )
+            end
+            FarmFlightVelocity.Velocity = velocityVector
             FarmFlightGyro.CFrame = CFrame.lookAt(
                 root.Position,
                 root.Position + direction
             )
-            root.AssemblyLinearVelocity = direction * currentSpeed
+            root.AssemblyLinearVelocity = FarmFlightVelocity and FarmFlightVelocity.Velocity or velocityVector
         end)
 
         RunService.Heartbeat:Wait()
@@ -1945,7 +2032,8 @@ local function FarmFlyTo(targetPosition, speed, descend)
                     speed or State.FarmFlightSpeed,
                     180
                 ),
-                2.5
+                2.5,
+                not State.FarmFloorGuard
             )
         end
     end
@@ -1965,9 +2053,13 @@ local function FarmFlyTo(targetPosition, speed, descend)
         end)
     end
 
-    -- Não restaura colisão aqui. O noclip continua ativo até o Auto Farm parar,
-    -- evitando que árvore/estrutura faça o personagem travar no próximo trecho.
-    EnforceFarmNoclip()
+    -- Em uma descida protegida, deixamos a colisão restaurada para o personagem
+    -- ficar preso ao chão/plot somente de forma física, sem atravessar a base.
+    if State.FarmFloorGuard and descend ~= false then
+        StopFarmNoclip()
+    else
+        EnforceFarmNoclip()
+    end
 
     return ok
 end
@@ -2751,10 +2843,22 @@ function FarmUtil.PlaceEggToolsInNests(expected, beforeTools)
                 if not nestPosition then
                     continue
                 end
+                local safeNestPosition = GetSafeDescentPosition(
+                    nestPosition,
+                    math.max(3, tonumber(State.FarmNestApproachHeight) or 6)
+                )
+                if safeNestPosition then
+                    nestPosition = safeNestPosition
+                end
 
                 SetFarmPhase("Indo até o ninho " .. tostring(nest.Name))
+                local nestTarget = Vector3.new(
+                    nestPosition.X,
+                    nestPosition.Y,
+                    nestPosition.Z
+                )
                 if not FarmFlyTo(
-                    nestPosition,
+                    nestTarget,
                     math.clamp(tonumber(State.FarmNestApproachSpeed) or 100, 60, 180),
                     true
                 ) then
@@ -4608,6 +4712,165 @@ TabFarm:CreateToggle({
     end,
 })
 
+TabFarm:CreateSection({name = "Motor avançado e segurança"})
+
+TabFarm:CreateSlider({
+    name = "Tentativas de coleta",
+    flag = "FarmPickupRetries",
+    range = {1, 10},
+    increment = 1,
+    value = State.FarmPickupRetries,
+    suffix = " tentativas",
+    callback = function(value)
+        State.FarmPickupRetries = math.clamp(math.floor(tonumber(value) or 6), 1, 10)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Espera após tentativa",
+    flag = "FarmPickupWait",
+    range = {0.10, 0.80},
+    increment = 0.05,
+    value = State.FarmPickupWait,
+    suffix = " s",
+    callback = function(value)
+        State.FarmPickupWait = math.clamp(tonumber(value) or 0.25, 0.10, 0.80)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Atraso entre retries",
+    flag = "FarmRetryDelay",
+    range = {0.10, 1.00},
+    increment = 0.05,
+    value = State.FarmRetryDelay,
+    suffix = " s",
+    callback = function(value)
+        State.FarmRetryDelay = math.clamp(tonumber(value) or 0.30, 0.10, 1.00)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Raio de chegada",
+    flag = "FarmFlightArriveRadius",
+    range = {2, 10},
+    increment = 1,
+    value = State.FarmFlightArriveRadius,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmFlightArriveRadius = math.clamp(math.floor(tonumber(value) or 4), 2, 10)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Altura de entrada no plot",
+    flag = "FarmBaseEntryHeight",
+    range = {3, 15},
+    increment = 1,
+    value = State.FarmBaseEntryHeight,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmBaseEntryHeight = math.clamp(math.floor(tonumber(value) or 7), 3, 15)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Velocidade de aproximação da base",
+    flag = "FarmBaseApproachSpeed",
+    range = {60, 220},
+    increment = 5,
+    value = State.FarmBaseApproachSpeed,
+    suffix = " studs/s",
+    callback = function(value)
+        State.FarmBaseApproachSpeed = math.clamp(math.floor(tonumber(value) or 140), 60, 220)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Altura de aproximação do ninho",
+    flag = "FarmNestApproachHeight",
+    range = {3, 12},
+    increment = 1,
+    value = State.FarmNestApproachHeight,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmNestApproachHeight = math.clamp(math.floor(tonumber(value) or 6), 3, 12)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Intervalo de procura do ninho",
+    flag = "FarmNestPoll",
+    range = {0.10, 0.75},
+    increment = 0.05,
+    value = State.FarmNestPoll,
+    suffix = " s",
+    callback = function(value)
+        State.FarmNestPoll = math.clamp(tonumber(value) or 0.25, 0.10, 0.75)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Raio para considerar na base",
+    flag = "FarmHoverRadius",
+    range = {8, 40},
+    increment = 1,
+    value = State.FarmHoverRadius,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmHoverRadius = math.clamp(math.floor(tonumber(value) or 18), 8, 40)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Intervalo do motor",
+    flag = "FarmLoopDelay",
+    range = {0.05, 0.50},
+    increment = 0.05,
+    value = State.FarmLoopDelay,
+    suffix = " s",
+    callback = function(value)
+        State.FarmLoopDelay = math.clamp(tonumber(value) or 0.10, 0.05, 0.50)
+    end,
+})
+
+TabFarm:CreateToggle({
+    name = "Proteção contra atravessar o chão",
+    flag = "FarmFloorGuard",
+    description = "Mantém folga do piso, limita a descida e restaura colisão na aproximação final.",
+    value = State.FarmFloorGuard,
+    callback = function(value)
+        State.FarmFloorGuard = value
+        if not value and State.AutoFarm then
+            StartFarmNoclip()
+        end
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Folga mínima do chão",
+    flag = "FarmFloorClearance",
+    range = {3, 12},
+    increment = 1,
+    value = State.FarmFloorClearance,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmFloorClearance = math.clamp(math.floor(tonumber(value) or 6), 3, 12)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Velocidade máxima de descida",
+    flag = "FarmMaxDescendSpeed",
+    range = {30, 120},
+    increment = 5,
+    value = State.FarmMaxDescendSpeed,
+    suffix = " studs/s",
+    callback = function(value)
+        State.FarmMaxDescendSpeed = math.clamp(math.floor(tonumber(value) or 70), 30, 120)
+    end,
+})
+
 TabFarm:CreateSlider({
     name = "Pausa na base",
     flag = "FarmBasePause",
@@ -6194,7 +6457,7 @@ ENV[TOKEN_NAMES[1]] = {
 
 
 --============================================================--
--- v26 RECOVERY LAYER
+-- v27 SAFE AUTOFARM LAYER
 -- Base: v22 UI ORIGINAL v15 (INTACT)
 -- Regra: nenhuma lógica opcional é executada antes da interface.
 -- Qualquer extensão futura deve ser carregada depois que a UI existir.
