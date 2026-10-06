@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v29.1 • UI ORIGINAL v15 • DELTA STABLE
+-- MONTAR UM PET - MASTER v30 • UI ORIGINAL v15 • DELTA STABLE
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
@@ -1811,14 +1811,6 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier, allow
         StopFarmNoclip()
     end
 
-    if not FarmFlightVelocity or FarmFlightVelocity.Parent ~= root
-        or not FarmFlightGyro or FarmFlightGyro.Parent ~= root then
-
-        if not CreateFarmFlightMovers(root) then
-            return false
-        end
-    end
-
     local maxSpeed = math.clamp(
         tonumber(speed) or State.FarmFlightSpeed,
         50,
@@ -1826,24 +1818,36 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier, allow
     )
 
     local arrivedRadius = math.clamp(
-        tonumber(State.FarmFlightArriveRadius) or 4,
-        2,
-        10
+        tonumber(State.FarmFlightArriveRadius) or 3,
+        1.5,
+        8
     )
 
     local distance = (targetPosition - root.Position).Magnitude
     local timeout = math.clamp(
-        (distance / maxSpeed) * (timeoutMultiplier or 2.5) + 2,
+        (distance / math.max(maxSpeed, 1)) * (timeoutMultiplier or 2.5) + 2,
         3,
-        35
+        45
     )
 
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local oldPlatformStand = humanoid and humanoid.PlatformStand or nil
+    local oldAutoRotate = humanoid and humanoid.AutoRotate or nil
+
+    if humanoid then
+        humanoid.PlatformStand = true
+        humanoid.AutoRotate = false
+    end
+
     local started = os.clock()
-    local lastSampleTime = started
     local lastSamplePosition = root.Position
+    local lastSampleTime = started
     local stalledFor = 0
     local rescueCount = 0
 
+    -- VintHub-style glide: move in small frame-sized steps instead of doing
+    -- a single teleport. During active flight collision is disabled, and the
+    -- caller restores collision only after the flight has actually stopped.
     while FarmIsRunning()
         and character.Parent
         and root.Parent
@@ -1854,33 +1858,65 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier, allow
         end
         EnforceFarmFloorSafety(root)
 
-        local delta = targetPosition - root.Position
+        local currentPos = root.Position
+        local delta = targetPosition - currentPos
         local remaining = delta.Magnitude
 
         if remaining <= arrivedRadius then
             pcall(function()
-                FarmFlightVelocity.Velocity = Vector3.zero
+                root.CFrame = CFrame.new(targetPosition, targetPosition + root.CFrame.LookVector)
                 root.AssemblyLinearVelocity = Vector3.zero
                 root.AssemblyAngularVelocity = Vector3.zero
             end)
-            return true
+            break
         end
 
         local direction = delta.Unit
 
-        -- Diminui a velocidade perto do ponto final para não passar direto.
+        -- Desacelera perto do alvo para evitar passar do ponto.
         local currentSpeed = math.clamp(
-            remaining * 5,
-            40,
+            math.min(maxSpeed, math.max(55, remaining * 6)),
+            55,
             maxSpeed
         )
 
-        -- Anti-engasgo: se a física não avançar, sobe e atravessa sem
-        -- depender de colisão local. Não usa teleport.
+        local dt = RunService.Heartbeat:Wait()
+        if type(dt) ~= "number" or dt <= 0 then
+            dt = 1 / 60
+        end
+
+        local step = math.min(remaining, currentSpeed * math.min(dt, 0.05))
+        local newPos = currentPos + direction * step
+
+        -- Floor guard: nunca permite que a etapa de voo passe abaixo da altura
+        -- mínima calculada pelo Raycast. Isso evita a “queda reta para dentro
+        -- da terra” mesmo enquanto o noclip está ativo.
+        if State.FarmFloorGuard then
+            local floorY = GetFarmFloorY(newPos, 160)
+            if floorY then
+                local clearance = math.max(3, tonumber(State.FarmFloorClearance) or 6)
+                local minimumY = floorY + clearance
+                if newPos.Y < minimumY then
+                    newPos = Vector3.new(newPos.X, minimumY, newPos.Z)
+                end
+            end
+        end
+
+        pcall(function()
+            root.CFrame = CFrame.lookAt(
+                newPos,
+                newPos + direction
+            )
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+
+        -- Anti-stall simples. Se a posição praticamente não mudar, cria uma
+        -- pequena correção para manter o glide avançando; não usa teleport.
         local now = os.clock()
         if now - lastSampleTime >= 0.30 then
             local moved = (root.Position - lastSamplePosition).Magnitude
-            if moved < 1.5 and remaining > arrivedRadius + 3 then
+            if moved < 1.0 and remaining > arrivedRadius + 2 then
                 stalledFor = stalledFor + (now - lastSampleTime)
             else
                 stalledFor = 0
@@ -1889,93 +1925,55 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier, allow
             lastSampleTime = now
             lastSamplePosition = root.Position
 
-            if stalledFor >= 0.30 then
+            if stalledFor >= 0.45 then
                 rescueCount = rescueCount + 1
                 stalledFor = 0
 
-                pcall(function()
-                    local rescueVelocity = direction * math.max(currentSpeed, 120)
-                        + Vector3.new(0, 90, 0)
-                    if State.FarmFloorGuard then
-                        rescueVelocity = Vector3.new(
-                            rescueVelocity.X,
-                            math.max(rescueVelocity.Y, 40),
-                            rescueVelocity.Z
+                local rescueStep = math.min(remaining, math.max(120, currentSpeed) * 0.08)
+                local rescuePos = root.Position + direction * rescueStep
+
+                if State.FarmFloorGuard then
+                    local floorY = GetFarmFloorY(rescuePos, 160)
+                    if floorY then
+                        local clearance = math.max(3, tonumber(State.FarmFloorClearance) or 6)
+                        rescuePos = Vector3.new(
+                            rescuePos.X,
+                            math.max(rescuePos.Y, floorY + clearance),
+                            rescuePos.Z
                         )
                     end
-                    FarmFlightVelocity.Velocity = rescueVelocity
-                    root.AssemblyLinearVelocity = rescueVelocity
+                end
+
+                pcall(function()
+                    root.CFrame = CFrame.lookAt(rescuePos, rescuePos + direction)
                 end)
 
-                if rescueCount >= 3 then
-                    DestroyFarmFlightMovers()
-                    task.wait(0.05)
-                    if not FarmIsRunning() then
-                        return false
-                    end
-                    if not CreateFarmFlightMovers(root) then
-                        return false
-                    end
-                    rescueCount = 0
+                if rescueCount >= 4 then
+                    return false
                 end
+            else
+                rescueCount = 0
             end
         end
-
-        pcall(function()
-            local velocityVector = direction * currentSpeed
-
-            if State.FarmFloorGuard then
-                local floorY = GetFarmFloorY(root.Position, 140)
-                if floorY then
-                    local clearance = math.max(3, tonumber(State.FarmFloorClearance) or 6)
-                    local minimumY = floorY + clearance
-
-                    -- Limita a velocidade de descida em todo o trajeto.
-                    local maxDescend = math.abs(tonumber(State.FarmMaxDescendSpeed) or 70)
-                    local safeYVelocity = math.max(velocityVector.Y, -maxDescend)
-
-                    -- Se estiver próximo demais do piso, não aceita mais
-                    -- velocidade negativa: primeiro sobe/estabiliza.
-                    if root.Position.Y <= minimumY + 2 then
-                        safeYVelocity = math.max(safeYVelocity, 10)
-                    end
-
-                    velocityVector = Vector3.new(
-                        velocityVector.X,
-                        safeYVelocity,
-                        velocityVector.Z
-                    )
-                else
-                    velocityVector = Vector3.new(
-                        velocityVector.X,
-                        math.max(velocityVector.Y, -math.abs(tonumber(State.FarmMaxDescendSpeed) or 70)),
-                        velocityVector.Z
-                    )
-                end
-            end
-
-            FarmFlightVelocity.Velocity = velocityVector
-            FarmFlightGyro.CFrame = CFrame.lookAt(
-                root.Position,
-                root.Position + direction
-            )
-            root.AssemblyLinearVelocity = FarmFlightVelocity and FarmFlightVelocity.Velocity or velocityVector
-        end)
-
-        RunService.Heartbeat:Wait()
     end
 
-    pcall(function()
-        if FarmFlightVelocity then
-            FarmFlightVelocity.Velocity = Vector3.zero
-        end
-        if root and root.Parent then
+    local reached = false
+    if root and root.Parent then
+        reached = (root.Position - targetPosition).Magnitude <= arrivedRadius + 0.75
+        pcall(function()
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
-        end
-    end)
+        end)
+    end
 
-    return false
+    if humanoid and humanoid.Parent then
+        pcall(function()
+            humanoid.PlatformStand = oldPlatformStand
+            humanoid.AutoRotate = oldAutoRotate
+        end)
+    end
+
+    return reached
 end
 
 local function FarmFlyTo(targetPosition, speed, descend)
@@ -1989,30 +1987,11 @@ local function FarmFlyTo(targetPosition, speed, descend)
         return false
     end
 
-    -- Uma sessão de voo começa com colisões desativadas para atravessar
-    -- paredes/obstáculos. A sessão termina com a restauração da colisão.
+    -- Toda a viagem é uma única sessão de voo. O noclip entra antes de sair,
+    -- permanece ativo durante subida + cruzeiro + aproximação + descida e só
+    -- é removido depois que o personagem parou no ponto seguro.
     StartFarmNoclip()
-    SetFarmPhase("Voando")
-
-    if not CreateFarmFlightMovers(root) then
-        StopFarmNoclip()
-        return false
-    end
-
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    local oldPlatformStand = nil
-    local oldAutoRotate = nil
-
-    if humanoid then
-        oldPlatformStand = humanoid.PlatformStand
-        oldAutoRotate = humanoid.AutoRotate
-        humanoid.PlatformStand = true
-        humanoid.AutoRotate = false
-    end
-
-    -- Durante subida/cruzeiro, o noclip fica ativo para atravessar paredes.
-    StartFarmNoclip()
-    EnforceFarmNoclip()
+    SetFarmPhase("Voando / noclip ON")
 
     local flightHeight = math.clamp(
         tonumber(State.FarmFlightHeight) or 90,
@@ -2021,18 +2000,17 @@ local function FarmFlyTo(targetPosition, speed, descend)
     )
 
     local descendHeight = math.clamp(
-        tonumber(State.FarmFlightDescendHeight) or 3,
-        1,
-        8
+        tonumber(State.FarmFlightDescendHeight) or 6,
+        3,
+        12
     )
 
-    -- Mantém o voo acima do ponto mais alto entre origem e destino.
     local cruiseY = math.max(
         root.Position.Y,
         targetPosition.Y
     ) + flightHeight
 
-    -- 1. Sobe verticalmente.
+    -- 1. Sobe suavemente até a altitude de cruzeiro.
     local upPoint = Vector3.new(
         root.Position.X,
         cruiseY,
@@ -2046,7 +2024,7 @@ local function FarmFlyTo(targetPosition, speed, descend)
         true
     )
 
-    -- 2. Voa rápido acima do ovo/base.
+    -- 2. Cruza o mapa em linha reta, ainda com noclip.
     if ok and FarmIsRunning() then
         local cruisePoint = Vector3.new(
             targetPosition.X,
@@ -2062,7 +2040,9 @@ local function FarmFlyTo(targetPosition, speed, descend)
         )
     end
 
-    -- 3. Só desce quando está exatamente na coluna do destino.
+    -- 3. Faz a descida somente dentro da coluna do alvo. O noclip continua
+    -- ligado nesta etapa para não enroscar em teto/parede, mas o Raycast trava
+    -- o ponto final acima do chão.
     if ok and FarmIsRunning() and descend ~= false then
         local dropPoint = GetSafeDescentPosition(
             targetPosition,
@@ -2075,45 +2055,32 @@ local function FarmFlyTo(targetPosition, speed, descend)
         if not dropPoint then
             ok = false
         else
-            -- Aproximação final deliberadamente mais lenta.
-            -- Aqui o voo deixa de ser “cruzeiro”: desligamos o noclip antes
-            -- da descida para que o personagem volte a respeitar as paredes
-            -- e o chão do mapa.
-            StopFarmNoclip()
-            SetFarmPhase("Descendo / colisão ativa")
-
+            SetFarmPhase("Aproximando / noclip ON")
             ok = FarmFlightSegment(
                 dropPoint,
                 math.min(
                     speed or State.FarmFlightSpeed,
-                    180
+                    160
                 ),
-                2.5,
-                false
+                2.8,
+                true
             )
         end
     end
 
-    DestroyFarmFlightMovers()
-
-    -- Pequena estabilização após pousar na coluna do alvo/base para dar
-    -- tempo ao jogo de registrar a posição e processar a interação.
     if ok and descend ~= false and FarmIsRunning() then
         task.wait(math.clamp(tonumber(State.FarmArrivalPause) or 0.35, 0.10, 0.80))
     end
 
-    if humanoid and humanoid.Parent then
-        pcall(function()
-            humanoid.PlatformStand = oldPlatformStand
-            humanoid.AutoRotate = oldAutoRotate
-        end)
-    end
-
-    -- Toda sessão termina com a colisão restaurada. Assim, quando o voo para,
-    -- o personagem deixa imediatamente de atravessar paredes.
+    -- O voo termina aqui. Só depois de realmente parar restauramos a colisão.
     StopFarmNoclip()
-    if ok then
-        SetFarmPhase("Parado / colisão ativa")
+    DestroyFarmFlightMovers()
+    SetFarmPhase(ok and "Parado / colisão ativa" or "Voo interrompido / colisão ativa")
+
+    -- Depois da descida, ainda deixamos o personagem um frame estabilizar com
+    -- colisão normal antes de qualquer interação com ovo/base.
+    if ok and FarmIsRunning() then
+        RunService.Heartbeat:Wait()
     end
 
     return ok
