@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v23 • UI ORIGINAL v15 • DELTA STABLE
+-- MONTAR UM PET - MASTER v23.2 • UI ORIGINAL v15 • DELTA STABLE
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
@@ -19,12 +19,8 @@
 -- Rebirth etc.), NÃO recebem botões falsos nesta versão.
 --============================================================--
 
--- Espera o cliente Roblox terminar de carregar antes de iniciar a UI.
--- Mantém a interface exatamente no modelo estável da v15.
-if not game:IsLoaded() then
-    game.Loaded:Wait()
-end
-
+-- NÃO usar game.Loaded:Wait() aqui: no Delta a execução pode ocorrer depois do
+-- carregamento inicial, e essa espera pode bloquear o script antes da UI.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -236,7 +232,8 @@ local function LooksLikeOurRayfieldGui(gui)
                 or t:find("MASTER v7", 1, true)
                 or t:find("MASTER v14", 1, true)
                 or t:find("MASTER v15", 1, true)
-                or t:find("MASTER v23", 1, true) then
+                or t:find("MASTER v23", 1, true)
+                or t:find("MASTER v23.2", 1, true) then
                 hasHubSubtitle = true
             end
 
