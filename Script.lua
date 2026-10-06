@@ -1,11 +1,11 @@
 --============================================================--
--- MONTAR UM PET - MASTER v31 • UI ORIGINAL v15 • DELTA STABLE
+-- MONTAR UM PET - MASTER v32 • TOP HUB 2026 • UI ORIGINAL v15 • DELTA STABLE
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
--- Foco: Delta Mobile + Auto Farm Seguro 2026 + automações verificadas + UI v15 estável
+-- Foco: Delta Mobile + Auto Farm Seguro 2026 + benchmark Top 7 + automações verificadas + UI v15 estável
 --
--- Pesquisa cruzada: Bac0nHck, SixZensED, VintHub e Iamdungx.
+-- Pesquisa cruzada: Bac0nHck, SixZensED, VintHub, Iamdungx, Akaz, Sena, Zanji/Ouroboros, Sai Ops e Mystrix.
 -- Nesta versão, a UI v15 fica congelada; toda a camada 2026 nova é criada
 -- depois da UI e desabilitada por padrão. Se um módulo avançado falhar,
 -- a interface e o Auto Farm principal continuam independentes.
@@ -331,7 +331,7 @@ local State = {
     FarmPickupRadius = 12,
     FarmReturnInstant = true,
     -- Perfis 2026: combina scanner, coleta remota/prompt e glide.
-    FarmEngineProfile = "Hybrid 2026",
+    FarmEngineProfile = "Max Confiável 2026",
     FarmRenderedFallback = true,
     FarmRemoteFallback = true,
     FarmPromptFallback = true,
@@ -388,7 +388,11 @@ local State = {
     FarmCycleDelay = 1.50,
     FarmNoTargetDelay = 1.00,
     FarmRequireMountedPet = false,
-
+    FarmWatchdog = true,
+    FarmWatchdogTimeout = 4.0,
+    FarmCycles = 0,
+    FarmEggsDelivered = 0,
+    FarmFailures = 0,
 
     -- Automacoes 2026 verificadas (desligadas por padrao).
     AutoPlaceEggs = false,
@@ -1145,7 +1149,7 @@ local function GetFarmCandidates()
     -- localizar ovos visuais; aqui tentamos recuperar o UID real quando possível.
     if State.FarmRenderedFallback then
         local rendered = GetRenderedEggFolder()
-        if rendered and (#result == 0 or State.FarmEngineProfile == "Rendered Eggs") then
+        if rendered then
             for _, model in ipairs(rendered:GetChildren()) do
                 local position = GetEggPosition(model)
                 local eggName = GetRealRenderedEggName(model)
@@ -3233,7 +3237,11 @@ local function FarmOnce()
             SetFarmPhase(GetBasketCount() > 0 and "Carrying egg" or "Pending egg delivery")
 
             if State.ReturnToPlot then
-                FarmDeposit()
+                local delivered = FarmDeposit()
+                if delivered then
+                    State.FarmCycles = (tonumber(State.FarmCycles) or 0) + 1
+                    State.FarmEggsDelivered = (tonumber(State.FarmEggsDelivered) or 0) + 1
+                end
             end
 
             return
@@ -4543,8 +4551,7 @@ TabFarm:CreateToggle({
             ClearFarmTarget()
             State.FarmPhase = "Starting"
             LastFarmStatus = "Starting Auto Farm"
-            -- O trabalhador centralizado inicia o ciclo.
-            -- Não fazemos uma segunda chamada manual aqui para evitar corrida.
+            -- O worker centralizado assume o ciclo; FarmBusy evita concorrência.
         else
             CancelGlide()
             DestroyFarmFlightMovers()
@@ -4667,6 +4674,22 @@ TabFarm:CreateDropdown({
     end,
 })
 
+TabFarm:CreateButton({
+    name = "Aplicar perfil Top 7 recomendado",
+    description = "Max Confiável + Rendered/Remote/Prompt + Floor Guard + Watchdog.",
+    callback = function()
+        State.FarmEngineProfile = "Max Confiável 2026"
+        State.FarmPickupMode = "Auto"
+        State.FarmRenderedFallback = true
+        State.FarmRemoteFallback = true
+        State.FarmPromptFallback = true
+        State.FarmFloorGuard = true
+        State.FarmAutoRecover = true
+        State.FarmWatchdog = true
+        Window:Notify({title = "Top 7", content = "Perfil Max Confiável 2026 aplicado.", duration = 4})
+    end,
+})
+
 TabFarm:CreateToggle({
     name = "Fallback RenderedEggs",
     flag = "FarmRenderedFallback",
@@ -4724,6 +4747,51 @@ TabFarm:CreateButton({
                     tostring(fs.EggPlaced), candidates, tostring(State.FarmPhase)
                 ),
                 duration = 6,
+            })
+        end)
+    end,
+})
+
+TabFarm:CreateToggle({
+    name = "Farm Watchdog 2026",
+    flag = "FarmWatchdog",
+    description = "Reinicia somente estados presos; não cria um segundo Auto Farm.",
+    value = State.FarmWatchdog,
+    callback = function(value)
+        State.FarmWatchdog = value
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Tempo anti-travamento",
+    flag = "FarmWatchdogTimeout",
+    range = {2, 12},
+    increment = 0.5,
+    value = State.FarmWatchdogTimeout,
+    suffix = " s",
+    callback = function(value)
+        State.FarmWatchdogTimeout = math.clamp(tonumber(value) or 4, 2, 12)
+    end,
+})
+
+TabFarm:CreateButton({
+    name = "Status Top Hub 2026",
+    description = "Mostra ciclos, entregas, falhas e fontes atuais do farm.",
+    callback = function()
+        pcall(function()
+            local fs = GetGameFeatureStatus()
+            Window:Notify({
+                title = "MontarUmPet • Top Hub 2026",
+                content = string.format(
+                    "Ciclos:%d • Ovos:%d • Falhas:%d • Fase:%s\nActive:%s • Rendered:%s • Pickup:%s • Placed:%s",
+                    tonumber(State.FarmCycles) or 0,
+                    tonumber(State.FarmEggsDelivered) or 0,
+                    tonumber(State.FarmFailures) or 0,
+                    tostring(State.FarmPhase),
+                    tostring(fs.ActiveEggs), tostring(fs.RenderedEggs),
+                    tostring(fs.EggPickup), tostring(fs.EggPlaced)
+                ),
+                duration = 7,
             })
         end)
     end,
@@ -5845,6 +5913,17 @@ local function LoadConfigNow()
 end
 
 TabConfig:CreateButton({
+    name = "Reentrar no servidor",
+    description = "Reinicia a sessão atual sem apagar a configuração do hub.",
+    callback = function()
+        pcall(function()
+            local TeleportService = game:GetService("TeleportService")
+            TeleportService:Teleport(game.PlaceId, LocalPlayer)
+        end)
+    end,
+})
+
+TabConfig:CreateButton({
     name = "Salvar config",
     description = "Salva os toggles, sliders, filtros e seleções atuais no arquivo do hub.",
     callback = function()
@@ -6591,7 +6670,7 @@ end)
 local FarmLoop = task.spawn(function()
     while Running do
         if not State.AutoFarm then
-            task.wait(0.15)
+            task.wait(0.05)
         elseif FarmBusy then
             -- Um único ciclo por vez. Isso evita duas rotas brigando pelo personagem.
             task.wait(0.05)
@@ -6599,6 +6678,7 @@ local FarmLoop = task.spawn(function()
             local ok, err = pcall(FarmOnce)
 
             if not ok and FarmIsRunning() then
+                State.FarmFailures = (tonumber(State.FarmFailures) or 0) + 1
                 SetFarmPhase("Recuperando do erro")
                 LastFarmStatus = "Auto Farm error: " .. tostring(err)
                 warn("[MontarUmPet] Auto Farm:", err)
@@ -6611,6 +6691,41 @@ local FarmLoop = task.spawn(function()
             elseif FarmIsRunning() then
                 task.wait(math.clamp(tonumber(State.FarmCycleDelay) or 1.50, 0.25, 5.0))
             end
+        end
+    end
+end)
+
+--============================================================--
+-- FARM WATCHDOG 2026
+-- Recupera o motor se ele ficar parado em uma fase intermediária.
+-- Não inicia um segundo worker: apenas limpa estado e libera o worker central.
+--============================================================--
+local FarmWatchdogLoop = task.spawn(function()
+    local lastPhase = ""
+    local lastChange = os.clock()
+    while Running do
+        task.wait(0.75)
+        if not Running then break end
+        if State.AutoFarm and State.FarmWatchdog then
+            local phase = tostring(State.FarmPhase or "")
+            if phase ~= lastPhase then
+                lastPhase = phase
+                lastChange = os.clock()
+            end
+
+            local limit = math.clamp(tonumber(State.FarmWatchdogTimeout) or 4.0, 2.0, 12.0)
+            if not FarmBusy and (os.clock() - lastChange) >= limit then
+                if phase == "Starting" or phase == "Stopped" or phase == "Idle"
+                    or phase == "No target - hovering" or phase == "Scanning eggs" then
+                    ClearFarmTarget()
+                    State.FarmPhase = "Watchdog: reiniciando ciclo"
+                    LastFarmStatus = State.FarmPhase
+                end
+                lastChange = os.clock()
+            end
+        else
+            lastPhase = ""
+            lastChange = os.clock()
         end
     end
 end)
