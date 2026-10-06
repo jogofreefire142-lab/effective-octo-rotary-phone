@@ -1,13 +1,13 @@
 --============================================================--
--- MONTAR UM PET - MASTER v32 UI RESTAURADA • AUTOFARM FIX • VINT GLIDE 2026 • DELTA STABLE
+-- MONTAR UM PET - MASTER v34.1 • UI V15 RESTAURADA • BACKEND 2026 • DELTA STABLE
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
 -- Foco: Delta Mobile + Auto Farm Seguro 2026 + benchmark Top 7 + automações verificadas + UI v15 estável
 --
 -- Pesquisa cruzada: Bac0nHck, SixZensED, VintHub, Iamdungx, Akaz, Sena, Zanji/Ouroboros, Sai Ops e Mystrix.
--- Nesta versão, a UI v15 fica congelada; toda a camada 2026 nova é criada
--- depois da UI e desabilitada por padrão. Se um módulo avançado falhar,
+-- Nesta versão, a UI v15 usa exatamente o bloco comprovado do v32;
+-- o backend 2026 permanece por trás da interface e só altera estado quando acionado. Se um módulo avançado falhar,
 -- a interface e o Auto Farm principal continuam independentes.
 --
 -- APIs verificadas publicamente e usadas com confirmação de estado:
@@ -402,6 +402,22 @@ local State = {
     AutoBuyFood = false,
     AutoFeedPets = false,
     AutoFavorites = false,
+    AutoRideBestPet = false,
+    AutoCollectPetCash = false,
+    AutoUpgradeHatchLuck = false,
+    AutoBuyGear = false,
+    AutoRebirth = false,
+    AutoRebirthForce = false,
+    AutoServerHop = false,
+    HopAfterRareEgg = false,
+    HopRarityThreshold = "Ethereal",
+    ServerHopMode = "Least Populated",
+    HopInterval = 180,
+    LastDeliveredEggRarity = nil,
+    FeedMinAge = 0,
+    FeedMinIncome = 0,
+    NestESP = false,
+    WorldESP = false,
     BestPetMetric = "Income",
     AdvancedInterval = 1.0,
     AdvancedStatus = "Aguardando modulos 2026",
@@ -3520,12 +3536,22 @@ local function FarmOnce()
             return
         end
 
+        State.LastDeliveredEggRarity = GetEggRarity(target.Name, target.Instance)
         ClearFarmTarget()
 
         -- DEPOSIT
         if State.ReturnToPlot then
             task.wait(math.clamp(tonumber(State.FarmPickupPause) or 0.30, 0.10, 0.80))
-            FarmDeposit()
+            local deposited = FarmDeposit()
+            if deposited and State.HopAfterRareEgg then
+                local rarity = State.LastDeliveredEggRarity
+                local threshold = RarityPriority[State.HopRarityThreshold] or RarityPriority.Ethereal
+                if (RarityPriority[rarity] or 0) >= threshold then
+                    task.defer(function()
+                        pcall(function() Advanced2026:ServerHopOnce() end)
+                    end)
+                end
+            end
         else
             SetFarmPhase("Collected")
         end
@@ -4099,6 +4125,110 @@ local function AttachRenderedEggs()
     RefreshEggESP()
 end
 
+local ExtraESPObjects = {}
+
+local function RemoveExtraESP(object)
+    local data = ExtraESPObjects[object]
+    if not data then return end
+    for _, instance in ipairs(data) do
+        pcall(function() instance:Destroy() end)
+    end
+    ExtraESPObjects[object] = nil
+end
+
+local function ClearExtraESP()
+    for object in pairs(ExtraESPObjects) do
+        RemoveExtraESP(object)
+    end
+end
+
+local function CreateExtraESP(object, labelText)
+    if not object or not object.Parent or ExtraESPObjects[object] then return end
+    local adornee = nil
+    if object:IsA("Model") then
+        adornee = object:FindFirstChildWhichIsA("BasePart", true)
+    elseif object:IsA("BasePart") then
+        adornee = object
+    else
+        adornee = object:FindFirstChildWhichIsA("BasePart", true)
+    end
+    if not adornee then return end
+
+    local created = {}
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "MontarUmPetExtraESP"
+    highlight.Adornee = object:IsA("Model") and object or adornee
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.FillTransparency = 0.70
+    highlight.OutlineTransparency = 0.10
+    highlight.Parent = CoreGui
+    created[#created + 1] = highlight
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "MontarUmPetExtraESPLabel"
+    billboard.Size = UDim2.fromOffset(180, 36)
+    billboard.StudsOffset = Vector3.new(0, 3, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Adornee = adornee
+    billboard.Parent = CoreGui
+    created[#created + 1] = billboard
+
+    local text = Instance.new("TextLabel")
+    text.BackgroundTransparency = 1
+    text.Size = UDim2.fromScale(1, 1)
+    text.Text = tostring(labelText)
+    text.TextScaled = true
+    text.TextStrokeTransparency = 0.35
+    text.Parent = billboard
+
+    ExtraESPObjects[object] = created
+end
+
+local function RefreshExtraESP()
+    ClearExtraESP()
+    if not Running then return end
+
+    if State.NestESP then
+        local plot = GetMyPlot()
+        local nests = plot and plot:FindFirstChild("Nests")
+        if nests then
+            for _, nest in ipairs(nests:GetChildren()) do
+                local unlocked = nest:GetAttribute("Unlocked") == true
+                local occupied = nest:GetAttribute("Occupied") == true
+                if unlocked then
+                    CreateExtraESP(nest, string.format("Ninho %s • %s", tostring(nest.Name), occupied and "Ocupado" or "Livre"))
+                end
+            end
+        end
+    end
+
+    if State.WorldESP then
+        local keywords = {"chest", "stall", "vendor", "cauldron", "lantern"}
+        for _, object in ipairs(workspace:GetDescendants()) do
+            local lower = string.lower(object.Name)
+            for _, keyword in ipairs(keywords) do
+                if string.find(lower, keyword, 1, true) then
+                    if object:IsA("Model") or object:IsA("BasePart") then
+                        CreateExtraESP(object, object.Name)
+                    end
+                    break
+                end
+            end
+        end
+    end
+end
+
+local ExtraESPRefreshLoop = task.spawn(function()
+    while Running do
+        task.wait(2)
+        if State.NestESP or State.WorldESP then
+            pcall(RefreshExtraESP)
+        elseif next(ExtraESPObjects) then
+            ClearExtraESP()
+        end
+    end
+end)
+
 local function SetEggESPEnabled(enabled)
     State.ESPEnabled = enabled
 
@@ -4604,7 +4734,6 @@ TabFarm:CreateToggle({
             -- O worker centralizado assume o ciclo; FarmBusy evita concorrência.
         else
             CancelGlide()
-            FarmFlightSession = false
             DestroyFarmFlightMovers()
             StopFarmNoclip()
             ClearFarmTarget()
@@ -5215,6 +5344,9 @@ TabFarm:CreateToggle({
     value = State.FarmFloorGuard,
     callback = function(value)
         State.FarmFloorGuard = value
+        if not value and State.AutoFarm then
+            StartFarmNoclip()
+        end
     end,
 })
 
@@ -6778,6 +6910,23 @@ local FarmWatchdogLoop = task.spawn(function()
     end
 end)
 
+local AdvancedServerHopLoop = task.spawn(function()
+    local lastHop = os.clock()
+    while Running do
+        task.wait(2.0)
+        if not Running then break end
+        if State.AutoServerHop and not State.AutoFarm then
+            local interval = math.clamp(tonumber(State.HopInterval) or 180, 30, 900)
+            if os.clock() - lastHop >= interval then
+                lastHop = os.clock()
+                pcall(function() Advanced2026:ServerHopOnce() end)
+            end
+        else
+            lastHop = os.clock()
+        end
+    end
+end)
+
 local PickupLoop = task.spawn(function()
     while Running do
         task.wait(0.25)
@@ -6817,6 +6966,15 @@ StopHandler = function()
     State.AutoBuyFood = false
     State.AutoFeedPets = false
     State.AutoFavorites = false
+    State.AutoRideBestPet = false
+    State.AutoCollectPetCash = false
+    State.AutoUpgradeHatchLuck = false
+    State.AutoBuyGear = false
+    State.AutoRebirth = false
+    State.AutoServerHop = false
+    State.HopAfterRareEgg = false
+    State.NestESP = false
+    State.WorldESP = false
     State.ESPEnabled = false
     State.PlayerESP = false
     State.HidePlayers = false
@@ -6834,6 +6992,7 @@ StopHandler = function()
     pcall(StopFly)
 
     pcall(ClearAllESP)
+    pcall(ClearExtraESP)
 
     for player in pairs(PlayerESPObjects) do
         RemovePlayerESP(player)
@@ -6891,7 +7050,7 @@ ENV[TOKEN_NAMES[1]] = {
 
 
 --============================================================--
--- v27 SAFE AUTOFARM LAYER
+-- v34 2026 ALL FEATURES LAYER
 -- Base: v22 UI ORIGINAL v15 (INTACT)
 -- Regra: nenhuma lógica opcional é executada antes da interface.
 -- Qualquer extensão futura deve ser carregada depois que a UI existir.
