@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v18 MEGA CORREÇÃO 2026 • AUTOFARM 300 + NEST DEPOSIT + FLIGHT DIRECT + CONFIG
+-- MONTAR UM PET - MASTER v18.2 SINGLETON UI • AUTOFARM 300 + NEST DEPOSIT + FLIGHT DIRECT + CONFIG
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 (stable)
 -- Config: salvamento manual + persistência do Rayfield
@@ -40,6 +40,16 @@ if game.PlaceId ~= 124216119978534 then
 end
 
 local ENV = (getgenv and getgenv()) or _G
+local ACTIVE_INSTANCE_KEY = "__MONTAR_UM_PET_ACTIVE_INSTANCE_V18"
+
+-- Uma nova execução sempre substitui a instância anterior. O wrapper abaixo
+-- também funciona enquanto a execução anterior ainda está carregando a UI.
+local ExistingInstance = ENV[ACTIVE_INSTANCE_KEY]
+if type(ExistingInstance) == "table" and type(ExistingInstance.Stop) == "function" then
+    pcall(ExistingInstance.Stop)
+    task.wait(0.12)
+end
+
 
 --============================================================--
 -- SINGLETON ROBUSTO / ANTI-DUPLICAÇÃO
@@ -134,6 +144,23 @@ local MY_GENERATION = generation
 
 local Running = true
 local StopHandler = nil
+local InstanceStopped = false
+ENV[ACTIVE_INSTANCE_KEY] = {
+    Stop = function()
+        if InstanceStopped then
+            return
+        end
+
+        if StopHandler then
+            pcall(StopHandler)
+        else
+            -- A execução antiga ainda está carregando; impedir que ela
+            -- crie a interface depois, mesmo sem haver algo para destruir.
+            InstanceStopped = true
+            Running = false
+        end
+    end,
+}
 
 local ReplaceConnection = ReplaceEvent.Event:Connect(function()
     if not Running then
@@ -216,7 +243,7 @@ local function LooksLikeOurRayfieldGui(gui)
     end
 
     local hasTitle = false
-    local hasHubSubtitle = false
+    local hasHubMarker = false
 
     for _, child in ipairs(gui:GetDescendants()) do
         if child:IsA("TextLabel") then
@@ -224,16 +251,17 @@ local function LooksLikeOurRayfieldGui(gui)
 
             if t == "Montar um Pet" then
                 hasTitle = true
-            elseif t:find("MASTER v5", 1, true)
-                or t:find("MASTER v6", 1, true)
-                or t:find("MASTER v7", 1, true)
-                or t:find("MASTER v14", 1, true)
-                or t:find("MASTER v16", 1, true)
-                or t:find("MASTER v18", 1, true) then
-                hasHubSubtitle = true
+            elseif t:find("MASTER", 1, true)
+                or t == "Farm"
+                or t == "Ovos"
+                or t == "Movimento"
+                or t == "Performance"
+                or t == "Config"
+                or t == "Opções" then
+                hasHubMarker = true
             end
 
-            if hasTitle and hasHubSubtitle then
+            if hasTitle and hasHubMarker then
                 return true
             end
         end
@@ -256,23 +284,58 @@ local function CleanupOldRayfield(container)
     end)
 end
 
-pcall(function()
-    CleanupOldRayfield(game:GetService("CoreGui"))
-end)
+local function CleanupEveryOldHubUI()
+    pcall(function()
+        CleanupOldRayfield(game:GetService("CoreGui"))
+    end)
 
-pcall(function()
-    if typeof(gethui) == "function" then
-        CleanupOldRayfield(gethui())
+    pcall(function()
+        if typeof(gethui) == "function" then
+            CleanupOldRayfield(gethui())
+        end
+    end)
+
+    pcall(function()
+        CleanupOldRayfield(PlayerGui)
+    end)
+end
+
+CleanupEveryOldHubUI()
+
+-- Garante que não exista uma janela antiga do hub antes de iniciar a nova.
+for _ = 1, 15 do
+    local oldFound = false
+
+    pcall(function()
+        local containers = {game:GetService("CoreGui")}
+        if typeof(gethui) == "function" then
+            table.insert(containers, gethui())
+        end
+        table.insert(containers, PlayerGui)
+
+        for _, container in ipairs(containers) do
+            if container then
+                for _, child in ipairs(container:GetChildren()) do
+                    if LooksLikeOurRayfieldGui(child) then
+                        oldFound = true
+                        break
+                    end
+                end
+            end
+            if oldFound then
+                break
+            end
+        end
+    end)
+
+    if not oldFound then
+        break
     end
-end)
 
-pcall(function()
-    CleanupOldRayfield(PlayerGui)
-end)
+    CleanupEveryOldHubUI()
+    task.wait(0.08)
+end
 
---============================================================--
--- FIM DO SINGLETON
---============================================================--
 
 --============================================================--
 -- ESTADO
@@ -4235,16 +4298,21 @@ end
 local okWindow, Window = pcall(function()
     return Rayfield:CreateWindow({
         name = "Montar um Pet",
-        subtitle = "MASTER v18 • Delta Mobile • 2026",
+        subtitle = "MASTER v18.2 • Delta Mobile",
         sidebarLayout = true,
         toggleUIKeybind = "K",
         configuration = {
             autoSave = true,
             autoLoad = true,
-            fileName = "MontarUmPet_Master_v18",
+            fileName = "MontarUmPet_Master_v18_2",
         },
     })
 end)
+
+if okWindow and Window and ENV[ACTIVE_INSTANCE_KEY] then
+    ENV[ACTIVE_INSTANCE_KEY].Rayfield = Rayfield
+    ENV[ACTIVE_INSTANCE_KEY].Window = Window
+end
 
 if not okWindow or not Window then
     Running = false
@@ -4389,87 +4457,6 @@ TabOptions:CreateToggle({
     end,
 })
 
-TabOptions:CreateDropdown({
-    name = "Motor do voo",
-    flag = "FarmFlightEngine",
-    options = {"Direct", "Physics"},
-    value = State.FarmFlightEngine,
-    callback = function(value)
-        if value == "Direct" or value == "Physics" then
-            State.FarmFlightEngine = value
-        end
-    end,
-})
-
-TabOptions:CreateSlider({
-    name = "Raio de coleta",
-    flag = "FarmPickupRadiusAdvanced",
-    range = {8, 30},
-    increment = 1,
-    value = State.FarmPickupRadius,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmPickupRadius = math.clamp(math.floor(tonumber(value) or 12), 8, 30)
-    end,
-})
-
-TabOptions:CreateSlider({
-    name = "Altura de aproximação do ovo",
-    flag = "FarmPickupApproachHeightAdvanced",
-    range = {4, 12},
-    increment = 1,
-    value = State.FarmPickupApproachHeight,
-    suffix = " studs",
-    callback = function(value)
-        State.FarmPickupApproachHeight = math.clamp(math.floor(tonumber(value) or 6), 4, 12)
-    end,
-})
-
-TabOptions:CreateSlider({
-    name = "Pausa sobre a base",
-    flag = "FarmBasePauseAdvanced",
-    range = {1.0, 5.0},
-    increment = 0.25,
-    value = State.FarmBasePause,
-    suffix = " s",
-    callback = function(value)
-        State.FarmBasePause = math.clamp(tonumber(value) or 2.5, 1.0, 5.0)
-    end,
-})
-
-TabOptions:CreateSlider({
-    name = "Espera pelo ninho",
-    flag = "FarmNestWait",
-    range = {1.0, 15.0},
-    increment = 0.5,
-    value = State.FarmNestWait,
-    suffix = " s",
-    callback = function(value)
-        State.FarmNestWait = math.clamp(tonumber(value) or 6.0, 1.0, 15.0)
-    end,
-})
-
-TabOptions:CreateSlider({
-    name = "Tentativas de depósito",
-    flag = "FarmDepositRetries",
-    range = {1, 6},
-    increment = 1,
-    value = State.FarmDepositRetries,
-    suffix = " tentativas",
-    callback = function(value)
-        State.FarmDepositRetries = math.clamp(math.floor(tonumber(value) or 3), 1, 6)
-    end,
-})
-
-TabOptions:CreateToggle({
-    name = "Confirmação rigorosa do ninho",
-    flag = "FarmStrictDepositConfirm",
-    value = State.FarmStrictDepositConfirm,
-    callback = function(value)
-        State.FarmStrictDepositConfirm = value
-    end,
-})
-
 TabOptions:CreateSection({name = "Renderização local"})
 
 TabOptions:CreateToggle({
@@ -4537,36 +4524,6 @@ TabOptions:CreateSlider({
     suffix = " studs",
     callback = function(value)
         State.FarmFlightHeight = math.clamp(math.floor(tonumber(value) or 90), 20, 200)
-    end,
-})
-
-TabOptions:CreateButton({
-    name = "Diagnóstico do Auto Farm",
-    description = "Mostra as APIs/caminhos detectados no servidor atual.",
-    callback = function()
-        local status = GetGameFeatureStatus()
-        local encontrados = {}
-        local ausentes = {}
-
-        for nome, ok in pairs(status) do
-            if ok then
-                table.insert(encontrados, nome)
-            else
-                table.insert(ausentes, nome)
-            end
-        end
-
-        table.sort(encontrados)
-        table.sort(ausentes)
-
-        pcall(function()
-            Window:Notify({
-                title = "Diagnóstico Auto Farm",
-                content = "OK: " .. (#encontrados > 0 and table.concat(encontrados, ", ") or "nenhum")
-                    .. " | Ausentes: " .. (#ausentes > 0 and table.concat(ausentes, ", ") or "nenhum"),
-                duration = 8,
-            })
-        end)
     end,
 })
 
@@ -5296,7 +5253,7 @@ TabPerf:CreateButton({
 TabConfig:CreateSection({name = "Configuração"})
 
 local CONFIG_FOLDER = "MontarUmPet"
-local CONFIG_FILE = CONFIG_FOLDER .. "/MontarUmPet_MASTER_v18_config.json"
+local CONFIG_FILE = "MontarUmPet_MASTER_v18_2_config.json"
 
 local function CanUseConfigFiles()
     return type(writefile) == "function"
@@ -5330,7 +5287,7 @@ local function SaveConfigNow()
     if CanUseConfigFiles() then
         EnsureConfigFolder()
 
-        local data = { __version = 18 }
+        local data = { __version = 18.2 }
         pcall(function()
             for flagName, flag in pairs(Rayfield.Flags or {}) do
                 if type(flag) == "table" then
@@ -5565,6 +5522,13 @@ end)
 --============================================================--
 
 StopHandler = function()
+    if InstanceStopped then
+        Running = false
+        return
+    end
+
+    InstanceStopped = true
+
     if not Running then
         return
     end
@@ -5646,6 +5610,10 @@ StopHandler = function()
             Guard:Destroy()
         end
     end)
+end
+
+if ENV[ACTIVE_INSTANCE_KEY] then
+    ENV[ACTIVE_INSTANCE_KEY].Stop = StopHandler
 end
 
 ENV[TOKEN_NAMES[1]] = {
