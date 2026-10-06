@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v19 AUTOFARM FLIGHT + NOCLIP + SAFE APPROACH + CONFIG
+-- MONTAR UM PET - MASTER v15 AUTOFARM FLIGHT + NOCLIP + SAFE APPROACH + CONFIG
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 (stable)
 -- Config: salvamento manual + persistência do Rayfield
@@ -47,7 +47,6 @@ local ENV = (getgenv and getgenv()) or _G
 
 local GUARD_NAME = "MontarUmPet_Master_Guard"
 local TOKEN_NAMES = {
-    "__MONTAR_UM_PET_MASTER_V19",
     "__MONTAR_UM_PET_MASTER_V7",
     "__MONTAR_UM_PET_MASTER_V6",
     "__MONTAR_UM_PET_MASTER_V5",
@@ -369,28 +368,6 @@ local State = {
 
     Flying = false,
     FlySpeed = 60,
-
-    -- Automação 2026 (funções confirmadas em fontes públicas atuais)
-    AutoPlaceEggs = false,
-    AutoHatchEggs = false,
-    AutoBestPets = false,
-    AutoIndexRewards = false,
-    AutoFavorites = false,
-    AutoFeedPets = false,
-    AutoBuyFood = false,
-    AutoSellPets = false,
-    AdvancedBestMetric = "Income",
-    AdvancedSelectedPets = {},
-    AdvancedSelectedFoods = {},
-    AdvancedSelectedFavoritePets = {},
-    AdvancedSelectedFavoriteRarities = {
-        Rare = false, Epic = false, Legendary = true, Mythic = true, Ethereal = true, Divine = true,
-    },
-    AdvancedFoodAmount = 1,
-    AdvancedAutomationBusy = false,
-    AdvancedPhase = "Idle",
-    AdvancedLastError = "",
-    AdvancedHopWhenNoEgg = false,
 }
 
 local Connections = {}
@@ -1158,11 +1135,6 @@ local function GetMyPlot()
 
     for _, plot in ipairs(plots:GetChildren()) do
         if plot:GetAttribute("NestsOwnerLoaded") == LocalPlayer.UserId then
-            return plot
-        end
-        local data = plot:FindFirstChild("Data")
-        local owner = data and data:FindFirstChild("Owner")
-        if owner and owner:IsA("ObjectValue") and owner.Value == LocalPlayer then
             return plot
         end
     end
@@ -2472,13 +2444,6 @@ local function FarmDeposit()
         return false
     end
 
-    -- Se o Auto Place estiver ligado, usa a mesma chegada à base para
-    -- entregar o ovo em um ninho antes de procurar o próximo alvo.
-    if State.AutoPlaceEggs and GetBasketCount() > 0 and Running then
-        AdvancedStatus("Auto Place integrado ao Auto Farm")
-        AdvancedPlaceEggsOnce()
-    end
-
     -- Última confirmação. Se ainda estiver carregando, faz uma única
     -- reaproximação curta em baixa velocidade e espera novamente.
     if GetBasketCount() > 0 then
@@ -3694,68 +3659,84 @@ end
 
 
 --============================================================--
--- AUTOMACAO 2026 - APIs PUBLICAS VERIFICADAS
+-- 2026 VERIFIED EXTENSION
+-- Base: UI/engine v15 (stable)
+-- Only functions with concrete public implementations are exposed here.
 --============================================================--
--- Esta camada fica separada do Auto Farm principal. Ela usa apenas
--- remotes/estruturas que foram encontrados em uma implementacao
--- open-source atual e confirma cada operacao por estado local.
 
-local AdvancedRemoteCache = {}
-local AdvancedEpoch = 0
-local AdvancedAutomationBusy = false
-local AdvancedJobRunning = false
-local AdvancedLastStatus = "Idle"
-local AdvancedGeneralData = nil
-local AdvancedDayNight = nil
-local AdvancedPetsData = nil
-local AdvancedFoodsData = nil
-local AdvancedShopData = nil
-local AdvancedIndexData = nil
-local AdvancedFoodNames = {}
-local AdvancedPetNames = {}
-local AdvancedSellAPI = nil
-local AdvancedSellDialogue = nil
-local AdvancedSellDialogueRevision = 0
-local AdvancedSellConnected = false
-local AdvancedCooldowns = {}
-local AdvancedNoEggSince = nil
+local Verified = {
+    AutoPlace = false,
+    AutoHatch = false,
+    AutoIndex = false,
+    AutoBestPets = false,
+    AutoFeed = false,
+    AutoBuyFood = false,
+    AutoFavorites = false,
+    BestMetric = "Income",
+    FeedAgeMax = 100,
+    SelectedFoods = {},
+    SelectedPets = {},
+    FavoritePets = {},
+    FavoriteRarities = {},
+    Status = "Idle",
+    Busy = false,
+    Cooldowns = {},
+}
 
-local function AdvancedStatus(text)
-    AdvancedLastStatus = tostring(text or "")
-    State.AdvancedPhase = AdvancedLastStatus
+local VerifiedData = {
+    General = nil,
+    Pets = nil,
+    Foods = nil,
+    Shop = nil,
+    IndexRewards = nil,
+    Mutations = nil,
+    PetAging = nil,
+    DayNight = nil,
+}
+
+local VerifiedFoodNames = {}
+local VerifiedPetNames = {}
+local VerifiedRarities = {}
+
+local function VerifiedStatus(text)
+    Verified.Status = tostring(text or "Idle")
 end
 
-local function AdvancedRemote(name)
-    if AdvancedRemoteCache[name] then
-        local remote = AdvancedRemoteCache[name]
-        if remote.Parent then
-            return remote
-        end
-        AdvancedRemoteCache[name] = nil
+local function VerifiedReady(key, seconds)
+    local now = os.clock()
+    local nextTime = tonumber(Verified.Cooldowns[key]) or 0
+    if now < nextTime then
+        return false
     end
+    Verified.Cooldowns[key] = now + math.max(0.1, tonumber(seconds) or 1)
+    return true
+end
 
-    local gameRemotes = GetGameRemotes()
-    local remote = gameRemotes and gameRemotes:FindFirstChild(name)
+local function VerifiedRemote(name)
+    local remotes = GetGameRemotes()
+    local remote = remotes and remotes:FindFirstChild(name)
     if remote and remote:IsA("RemoteEvent") then
-        AdvancedRemoteCache[name] = remote
         return remote
     end
     return nil
 end
 
-local function AdvancedFire(name, ...)
-    local remote = AdvancedRemote(name)
+local function VerifiedFire(name, ...)
+    local remote = VerifiedRemote(name)
     if not remote then
-        AdvancedStatus("Remote ausente: " .. tostring(name))
+        VerifiedStatus("API ausente: " .. tostring(name))
         return false
     end
     local ok = pcall(function()
         remote:FireServer(...)
     end)
+    if not ok then
+        VerifiedStatus("Falha ao executar: " .. tostring(name))
+    end
     return ok
 end
 
-local function AdvancedWait(predicate, timeout)
+local function VerifiedWait(predicate, timeout)
     local deadline = os.clock() + math.max(0.1, tonumber(timeout) or 3)
     while Running and os.clock() < deadline do
         local ok, result = pcall(predicate)
@@ -3767,116 +3748,120 @@ local function AdvancedWait(predicate, timeout)
     return false
 end
 
-local function AdvancedReady(key, interval)
-    local now = os.clock()
-    local nextTime = tonumber(AdvancedCooldowns[key]) or 0
-    if now < nextTime then return false end
-    AdvancedCooldowns[key] = now + math.max(0.1, tonumber(interval) or 1)
-    return true
-end
-
-local function AdvancedLoadModules()
+local function VerifiedLoadModules()
     local gameData = ReplicatedStorage:FindFirstChild("GameData")
-    local services = ReplicatedStorage:FindFirstChild("GameServices")
+    local gameServices = ReplicatedStorage:FindFirstChild("GameServices")
 
-    pcall(function()
-        local module = gameData and gameData:FindFirstChild("General")
+    local function load(parent, name, key)
+        local module = parent and parent:FindFirstChild(name)
         if module and module:IsA("ModuleScript") then
-            AdvancedGeneralData = require(module)
-        end
-    end)
-
-    pcall(function()
-        local module = services and services:FindFirstChild("DayNight")
-        if module and module:IsA("ModuleScript") then
-            AdvancedDayNight = require(module)
-        end
-    end)
-
-    pcall(function()
-        local module = gameData and gameData:FindFirstChild("Pets")
-        if module and module:IsA("ModuleScript") then
-            AdvancedPetsData = require(module)
-        end
-    end)
-
-    pcall(function()
-        local module = gameData and gameData:FindFirstChild("Foods")
-        if module and module:IsA("ModuleScript") then
-            AdvancedFoodsData = require(module)
-        end
-    end)
-
-    pcall(function()
-        local module = gameData and gameData:FindFirstChild("Shop")
-        if module and module:IsA("ModuleScript") then
-            AdvancedShopData = require(module)
-        end
-    end)
-
-    pcall(function()
-        local module = gameData and gameData:FindFirstChild("IndexRewards")
-        if module and module:IsA("ModuleScript") then
-            AdvancedIndexData = require(module)
-        end
-    end)
-end
-
-AdvancedLoadModules()
-
-local function AdvancedBuildLists()
-    table.clear(AdvancedFoodNames)
-    table.clear(AdvancedPetNames)
-
-    if type(AdvancedFoodsData) == "table" and type(AdvancedShopData) == "table" then
-        local shopFood = AdvancedShopData.Food
-        if type(shopFood) == "table" then
-            for name, definition in pairs(shopFood) do
-                if type(name) == "string" and type(definition) == "table" then
-                    if type(AdvancedFoodsData[name]) == "table" then
-                        table.insert(AdvancedFoodNames, name)
-                    end
-                end
+            local ok, value = pcall(require, module)
+            if ok and type(value) == "table" then
+                VerifiedData[key] = value
             end
         end
     end
 
-    if type(AdvancedPetsData) == "table" then
-        for name, definition in pairs(AdvancedPetsData) do
-            if type(name) == "string" and type(definition) == "table" and definition.Rarity then
-                table.insert(AdvancedPetNames, name)
+    load(gameData, "General", "General")
+    load(gameData, "Pets", "Pets")
+    load(gameData, "Foods", "Foods")
+    load(gameData, "Shop", "Shop")
+    load(gameData, "IndexRewards", "IndexRewards")
+    load(gameData, "Mutations", "Mutations")
+    load(gameServices, "PetAging", "PetAging")
+    load(gameServices, "DayNight", "DayNight")
+
+    table.clear(VerifiedFoodNames)
+    if type(VerifiedData.Shop) == "table" and type(VerifiedData.Shop.Food) == "table"
+        and type(VerifiedData.Foods) == "table" then
+        for name, def in pairs(VerifiedData.Shop.Food) do
+            if type(name) == "string" and type(def) == "table" and VerifiedData.Foods[name] then
+                table.insert(VerifiedFoodNames, name)
             end
         end
+        table.sort(VerifiedFoodNames, function(a, b)
+            local ap = tonumber(VerifiedData.Shop.Food[a].Price) or math.huge
+            local bp = tonumber(VerifiedData.Shop.Food[b].Price) or math.huge
+            if ap == bp then return a < b end
+            return ap < bp
+        end)
     end
 
-    table.sort(AdvancedFoodNames)
-    table.sort(AdvancedPetNames)
+    table.clear(VerifiedPetNames)
+    if type(VerifiedData.Pets) == "table" then
+        for name, def in pairs(VerifiedData.Pets) do
+            if type(name) == "string" and type(def) == "table" and def.Rarity then
+                table.insert(VerifiedPetNames, name)
+            end
+        end
+        table.sort(VerifiedPetNames)
+    end
+
+    local seen = {}
+    table.clear(VerifiedRarities)
+    for _, name in ipairs(VerifiedPetNames) do
+        local rarity = VerifiedData.Pets[name] and VerifiedData.Pets[name].Rarity
+        if type(rarity) == "string" and not seen[rarity] then
+            seen[rarity] = true
+            table.insert(VerifiedRarities, rarity)
+        end
+    end
+    table.sort(VerifiedRarities)
 end
 
-AdvancedBuildLists()
+-- Importante: não carregue módulos do jogo antes da UI.
+-- Alguns ModuleScripts podem aguardar estado do servidor; fazer isso aqui
+-- impedia o Rayfield de chegar ao CreateWindow. O carregamento agora é assíncrono.
+local VerifiedModulesLoaded = false
+task.spawn(function()
+    if not Running then
+        return
+    end
+    local ok = pcall(VerifiedLoadModules)
+    VerifiedModulesLoaded = ok
+    if not ok then
+        VerifiedStatus("Módulos 2026: carregamento indisponível")
+    end
+end)
 
-local function AdvancedBasketCount()
-    return GetBasketCount()
+local function VerifiedBasketCount()
+    local basket = LocalPlayer:FindFirstChild("Basket")
+    return basket and #basket:GetChildren() or 0
 end
 
-local function AdvancedTools()
-    local out = {}
+local function VerifiedTools()
+    local result = {}
     local backpack = LocalPlayer:FindFirstChild("Backpack")
     local character = LocalPlayer.Character
     for _, container in ipairs({backpack, character}) do
         if container then
             for _, object in ipairs(container:GetChildren()) do
                 if object:IsA("Tool") then
-                    table.insert(out, object)
+                    table.insert(result, object)
                 end
             end
         end
     end
-    return out
+    return result
 end
 
-local function AdvancedFindPetTool(key)
-    for _, tool in ipairs(AdvancedTools()) do
+local function VerifiedEggTools()
+    local result = {}
+    for _, tool in ipairs(VerifiedTools()) do
+        if type(EggData) == "table" and EggData[tool.Name] and not tool:GetAttribute("PetKey") then
+            table.insert(result, tool)
+        end
+    end
+    table.sort(result, function(a, b)
+        local ad = EggData[a.Name]
+        local bd = EggData[b.Name]
+        return (type(ad) == "table" and tonumber(ad.Luck) or 0) > (type(bd) == "table" and tonumber(bd.Luck) or 0)
+    end)
+    return result
+end
+
+local function VerifiedFindPetTool(key)
+    for _, tool in ipairs(VerifiedTools()) do
         if tool:GetAttribute("PetKey") == key then
             return tool
         end
@@ -3884,43 +3869,21 @@ local function AdvancedFindPetTool(key)
     return nil
 end
 
-local function AdvancedEquip(tool)
-    if not tool or not tool.Parent then return false end
+local function VerifiedEquip(tool)
     local character = LocalPlayer.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return false end
-    local ok = pcall(function()
-        humanoid:EquipTool(tool)
-    end)
-    return ok
+    if not humanoid or not tool or not tool.Parent then return false end
+    return pcall(function() humanoid:EquipTool(tool) end)
 end
 
-local function AdvancedEggTools()
-    local result = {}
-    if type(EggData) ~= "table" then return result end
-    for _, tool in ipairs(AdvancedTools()) do
-        if EggData[tool.Name] and not tool:GetAttribute("PetKey") then
-            table.insert(result, tool)
-        end
-    end
-    table.sort(result, function(a, b)
-        local ad = EggData[a.Name]
-        local bd = EggData[b.Name]
-        return (type(ad) == "table" and ad.Luck or 0) > (type(bd) == "table" and bd.Luck or 0)
-    end)
-    return result
-end
-
-local function AdvancedFreeNests()
+local function VerifiedFreeNests()
     local result = {}
     local plot = GetMyPlot()
     local nests = plot and plot:FindFirstChild("Nests")
     if not nests then return result end
 
     for _, nest in ipairs(nests:GetChildren()) do
-        local unlocked = nest:GetAttribute("Unlocked")
-        local occupied = nest:GetAttribute("Occupied")
-        if unlocked and not occupied then
+        if nest:GetAttribute("Unlocked") == true and nest:GetAttribute("Occupied") ~= true then
             table.insert(result, nest)
         end
     end
@@ -3931,133 +3894,154 @@ local function AdvancedFreeNests()
     return result
 end
 
-local function AdvancedHome()
+local function VerifiedDismount()
+    if LocalPlayer:GetAttribute("IsRiding") ~= true then
+        return true
+    end
+    local remote = VerifiedRemote("PetDismount")
+    if not remote then
+        return false
+    end
+    local ok = pcall(function()
+        remote:FireServer()
+    end)
+    if not ok then return false end
+    return VerifiedWait(function()
+        return LocalPlayer:GetAttribute("IsRiding") ~= true
+    end, 3)
+end
+
+local function VerifiedHome()
     local plot = GetMyPlot()
     local base = plot and plot:FindFirstChild("Baseplate")
-    local character, root = GetCharacter()
-    if not character or not root or not base then return false end
-
-    local target = base.Position + Vector3.new(0, 5, 0)
-    return SafeTeleport(target)
-end
-
-local function AdvancedEggTimers()
-    local result = {}
-    local plot = GetMyPlot()
-    local eggs = plot and plot:FindFirstChild("Eggs")
-    if not eggs then return result end
-
-    for _, egg in ipairs(eggs:GetChildren()) do
-        local eggDataFolder = egg:FindFirstChild("EggData", true)
-        local placeTime = eggDataFolder and eggDataFolder:FindFirstChild("PlaceTime")
-        local weight = eggDataFolder and eggDataFolder:FindFirstChild("Weight")
-        local data = EggData[egg.Name]
-
-        if data and placeTime then
-            local total
-            local remaining
-            pcall(function()
-                if AdvancedGeneralData and AdvancedGeneralData.GrowthTimeFor then
-                    total = AdvancedGeneralData.GrowthTimeFor(
-                        data.GrowthTime or 0,
-                        weight and weight.Value or 1
-                    )
-                end
-            end)
-            pcall(function()
-                if total and AdvancedDayNight and AdvancedDayNight.GrowthRealRemaining then
-                    remaining = AdvancedDayNight.GrowthRealRemaining(placeTime.Value, total)
-                end
-            end)
-
-            if remaining == nil then
-                remaining = 999999
-            end
-
-            table.insert(result, {
-                Object = egg,
-                Key = egg:GetAttribute("EggKey"),
-                Name = egg.Name,
-                Remaining = remaining,
-            })
+    local _, root = GetCharacter()
+    if not plot or not base or not root then return false end
+    if (root.Position - (base.Position + Vector3.new(0, 5, 0))).Magnitude > 12 then
+        if not SafeTeleport(base.Position + Vector3.new(0, 5, 0)) then
+            return false
         end
     end
-
-    table.sort(result, function(a, b)
-        return a.Remaining < b.Remaining
-    end)
-    return result
+    return true
 end
 
-local function AdvancedPlaceEggsOnce()
-    if not Running or not State.AutoPlaceEggs then return false end
-    if AdvancedBasketCount() <= 0 and #AdvancedEggTools() == 0 then return false end
+local function VerifiedPlaceEggsOnce()
+    if not Running or not Verified.AutoPlace then return false end
+    if VerifiedBasketCount() <= 0 and #VerifiedEggTools() == 0 then return false end
 
-    AdvancedStatus("Auto Place: voltando para a base")
-    if not AdvancedHome() then return false end
-    task.wait(0.25)
+    VerifiedStatus("Auto Place: voltando para o plot")
+    if not VerifiedHome() then return false end
+    task.wait(0.20)
 
-    local nests = AdvancedFreeNests()
+    local nests = VerifiedFreeNests()
     if #nests == 0 then
-        AdvancedStatus("Auto Place: aguardando ninho livre")
+        VerifiedStatus("Auto Place: aguardando ninho livre")
         return false
     end
 
-    AdvancedWait(function()
-        return #AdvancedEggTools() > 0
-    end, 2)
+    if not VerifiedWait(function() return #VerifiedEggTools() > 0 end, 2) then
+        VerifiedStatus("Auto Place: ovo não apareceu na mochila")
+        return false
+    end
 
-    local placedAny = false
     for _, nest in ipairs(nests) do
-        if not Running or not State.AutoPlaceEggs then break end
-        local eggTools = AdvancedEggTools()
-        local tool = eggTools[1]
+        if not Running or not Verified.AutoPlace then break end
+        local tool = VerifiedEggTools()[1]
         if not tool then break end
+        if not VerifiedEquip(tool) then
+            VerifiedStatus("Auto Place: falha ao equipar ovo")
+            return false
+        end
+        task.wait(0.15)
 
-        if AdvancedEquip(tool) then
-            task.wait(0.15)
-            AdvancedStatus("Auto Place: colocando " .. tostring(tool.Name))
-            if AdvancedFire("EggPlaced", {NestId = nest.Name}) then
-                local confirmed = AdvancedWait(function()
-                    return nest.Parent and nest:GetAttribute("Occupied") == true
-                end, 3)
-                if confirmed then
-                    placedAny = true
-                else
-                    AdvancedStatus("Auto Place: confirmação não recebida")
-                    break
-                end
-            else
-                break
+        VerifiedStatus("Auto Place: " .. tostring(tool.Name))
+        VerifiedDismount()
+        if not VerifiedFire("EggPlaced", {NestId = nest.Name}) then
+            return false
+        end
+
+        local confirmed = VerifiedWait(function()
+            return nest.Parent and nest:GetAttribute("Occupied") == true
+        end, 3)
+
+        if not confirmed then
+            VerifiedStatus("Auto Place: entrega não confirmada")
+            return false
+        end
+    end
+
+    VerifiedStatus("Auto Place: concluído")
+    return true
+end
+
+local function VerifiedEggTimers()
+    local result = {}
+    local plot = GetMyPlot()
+    local eggs = plot and plot:FindFirstChild("Eggs")
+    if not eggs or type(EggData) ~= "table" then return result end
+
+    if type(VerifiedData.General) ~= "table" or type(VerifiedData.DayNight) ~= "table"
+        or type(VerifiedData.General.GrowthTimeFor) ~= "function"
+        or type(VerifiedData.DayNight.GrowthRealRemaining) ~= "function" then
+        return result
+    end
+
+    for _, egg in ipairs(eggs:GetChildren()) do
+        local info = egg:FindFirstChild("EggData", true)
+        local start = info and info:FindFirstChild("PlaceTime")
+        local weight = info and info:FindFirstChild("Weight")
+        local data = EggData[egg.Name]
+        local key = egg:GetAttribute("EggKey")
+
+        if data and start and key then
+            local total
+            local remaining
+            pcall(function()
+                total = VerifiedData.General.GrowthTimeFor(
+                    tonumber(data.GrowthTime) or 0,
+                    weight and tonumber(weight.Value) or 1
+                )
+                remaining = VerifiedData.DayNight.GrowthRealRemaining(start.Value, total)
+            end)
+
+            if total and remaining ~= nil then
+                table.insert(result, {
+                    Object = egg,
+                    Key = key,
+                    Name = egg.Name,
+                    Remaining = tonumber(remaining) or math.huge,
+                })
             end
         end
     end
 
-    if placedAny then
-        AdvancedStatus("Auto Place: concluído")
-    end
-    return placedAny
+    table.sort(result, function(a, b) return a.Remaining < b.Remaining end)
+    return result
 end
 
-local function AdvancedHatchReadyOnce()
-    if not Running or not State.AutoHatchEggs then return false end
-    local timers = AdvancedEggTimers()
+local function VerifiedHatchReadyOnce()
+    if not Running or not Verified.AutoHatch then return false end
+    local timers = VerifiedEggTimers()
     for _, entry in ipairs(timers) do
-        if not Running or not State.AutoHatchEggs then break end
-        if entry.Remaining <= 0 and entry.Key then
-            local character, root = GetCharacter()
-            if not character or not root then return false end
+        if not Running or not Verified.AutoHatch then break end
+        if entry.Remaining <= 0 then
+            local _, root = GetCharacter()
+            if not root or not entry.Object or not entry.Object.Parent then return false end
 
-            AdvancedStatus("Auto Hatch: " .. tostring(entry.Name))
-            SafeTeleport(entry.Object:GetPivot().Position + Vector3.new(0, 4, 0))
-            task.wait(0.20)
+            VerifiedStatus("Auto Hatch: " .. tostring(entry.Name))
+            VerifiedDismount()
+            if (root.Position - entry.Object:GetPivot().Position).Magnitude > 12 then
+                if not SafeTeleport(entry.Object:GetPivot().Position + Vector3.new(0, 4, 0)) then
+                    return false
+                end
+                task.wait(0.20)
+            end
 
-            if AdvancedFire("Hatch", {EggKey = entry.Key}) then
-                local gone = AdvancedWait(function()
+            if VerifiedFire("Hatch", {EggKey = entry.Key}) then
+                local gone = VerifiedWait(function()
                     return not entry.Object.Parent
                 end, 8)
                 if gone then
-                    AdvancedStatus("Auto Hatch: " .. tostring(entry.Name) .. " pronto")
+                    VerifiedStatus("Auto Hatch: concluído")
                     return true
                 end
             end
@@ -4066,77 +4050,91 @@ local function AdvancedHatchReadyOnce()
     return false
 end
 
-local function AdvancedClaimIndexOnce()
-    if not Running or not State.AutoIndexRewards then return false end
-    if type(AdvancedIndexData) ~= "table" then return false end
+local function VerifiedClaimIndexOnce()
+    if not Running or not Verified.AutoIndex or type(VerifiedData.IndexRewards) ~= "table" then return false end
 
     local saved = LocalPlayer:FindFirstChild("SavedData")
     local stageValue = saved and saved:FindFirstChild("IndexRewardStage")
     local ownedPets = saved and saved:FindFirstChild("OwnedPets")
-    local stage = stageValue and tonumber(stageValue.Value) or 0
-    local owned = ownedPets and tostring(ownedPets.Value or "") or ""
+    if not stageValue or not ownedPets then return false end
 
+    local stage = tonumber(stageValue.Value) or 0
     local reward
     local count
+
     pcall(function()
-        if AdvancedIndexData.StageAt then
-            reward = AdvancedIndexData.StageAt(stage)
+        if type(VerifiedData.IndexRewards.StageAt) == "function" then
+            reward = VerifiedData.IndexRewards.StageAt(stage)
         end
-        if AdvancedIndexData.DiscoveredCount then
-            count = AdvancedIndexData.DiscoveredCount(owned)
+        if type(VerifiedData.IndexRewards.DiscoveredCount) == "function" then
+            count = VerifiedData.IndexRewards.DiscoveredCount(tostring(ownedPets.Value or ""))
         end
     end)
 
-    if reward and count and count >= (tonumber(reward.Goal) or math.huge) then
-        AdvancedStatus("Auto Index: resgatando recompensa")
-        if AdvancedFire("ClaimIndexReward") then
-            local confirmed = AdvancedWait(function()
-                return stageValue and tonumber(stageValue.Value) ~= stage
-            end, 2)
-            if confirmed then
-                AdvancedStatus("Auto Index: recompensa resgatada")
-                return true
-            end
-        end
+    if not reward or count == nil or count < (tonumber(reward.Goal) or math.huge) then
+        return false
     end
 
+    VerifiedStatus("Auto Index: resgatando")
+    if not VerifiedFire("ClaimIndexReward") then return false end
+
+    local confirmed = VerifiedWait(function()
+        return tonumber(stageValue.Value) ~= stage
+    end, 3)
+
+    if confirmed then
+        VerifiedStatus("Auto Index: concluído")
+        return true
+    end
     return false
 end
 
-local function AdvancedPetRecords()
+local function VerifiedPetRecords()
     local result = {}
     local seen = {}
     local plot = GetMyPlot()
 
     local function add(object, placed)
-        if not object then return end
+        if not object or type(VerifiedData.Pets) ~= "table" then return end
         local key = object:GetAttribute("PetKey")
         local name = object:GetAttribute("PetName") or object.Name
-        if not key or seen[key] or type(AdvancedPetsData) ~= "table" then return end
-        local data = AdvancedPetsData[name]
-        if type(data) ~= "table" then return end
-
+        local data = VerifiedData.Pets[name]
+        if not key or not data or seen[key] then return end
         seen[key] = true
-        local weight = tonumber(object:GetAttribute("Weight")) or 10
+
         local age = tonumber(object:GetAttribute("Age")) or 1
+        local weight = tonumber(object:GetAttribute("Weight")) or 10
         local mutation = object:GetAttribute("Mutation")
-        local favorite = object:GetAttribute("Favorited") == true
-        local income = tonumber(data.Income) or 0
+        local spawnMutation = object:GetAttribute("SpawnMutation")
+        local factor = 1
+
+        pcall(function()
+            if VerifiedData.Mutations and type(VerifiedData.Mutations.CombinedFactor) == "function" then
+                factor = tonumber(VerifiedData.Mutations.CombinedFactor(mutation, spawnMutation)) or 1
+            end
+        end)
+
+        local income = (tonumber(data.Income) or 0) * weight / 10 * factor
         local speed = tonumber(data.Speed) or 0
+        pcall(function()
+            if VerifiedData.PetAging and type(VerifiedData.PetAging.DisplaySpeedFor) == "function" then
+                speed = tonumber(VerifiedData.PetAging.DisplaySpeedFor(tonumber(data.Speed) or 0, weight)) or speed
+                speed = speed * factor
+            end
+        end)
 
         table.insert(result, {
             Key = key,
             Name = name,
             Object = object,
             Placed = placed,
-            Tool = object:IsA("Tool") and object or AdvancedFindPetTool(key),
             Age = age,
             Weight = weight,
-            Mutation = mutation,
-            Favorite = favorite,
-            Rarity = data.Rarity or "Common",
-            Income = income * (weight / 10),
+            Income = income,
             Speed = speed,
+            Rarity = data.Rarity,
+            Mutation = mutation,
+            Favorite = object:GetAttribute("Favorited") == true,
         })
     end
 
@@ -4159,73 +4157,80 @@ local function AdvancedPetRecords()
         end
     end
 
+    local _, root = GetCharacter()
+    local joint = root and root:FindFirstChild("PetMountJoint")
+    if joint and joint.Part1 and joint.Part1.Parent then
+        add(joint.Part1.Parent, false)
+    end
+
     table.sort(result, function(a, b)
+        if Verified.BestMetric == "Speed" then
+            return (a.Speed or 0) > (b.Speed or 0)
+        end
         return (a.Income or 0) > (b.Income or 0)
     end)
     return result
 end
 
-local function AdvancedPlaceBestPetsOnce()
-    if not Running or not State.AutoBestPets then return false end
+local function VerifiedPlaceBestPetsOnce()
+    if not Running or not Verified.AutoBestPets then return false end
     local plot = GetMyPlot()
     local base = plot and plot:FindFirstChild("Baseplate")
     if not plot or not base then return false end
 
-    local pets = AdvancedPetRecords()
+    local pets = VerifiedPetRecords()
     if #pets == 0 then return false end
 
-    local metric = State.AdvancedBestMetric == "Speed" and "Speed" or "Income"
-    table.sort(pets, function(a, b)
-        local av = tonumber(a[metric]) or 0
-        local bv = tonumber(b[metric]) or 0
-        if av == bv then return tostring(a.Key) < tostring(b.Key) end
-        return av > bv
-    end)
-
     local saved = LocalPlayer:FindFirstChild("SavedData")
-    local maxPetsValue = LocalPlayer:GetAttribute("MaxPets")
+    local capacityValue = LocalPlayer:GetAttribute("MaxPets")
         or (saved and saved:FindFirstChild("MaxPets") and saved.MaxPets.Value)
         or 5
-    local capacity = math.max(1, tonumber(maxPetsValue) or 5)
+    local capacity = math.max(1, tonumber(capacityValue) or 5)
 
     local desired = {}
     for i = 1, math.min(capacity, #pets) do
         desired[pets[i].Key] = true
     end
 
-    AdvancedStatus("Auto Best Pets: ajustando formação")
+    VerifiedStatus("Auto Best Pets: preparando")
 
     for _, pet in ipairs(pets) do
-        if not Running or not State.AutoBestPets then return false end
+        if not Running or not Verified.AutoBestPets then return false end
         if pet.Placed and not desired[pet.Key] then
-            if AdvancedFire("PickupPet", pet.Key) then
-                AdvancedWait(function()
-                    return AdvancedFindPetTool(pet.Key) ~= nil
-                end, 3)
+            if not VerifiedFire("PickupPet", pet.Key) then return false end
+            if not VerifiedWait(function() return VerifiedFindPetTool(pet.Key) ~= nil end, 3) then
+                return false
             end
+        end
+    end
+
+    if LocalPlayer:GetAttribute("IsRiding") then
+        local dismount = VerifiedRemote("PetDismount")
+        if dismount then
+            pcall(function() dismount:FireServer() end)
+            task.wait(0.2)
         end
     end
 
     local cols = math.max(1, math.ceil(math.sqrt(capacity)))
     local spacing = math.min(9, (math.min(base.Size.X, base.Size.Z) - 12) / cols)
-
     local changed = false
+
     for i = 1, math.min(capacity, #pets) do
-        if not Running or not State.AutoBestPets then break end
+        if not Running or not Verified.AutoBestPets then break end
         local pet = pets[i]
-        local tool = AdvancedFindPetTool(pet.Key)
-        if tool then
-            AdvancedEquip(tool)
+        local tool = VerifiedFindPetTool(pet.Key)
+        if tool and VerifiedEquip(tool) then
             task.wait(0.15)
-            local pos = (base.CFrame * CFrame.new(
+            local position = (base.CFrame * CFrame.new(
                 ((i - 1) % cols - (cols - 1) / 2) * spacing,
                 4,
                 math.floor((i - 1) / cols) * spacing
             )).Position
 
-            if AdvancedFire("PlacePet", pet.Key, pos) then
-                local confirmed = AdvancedWait(function()
-                    for _, current in ipairs(AdvancedPetRecords()) do
+            if VerifiedFire("PlacePet", pet.Key, position) then
+                local confirmed = VerifiedWait(function()
+                    for _, current in ipairs(VerifiedPetRecords()) do
                         if current.Key == pet.Key and current.Placed then
                             return true
                         end
@@ -4237,11 +4242,11 @@ local function AdvancedPlaceBestPetsOnce()
         end
     end
 
-    AdvancedStatus(changed and "Auto Best Pets: concluído" or "Auto Best Pets: nada a alterar")
+    VerifiedStatus(changed and "Auto Best Pets: concluído" or "Auto Best Pets: nada a alterar")
     return changed
 end
 
-local function AdvancedFoodAmount(tool)
+local function VerifiedFoodAmount(tool)
     if not tool or not tool.Parent then return 0 end
     local data = tool:FindFirstChild("Data")
     local amount = data and data:FindFirstChild("Amount")
@@ -4251,58 +4256,55 @@ local function AdvancedFoodAmount(tool)
     return 1
 end
 
-local function AdvancedFoodCount(name)
+local function VerifiedFoodCount(name)
     local count = 0
-    for _, tool in ipairs(AdvancedTools()) do
+    for _, tool in ipairs(VerifiedTools()) do
         if tool.Name == name then
-            count = count + AdvancedFoodAmount(tool)
+            count = count + VerifiedFoodAmount(tool)
         end
     end
     return count
 end
 
-local function AdvancedSelectedPetSet()
-    return State.AdvancedSelectedPets or {}
+local function VerifiedCSVSet(text)
+    local result = {}
+    for item in tostring(text or ""):gmatch("[^,]+") do
+        item = item:match("^%s*(.-)%s*$")
+        if item ~= "" then result[item] = true end
+    end
+    return result
 end
 
-local function AdvancedSelectedFoodSet()
-    return State.AdvancedSelectedFoods or {}
-end
+local function VerifiedFeedOnce()
+    if not Running or not Verified.AutoFeed then return false end
+    if #VerifiedFoodNames == 0 then return false end
 
-local function AdvancedFeedOnce()
-    if not Running or not State.AutoFeedPets then return false end
-    if #AdvancedFoodNames == 0 then return false end
-
-    local pets = AdvancedPetRecords()
+    local pets = VerifiedPetRecords()
     for _, pet in ipairs(pets) do
-        if not Running or not State.AutoFeedPets then break end
-        if AdvancedSelectedPetSet()[pet.Name] and (pet.Age < 100) then
-            for _, foodName in ipairs(AdvancedFoodNames) do
-                if AdvancedSelectedFoodSet()[foodName] and AdvancedFoodCount(foodName) > 0 then
-                    local tool = AdvancedFindPetTool(pet.Key)
-                    if pet.Placed and pet.Object and pet.Object:IsA("Model") then
-                        SafeTeleport(pet.Object:GetPivot().Position + Vector3.new(0, 4, 0))
-                        task.wait(0.2)
-                    end
-
+        if not Running or not Verified.AutoFeed then break end
+        if Verified.SelectedPets[pet.Name] and pet.Age < Verified.FeedAgeMax then
+            for _, foodName in ipairs(VerifiedFoodNames) do
+                if Verified.SelectedFoods[foodName] and VerifiedFoodCount(foodName) > 0 then
                     local foodTool
-                    for _, candidate in ipairs(AdvancedTools()) do
+                    for _, candidate in ipairs(VerifiedTools()) do
                         if candidate.Name == foodName then
                             foodTool = candidate
                             break
                         end
                     end
-
-                    if foodTool and AdvancedEquip(foodTool) then
+                    if foodTool and VerifiedEquip(foodTool) then
+                        if pet.Placed and pet.Object and pet.Object:IsA("Model") then
+                            SafeTeleport(pet.Object:GetPivot().Position + Vector3.new(0, 4, 0))
+                            task.wait(0.20)
+                        end
                         task.wait(0.15)
-                        local before = AdvancedFoodAmount(foodTool)
-                        AdvancedStatus("Auto Feed: " .. tostring(pet.Name) .. " / " .. tostring(foodName))
-                        if AdvancedFire("FeedPet", pet.Key, foodName) then
-                            local consumed = AdvancedWait(function()
-                                return AdvancedFoodAmount(foodTool) < before
-                            end, 3)
-                            if consumed then
-                                AdvancedStatus("Auto Feed: concluído")
+                        local before = VerifiedFoodAmount(foodTool)
+                        VerifiedStatus("Auto Feed: " .. tostring(pet.Name))
+                        if VerifiedFire("FeedPet", pet.Key, foodName) then
+                            if VerifiedWait(function()
+                                return VerifiedFoodAmount(foodTool) < before
+                            end, 3) then
+                                VerifiedStatus("Auto Feed: concluído")
                                 return true
                             end
                         end
@@ -4314,48 +4316,46 @@ local function AdvancedFeedOnce()
     return false
 end
 
-local function AdvancedBuyFoodOnce()
-    if not Running or not State.AutoBuyFood then return false end
-    for _, name in ipairs(AdvancedFoodNames) do
-        if AdvancedSelectedFoodSet()[name] then
-            local before = AdvancedFoodCount(name)
-            AdvancedStatus("Auto Buy Food: " .. tostring(name))
-            if AdvancedFire("BuyWithCash", "Food", name) then
-                local ok = AdvancedWait(function()
-                    return AdvancedFoodCount(name) > before
-                end, 3)
-                if ok then
-                    AdvancedStatus("Auto Buy Food: comprado " .. tostring(name))
-                    return true
-                end
-            end
-        end
+local function VerifiedFoodStock(name)
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    local main = playerGui and playerGui:FindFirstChild("Main")
+    local shop = main and main:FindFirstChild("Shop")
+    local holders = shop and shop:FindFirstChild("Holders")
+    local food = holders and holders:FindFirstChild("Food")
+    local card = food and food:FindFirstChild(name)
+    local stock = card and card:FindFirstChild("Stock", true)
+    if stock and stock:IsA("TextLabel") then
+        return tonumber(stock.Text:match("(%d+)"))
     end
-    return false
+    return nil
 end
 
-local function AdvancedFavoriteOnce()
-    if not Running or not State.AutoFavorites then return false end
-    local selectedNames = State.AdvancedSelectedFavoritePets or {}
-    local selectedRarities = State.AdvancedSelectedFavoriteRarities or {}
+local function VerifiedBuyFoodOnce()
+    if not Running or not Verified.AutoBuyFood then return false end
+    if type(VerifiedData.Shop) ~= "table" or type(VerifiedData.Shop.Food) ~= "table" then return false end
 
-    for _, pet in ipairs(AdvancedPetRecords()) do
-        if not pet.Placed and not pet.Favorite then
-            local nameMatch = next(selectedNames) ~= nil and selectedNames[pet.Name] == true
-            local rarityMatch = next(selectedRarities) ~= nil and selectedRarities[pet.Rarity] == true
-            if nameMatch or rarityMatch then
-                AdvancedStatus("Auto Favorite: " .. tostring(pet.Name))
-                if AdvancedFire("FavoritePet", pet.Key) then
-                    local ok = AdvancedWait(function()
-                        for _, current in ipairs(AdvancedPetRecords()) do
-                            if current.Key == pet.Key and current.Favorite then
-                                return true
-                            end
-                        end
-                        return false
-                    end, 3)
-                    if ok then
-                        AdvancedStatus("Auto Favorite: concluído")
+    for _, name in ipairs(VerifiedFoodNames) do
+        if Verified.SelectedFoods[name] then
+            local item = VerifiedData.Shop.Food[name]
+            local price = item and tonumber(item.Price) or math.huge
+            local stock = VerifiedFoodStock(name)
+            local saved = LocalPlayer:FindFirstChild("SavedData")
+            local cashValue = saved and saved:FindFirstChild("Cash")
+            local cash = cashValue and tonumber(cashValue.Value) or 0
+
+            if stock == nil then
+                VerifiedStatus("Auto Buy Food: abra a loja de comida para carregar o estoque")
+                return false
+            end
+
+            if stock > 0 and cash >= price then
+                local before = VerifiedFoodCount(name)
+                VerifiedStatus("Auto Buy Food: " .. tostring(name))
+                if VerifiedFire("BuyWithCash", "Food", name) then
+                    if VerifiedWait(function()
+                        return VerifiedFoodCount(name) > before
+                    end, 3) then
+                        VerifiedStatus("Auto Buy Food: comprado " .. tostring(name))
                         return true
                     end
                 end
@@ -4365,239 +4365,80 @@ local function AdvancedFavoriteOnce()
     return false
 end
 
-local function AdvancedInitSell()
-    if AdvancedSellConnected then
-        return AdvancedSellAPI ~= nil
-    end
-    AdvancedSellConnected = true
-
-    local dialogue = ReplicatedStorage:FindFirstChild("Dialogue")
-    local modules = dialogue and dialogue:FindFirstChild("Modules")
-    local module = modules and modules:FindFirstChild("DialogueModule")
-    local remotes = dialogue and dialogue:FindFirstChild("Remotes")
-    if not module or not remotes then return false end
-
-    local ok, api = pcall(require, module)
-    if not ok or type(api) ~= "table" or type(api.SelectOption) ~= "function" then
-        return false
-    end
-    AdvancedSellAPI = api
-
-    for _, name in ipairs({"DialogueSend", "DialogueUpdate"}) do
-        local remote = remotes:FindFirstChild(name)
-        if remote and remote:IsA("RemoteEvent") then
-            Track(remote.OnClientEvent:Connect(function(data)
-                AdvancedSellDialogue = type(data) == "table" and data or nil
-                AdvancedSellDialogueRevision = AdvancedSellDialogueRevision + 1
-            end))
-        end
-    end
-
-    return true
-end
-
-local function AdvancedSellCandidate()
-    for _, pet in ipairs(AdvancedPetRecords()) do
+local function VerifiedFavoriteOnce()
+    if not Running or not Verified.AutoFavorites then return false end
+    for _, pet in ipairs(VerifiedPetRecords()) do
         if not pet.Placed and not pet.Favorite then
-            local selected = next(State.AdvancedSelectedFavoritePets or {})
-            local protected = selected and (State.AdvancedSelectedFavoritePets[pet.Name] == true)
-            if not protected then
-                return pet
+            local nameMatch = next(Verified.FavoritePets) ~= nil and Verified.FavoritePets[pet.Name] == true
+            local rarityMatch = next(Verified.FavoriteRarities) ~= nil and Verified.FavoriteRarities[pet.Rarity] == true
+            if nameMatch or rarityMatch then
+                VerifiedStatus("Auto Favorite: " .. tostring(pet.Name))
+                if VerifiedFire("FavoritePet", pet.Key) then
+                    local confirmed = VerifiedWait(function()
+                        for _, current in ipairs(VerifiedPetRecords()) do
+                            if current.Key == pet.Key and current.Favorite then
+                                return true
+                            end
+                        end
+                        return false
+                    end, 3)
+                    if confirmed then
+                        VerifiedStatus("Auto Favorite: concluído")
+                        return true
+                    end
+                end
             end
         end
     end
-    return nil
+    return false
 end
 
-local function AdvancedSellOnce()
-    if not Running or not State.AutoSellPets then return false end
-    if not AdvancedInitSell() or not AdvancedSellAPI then return false end
-    if type(fireproximityprompt) ~= "function" then
-        AdvancedStatus("Auto Sell: fireproximityprompt indisponível")
-        return false
-    end
-
-    local pet = AdvancedSellCandidate()
-    if not pet or not pet.Tool then return false end
-
-    local stalls = workspace:FindFirstChild("Stalls")
-    local stall = stalls and stalls:FindFirstChild("Sell")
-    local npc = stall and stall:FindFirstChild("Richie")
-    local vendorRoot = npc and npc:FindFirstChild("HumanoidRootPart")
-    local prompt = vendorRoot and vendorRoot:FindFirstChildOfClass("ProximityPrompt")
-    if not npc or not vendorRoot or not prompt then return false end
-
-    SafeTeleport(vendorRoot.Position + vendorRoot.CFrame.LookVector * 8)
-    task.wait(0.3)
-    AdvancedEquip(pet.Tool)
-    task.wait(0.2)
-
-    local options = LocalPlayer.PlayerGui:FindFirstChild("Options")
-    local button = options and options:FindFirstChild("I would like to sell this")
-    if not (button and button:IsA("GuiButton") and button.Visible and button.Active and options.Enabled) then
-        local beforeRevision = AdvancedSellDialogueRevision
-        pcall(function()
-            fireproximityprompt(prompt)
-        end)
-        AdvancedWait(function()
-            return AdvancedSellDialogueRevision > beforeRevision
-        end, 5)
-    end
-
-    options = LocalPlayer.PlayerGui:FindFirstChild("Options")
-    button = options and options:FindFirstChild("I would like to sell this")
-    if not (button and button:IsA("GuiButton") and button.Visible and button.Active and options.Enabled) then
-        AdvancedStatus("Auto Sell: diálogo indisponível")
-        return false
-    end
-
-    AdvancedStatus("Auto Sell: " .. tostring(pet.Name))
-    local requested = pcall(AdvancedSellAPI.SelectOption, "I would like to sell this")
-    if not requested then return false end
-
-    local sold = AdvancedWait(function()
-        if pet.Tool and pet.Tool.Parent then return false end
-        for _, current in ipairs(AdvancedPetRecords()) do
-            if current.Key == pet.Key then return false end
-        end
-        return true
-    end, 5)
-
-    AdvancedStatus(sold and "Auto Sell: concluído" or "Auto Sell: não confirmado")
-    return sold
+local function VerifiedAnyAdvancedBusy()
+    return Verified.Busy
 end
 
-local function AdvancedRunJob(name, callback)
-    if AdvancedAutomationBusy or not Running then return false end
-    AdvancedAutomationBusy = true
-    State.AdvancedAutomationBusy = true
-    AdvancedStatus(name)
+local function VerifiedRun(name, fn)
+    if not Running or Verified.Busy then return false end
+    if State.AutoFarm or State.AutoPickup then return false end
 
-    local epoch = AdvancedEpoch
-    local ok, result = pcall(function()
-        return callback()
-    end)
-
-    local valid = Running and epoch == AdvancedEpoch
-    AdvancedAutomationBusy = false
-    State.AdvancedAutomationBusy = false
-
+    Verified.Busy = true
+    VerifiedStatus(name)
+    local ok, result = pcall(fn)
+    Verified.Busy = false
     if not ok then
-        State.AdvancedLastError = tostring(result)
-        AdvancedStatus("Erro: " .. tostring(result))
+        VerifiedStatus("Erro: " .. tostring(result))
         return false
     end
-
-    if not valid then
-        AdvancedStatus("Interrompido")
-        return false
-    end
-
     return result ~= false
 end
 
-local function AdvancedStopAll()
-    AdvancedEpoch = AdvancedEpoch + 1
-    State.AutoPlaceEggs = false
-    State.AutoHatchEggs = false
-    State.AutoBestPets = false
-    State.AutoIndexRewards = false
-    State.AutoFavorites = false
-    State.AutoFeedPets = false
-    State.AutoBuyFood = false
-    State.AutoSellPets = false
-    AdvancedAutomationBusy = false
-    State.AdvancedAutomationBusy = false
-    AdvancedStatus("Automações avançadas paradas")
-end
-
-local function AdvancedRequestFunction()
-    return (syn and syn.request)
-        or (http and http.request)
-        or (request)
-        or (http_request)
-end
-
-local function AdvancedHopServer()
-    if not Running then return false end
-    local TeleportService = game:GetService("TeleportService")
-    local requester = AdvancedRequestFunction()
-    local candidates = {}
-
-    local function collect(body)
-        local ok, decoded = pcall(function()
-            return HttpService:JSONDecode(body)
-        end)
-        if not ok or type(decoded) ~= "table" then return end
-        for _, server in ipairs(decoded.data or {}) do
-            if tostring(server.id) ~= tostring(game.JobId)
-                and tonumber(server.playing) < tonumber(server.maxPlayers) then
-                table.insert(candidates, server)
-            end
-        end
-    end
-
-    if type(requester) == "function" then
-        local ok, response = pcall(requester, {
-            Url = "https://games.roblox.com/v1/games/" .. tostring(game.PlaceId) .. "/servers/Public?sortOrder=Asc&limit=50",
-            Method = "GET",
-            Headers = { ["Content-Type"] = "application/json" },
-        })
-        if ok and type(response) == "table" then
-            collect(response.Body or response.body or "")
-        end
-    else
-        local ok, body = pcall(function()
-            return game:HttpGet("https://games.roblox.com/v1/games/" .. tostring(game.PlaceId) .. "/servers/Public?sortOrder=Asc&limit=50")
-        end)
-        if ok then collect(body) end
-    end
-
-    table.sort(candidates, function(a, b)
-        return tonumber(a.playing) < tonumber(b.playing)
-    end)
-
-    local target = candidates[1]
-    if not target then
-        AdvancedStatus("Server Hop: nenhum servidor livre encontrado")
-        return false
-    end
-
-    AdvancedStatus("Server Hop: entrando em " .. tostring(target.playing) .. "/" .. tostring(target.maxPlayers))
-    return pcall(function()
-        TeleportService:TeleportToPlaceInstance(game.PlaceId, tostring(target.id), LocalPlayer)
-    end)
-end
-
-local function AdvancedTick()
-    if not Running or AdvancedAutomationBusy then return end
+local function VerifiedTick()
+    if not Running or VerifiedAnyAdvancedBusy() then return end
     if State.AutoFarm or State.AutoPickup then return end
 
-    if State.AutoIndexRewards and AdvancedReady("Index", 4) then
-        if AdvancedRunJob("Index", AdvancedClaimIndexOnce) then return end
+    if Verified.AutoPlace and VerifiedReady("Place", 2) then
+        if VerifiedRun("Auto Place", VerifiedPlaceEggsOnce) then return end
     end
-    if State.AutoHatchEggs and AdvancedReady("Hatch", 2) then
-        if AdvancedRunJob("Hatch", AdvancedHatchReadyOnce) then return end
+    if Verified.AutoHatch and VerifiedReady("Hatch", 2) then
+        if VerifiedRun("Auto Hatch", VerifiedHatchReadyOnce) then return end
     end
-    if State.AutoPlaceEggs and AdvancedReady("Place", 2) then
-        if AdvancedRunJob("Place", AdvancedPlaceEggsOnce) then return end
+    if Verified.AutoIndex and VerifiedReady("Index", 4) then
+        if VerifiedRun("Auto Index", VerifiedClaimIndexOnce) then return end
     end
-    if State.AutoBestPets and AdvancedReady("Best", 25) then
-        if AdvancedRunJob("Best Pets", AdvancedPlaceBestPetsOnce) then return end
+    if Verified.AutoBestPets and VerifiedReady("Best", 20) then
+        if VerifiedRun("Auto Best Pets", VerifiedPlaceBestPetsOnce) then return end
     end
-    if State.AutoFavorites and AdvancedReady("Favorites", 1) then
-        if AdvancedRunJob("Favorites", AdvancedFavoriteOnce) then return end
+    if Verified.AutoFavorites and VerifiedReady("Favorite", 1.5) then
+        if VerifiedRun("Auto Favorites", VerifiedFavoriteOnce) then return end
     end
-    if State.AutoFeedPets and AdvancedReady("Feed", 3) then
-        if AdvancedRunJob("Feed", AdvancedFeedOnce) then return end
+    if Verified.AutoFeed and VerifiedReady("Feed", 3) then
+        if VerifiedRun("Auto Feed", VerifiedFeedOnce) then return end
     end
-    if State.AutoBuyFood and AdvancedReady("BuyFood", 0.75) then
-        if AdvancedRunJob("Buy Food", AdvancedBuyFoodOnce) then return end
-    end
-    if State.AutoSellPets and AdvancedReady("Sell", 1) then
-        AdvancedRunJob("Sell", AdvancedSellOnce)
+    if Verified.AutoBuyFood and VerifiedReady("BuyFood", 1) then
+        VerifiedRun("Auto Buy Food", VerifiedBuyFoodOnce)
     end
 end
+
 
 --============================================================--
 -- GUI: RAYFIELD GEN2
@@ -4667,13 +4508,13 @@ end
 local okWindow, Window = pcall(function()
     return Rayfield:CreateWindow({
         name = "Montar um Pet",
-        subtitle = "MASTER v19 • Delta Mobile",
+        subtitle = "MASTER v20.1 • UI v15 • 2026 Verificado",
         sidebarLayout = true,
         toggleUIKeybind = "K",
         configuration = {
             autoSave = true,
             autoLoad = true,
-            fileName = "MontarUmPet_Master_v19",
+            fileName = "MontarUmPet_Master_v20_1",
         },
     })
 end)
@@ -4723,7 +4564,228 @@ local TabMove = Window:CreateTab({name = "Movimento"})
 local TabVisual = Window:CreateTab({name = "Visual"})
 local TabPerf = Window:CreateTab({name = "Performance"})
 local TabConfig = Window:CreateTab({name = "Config"})
-local Tab2026 = Window:CreateTab({name = "2026"})
+local okVerifiedTab, VerifiedTabError = pcall(function()
+    local Tab2026 = Window:CreateTab({name = "2026 Verificado"})
+
+    --============================================================--
+    -- TAB 2026 VERIFICADO
+    --============================================================--
+
+    Tab2026:CreateSection({name = "Funções verificadas 2026"})
+    Tab2026:CreateLabel("Somente APIs com implementação pública concreta: Place, Hatch, Index, Pets, Feed, Food e Favorite.")
+
+    Tab2026:CreateToggle({
+        name = "Auto Place Eggs",
+        flag = "V26_AutoPlace",
+        value = Verified.AutoPlace,
+        callback = function(value)
+            Verified.AutoPlace = value
+            VerifiedStatus(value and "Auto Place ativo" or "Auto Place parado")
+        end,
+    })
+
+    Tab2026:CreateToggle({
+        name = "Auto Hatch Eggs",
+        flag = "V26_AutoHatch",
+        value = Verified.AutoHatch,
+        callback = function(value)
+            Verified.AutoHatch = value
+            VerifiedStatus(value and "Auto Hatch ativo" or "Auto Hatch parado")
+        end,
+    })
+
+    Tab2026:CreateToggle({
+        name = "Auto Claim Index",
+        flag = "V26_AutoIndex",
+        value = Verified.AutoIndex,
+        callback = function(value)
+            Verified.AutoIndex = value
+            VerifiedStatus(value and "Auto Index ativo" or "Auto Index parado")
+        end,
+    })
+
+    Tab2026:CreateDropdown({
+        name = "Melhor pet por",
+        flag = "V26_BestMetric",
+        options = {"Income", "Speed"},
+        value = Verified.BestMetric,
+        callback = function(value)
+            Verified.BestMetric = value == "Speed" and "Speed" or "Income"
+        end,
+    })
+
+    Tab2026:CreateToggle({
+        name = "Auto Best Pets",
+        flag = "V26_AutoBestPets",
+        value = Verified.AutoBestPets,
+        callback = function(value)
+            Verified.AutoBestPets = value
+        end,
+    })
+
+    Tab2026:CreateInput({
+        name = "Pets para alimentar",
+        flag = "V26_SelectedPets",
+        description = "Nomes separados por vírgula. Ex.: Cat, Dog",
+        value = "",
+        callback = function(value)
+            Verified.SelectedPets = VerifiedCSVSet(value)
+        end,
+    })
+
+    Tab2026:CreateInput({
+        name = "Comidas para usar/comprar",
+        flag = "V26_SelectedFoods",
+        description = "Nomes separados por vírgula. Ex.: Grass, Apple",
+        value = "Grass",
+        callback = function(value)
+            Verified.SelectedFoods = VerifiedCSVSet(value)
+        end,
+    })
+
+    Tab2026:CreateInput({
+        name = "Idade máxima para alimentar",
+        flag = "V26_FeedAgeMax",
+        description = "O script não alimenta pets acima desse valor.",
+        numeric = true,
+        value = tostring(Verified.FeedAgeMax),
+        callback = function(value)
+            Verified.FeedAgeMax = math.clamp(math.floor(tonumber(value) or 100), 1, 100)
+        end,
+    })
+
+    Tab2026:CreateToggle({
+        name = "Auto Feed Pets",
+        flag = "V26_AutoFeed",
+        value = Verified.AutoFeed,
+        callback = function(value)
+            Verified.AutoFeed = value
+        end,
+    })
+
+    Tab2026:CreateToggle({
+        name = "Auto Buy Food",
+        flag = "V26_AutoBuyFood",
+        value = Verified.AutoBuyFood,
+        callback = function(value)
+            Verified.AutoBuyFood = value
+        end,
+    })
+
+    Tab2026:CreateInput({
+        name = "Pets para favoritar",
+        flag = "V26_FavoritePets",
+        description = "Nomes separados por vírgula.",
+        value = "",
+        callback = function(value)
+            Verified.FavoritePets = VerifiedCSVSet(value)
+        end,
+    })
+
+    Tab2026:CreateInput({
+        name = "Raridades para favoritar",
+        flag = "V26_FavoriteRarities",
+        description = "Ex.: Mythic, Ethereal, Divine",
+        value = "Mythic,Ethereal,Divine",
+        callback = function(value)
+            Verified.FavoriteRarities = VerifiedCSVSet(value)
+        end,
+    })
+
+    Tab2026:CreateToggle({
+        name = "Auto Favorites",
+        flag = "V26_AutoFavorites",
+        value = Verified.AutoFavorites,
+        callback = function(value)
+            Verified.AutoFavorites = value
+        end,
+    })
+
+    Tab2026:CreateSection({name = "Diagnóstico"})
+
+    Tab2026:CreateButton({
+        name = "Verificar APIs 2026",
+        callback = function()
+            local reloadOk = pcall(VerifiedLoadModules)
+            if not reloadOk then
+                VerifiedStatus("Falha ao carregar módulos 2026")
+            end
+            local names = {"EggPlaced", "Hatch", "PickupPet", "PlacePet", "PetDismount", "FeedPet", "BuyWithCash", "FavoritePet", "ClaimIndexReward"}
+            local ok = {}
+            for _, name in ipairs(names) do
+                if VerifiedRemote(name) then table.insert(ok, name) end
+            end
+            table.sort(ok)
+            local text = #ok > 0 and ("Detectadas: " .. table.concat(ok, ", ")) or "Nenhuma API avançada detectada."
+            pcall(function()
+                Window:Notify({title = "2026 Verificado", content = text, duration = 7})
+            end)
+        end,
+    })
+
+    Tab2026:CreateButton({
+        name = "Executar Auto Place agora",
+        callback = function()
+            Verified.AutoPlace = true
+            VerifiedRun("Auto Place manual", VerifiedPlaceEggsOnce)
+            Verified.AutoPlace = false
+        end,
+    })
+
+    Tab2026:CreateButton({
+        name = "Executar Hatch agora",
+        callback = function()
+            Verified.AutoHatch = true
+            VerifiedRun("Hatch manual", VerifiedHatchReadyOnce)
+            Verified.AutoHatch = false
+        end,
+    })
+
+    Tab2026:CreateButton({
+        name = "Executar Index agora",
+        callback = function()
+            Verified.AutoIndex = true
+            VerifiedRun("Index manual", VerifiedClaimIndexOnce)
+            Verified.AutoIndex = false
+        end,
+    })
+
+    Tab2026:CreateButton({
+        name = "Parar automações 2026",
+        callback = function()
+            Verified.AutoPlace = false
+            Verified.AutoHatch = false
+            Verified.AutoIndex = false
+            Verified.AutoBestPets = false
+            Verified.AutoFeed = false
+            Verified.AutoBuyFood = false
+            Verified.AutoFavorites = false
+            VerifiedStatus("Automações 2026 paradas")
+        end,
+    })
+
+    Tab2026:CreateButton({
+        name = "Mostrar status 2026",
+        callback = function()
+            pcall(function()
+                Window:Notify({title = "2026 Verificado", content = Verified.Status, duration = 5})
+            end)
+        end,
+    })
+end)
+
+if not okVerifiedTab then
+    warn("Montar um Pet: aba 2026 indisponível: " .. tostring(VerifiedTabError))
+end
+
+-- Tenta atualizar os módulos depois que a interface já está na tela.
+task.defer(function()
+    if not Running then return end
+    task.wait(0.35)
+    pcall(function() VerifiedLoadModules() end)
+    VerifiedModulesLoaded = true
+end)
+
 
 --============================================================--
 -- FARM TAB
@@ -5442,239 +5504,6 @@ TabPerf:CreateButton({
     end,
 })
 
-
---============================================================--
--- AUTOMACAO 2026 TAB
---============================================================--
-
-Tab2026:CreateSection({name = "Automação verificada"})
-Tab2026:CreateLabel("Remotes/estruturas confirmados: EggPlaced, Hatch, PickupPet, PlacePet, FeedPet, BuyWithCash, FavoritePet e ClaimIndexReward.")
-
-Tab2026:CreateToggle({
-    name = "Auto Place Eggs",
-    flag = "AutoPlaceEggs",
-    value = State.AutoPlaceEggs,
-    callback = function(value)
-        State.AutoPlaceEggs = value
-        if value then
-            State.ReturnToPlot = true
-            AdvancedStatus("Auto Place ativo")
-        end
-    end,
-})
-
-Tab2026:CreateToggle({
-    name = "Auto Hatch Eggs",
-    flag = "AutoHatchEggs",
-    value = State.AutoHatchEggs,
-    callback = function(value)
-        State.AutoHatchEggs = value
-        AdvancedStatus(value and "Auto Hatch ativo" or "Auto Hatch parado")
-    end,
-})
-
-Tab2026:CreateToggle({
-    name = "Auto Best Pets",
-    flag = "AutoBestPets",
-    value = State.AutoBestPets,
-    callback = function(value)
-        State.AutoBestPets = value
-        AdvancedStatus(value and "Auto Best Pets ativo" or "Auto Best Pets parado")
-    end,
-})
-
-Tab2026:CreateDropdown({
-    name = "Métrica do Best Pet",
-    flag = "AdvancedBestMetric",
-    options = {"Income", "Speed"},
-    value = State.AdvancedBestMetric,
-    callback = function(value)
-        if value == "Income" or value == "Speed" then
-            State.AdvancedBestMetric = value
-        end
-    end,
-})
-
-Tab2026:CreateToggle({
-    name = "Auto Claim Index",
-    flag = "AutoIndexRewards",
-    value = State.AutoIndexRewards,
-    callback = function(value)
-        State.AutoIndexRewards = value
-    end,
-})
-
-Tab2026:CreateToggle({
-    name = "Auto Favorites",
-    flag = "AutoFavorites",
-    value = State.AutoFavorites,
-    callback = function(value)
-        State.AutoFavorites = value
-    end,
-})
-
-Tab2026:CreateDropdown({
-    name = "Pets para favoritar",
-    flag = "AdvancedSelectedFavoritePets",
-    options = AdvancedPetNames,
-    multiSelect = true,
-    value = {},
-    placeholder = "Nenhum: use raridades abaixo",
-    callback = function(value)
-        State.AdvancedSelectedFavoritePets = CopyArrayToSet(value)
-    end,
-})
-
-Tab2026:CreateDropdown({
-    name = "Raridades para favoritar",
-    flag = "AdvancedSelectedFavoriteRarities",
-    options = Rarities,
-    multiSelect = true,
-    value = {},
-    placeholder = "Nenhuma",
-    callback = function(value)
-        State.AdvancedSelectedFavoriteRarities = CopyArrayToSet(value)
-    end,
-})
-
-Tab2026:CreateToggle({
-    name = "Auto Feed Pets",
-    flag = "AutoFeedPets",
-    value = State.AutoFeedPets,
-    callback = function(value)
-        State.AutoFeedPets = value
-    end,
-})
-
-Tab2026:CreateDropdown({
-    name = "Pets para alimentar",
-    flag = "AdvancedSelectedPets",
-    options = AdvancedPetNames,
-    multiSelect = true,
-    value = {},
-    placeholder = "Selecione os pets",
-    callback = function(value)
-        State.AdvancedSelectedPets = CopyArrayToSet(value)
-    end,
-})
-
-Tab2026:CreateDropdown({
-    name = "Comidas permitidas",
-    flag = "AdvancedSelectedFoods",
-    options = AdvancedFoodNames,
-    multiSelect = true,
-    value = {},
-    placeholder = "Selecione as comidas",
-    callback = function(value)
-        State.AdvancedSelectedFoods = CopyArrayToSet(value)
-    end,
-})
-
-Tab2026:CreateToggle({
-    name = "Auto Buy Food",
-    flag = "AutoBuyFood",
-    value = State.AutoBuyFood,
-    callback = function(value)
-        State.AutoBuyFood = value
-    end,
-})
-
-Tab2026:CreateToggle({
-    name = "Auto Sell Pets (seguro)",
-    flag = "AutoSellPets",
-    description = "Só vende pets do inventário não favoritos e respeita a seleção de proteção.",
-    value = State.AutoSellPets,
-    callback = function(value)
-        State.AutoSellPets = value
-    end,
-})
-
-Tab2026:CreateSection({name = "Ações manuais"})
-
-Tab2026:CreateButton({
-    name = "Colocar ovos agora",
-    callback = function()
-        local old = State.AutoPlaceEggs
-        State.AutoPlaceEggs = true
-        AdvancedRunJob("Place manual", AdvancedPlaceEggsOnce)
-        State.AutoPlaceEggs = old
-    end,
-})
-
-Tab2026:CreateButton({
-    name = "Chocar ovos prontos agora",
-    callback = function()
-        AdvancedRunJob("Hatch manual", function()
-            local old = State.AutoHatchEggs
-            State.AutoHatchEggs = true
-            local result = AdvancedHatchReadyOnce()
-            State.AutoHatchEggs = old
-            return result
-        end)
-    end,
-})
-
-Tab2026:CreateButton({
-    name = "Organizar melhores pets",
-    callback = function()
-        State.AutoBestPets = true
-        AdvancedRunJob("Best Pets manual", AdvancedPlaceBestPetsOnce)
-        State.AutoBestPets = false
-    end,
-})
-
-Tab2026:CreateButton({
-    name = "Resgatar Index agora",
-    callback = function()
-        local old = State.AutoIndexRewards
-        State.AutoIndexRewards = true
-        AdvancedRunJob("Index manual", AdvancedClaimIndexOnce)
-        State.AutoIndexRewards = old
-    end,
-})
-
-Tab2026:CreateButton({
-    name = "Parar automações 2026",
-    callback = function()
-        AdvancedStopAll()
-    end,
-})
-
-Tab2026:CreateSection({name = "Diagnóstico"})
-
-Tab2026:CreateButton({
-    name = "Verificar APIs 2026",
-    callback = function()
-        local names = {"EggPlaced", "Hatch", "PickupPet", "PlacePet", "FeedPet", "BuyWithCash", "FavoritePet", "ClaimIndexReward"}
-        local found = {}
-        for _, name in ipairs(names) do
-            if AdvancedRemote(name) then
-                table.insert(found, name)
-            end
-        end
-        pcall(function()
-            Window:Notify({
-                title = "APIs 2026",
-                content = #found > 0 and ("Encontradas: " .. table.concat(found, ", ")) or "Nenhuma API avançada detectada.",
-                duration = 6,
-            })
-        end)
-    end,
-})
-
-Tab2026:CreateButton({
-    name = "Status 2026",
-    callback = function()
-        pcall(function()
-            Window:Notify({
-                title = "Automação 2026",
-                content = tostring(AdvancedLastStatus),
-                duration = 5,
-            })
-        end)
-    end,
-})
-\nTab2026:CreateSection({name = "Servidor"})\n\nTab2026:CreateButton({\n    name = "Reentrar no servidor",\n    description = "Volta para o mesmo PlaceId atual.",\n    callback = function()\n        pcall(function()\n            game:GetService("TeleportService"):Teleport(game.PlaceId, LocalPlayer)\n        end)\n    end,\n})\n\nTab2026:CreateButton({\n    name = "Server Hop",\n    description = "Procura um servidor público diferente e com vaga.",\n    callback = function()\n        AdvancedHopServer()\n    end,\n})\n
 --============================================================--
 -- CONFIG TAB
 --============================================================--
@@ -5682,7 +5511,7 @@ Tab2026:CreateButton({
 TabConfig:CreateSection({name = "Configuração"})
 
 local CONFIG_FOLDER = "MontarUmPet"
-local CONFIG_FILE = "MontarUmPet_MASTER_v19_config.json"
+local CONFIG_FILE = "MontarUmPet_MASTER_v20_2026_VERIFICADO_config.json"
 
 local function CanUseConfigFiles()
     return type(writefile) == "function"
@@ -5716,7 +5545,7 @@ local function SaveConfigNow()
     if CanUseConfigFiles() then
         EnsureConfigFolder()
 
-        local data = { __version = 19 }
+        local data = { __version = 20 }
         pcall(function()
             for flagName, flag in pairs(Rayfield.Flags or {}) do
                 if type(flag) == "table" then
@@ -5886,6 +5715,14 @@ TabConfig:CreateButton({
         State.InfiniteJump = false
         State.AntiAFK = false
         State.Flying = false
+        Verified.AutoPlace = false
+        Verified.AutoHatch = false
+        Verified.AutoIndex = false
+        Verified.AutoBestPets = false
+        Verified.AutoFeed = false
+        Verified.AutoBuyFood = false
+        Verified.AutoFavorites = false
+        Verified.Busy = false
 
         StopSpeed()
         CancelGlide()
@@ -5920,17 +5757,6 @@ TabConfig:CreateButton({
 -- LOOPS CENTRALIZADOS
 --============================================================--
 
-local AdvancedLoop = task.spawn(function()
-    while Running do
-        task.wait(0.35)
-        if Running then
-            AdvancedTick()
-        end
-    end
-end)
-
-
-
 local FarmLoop = task.spawn(function()
     while Running do
         task.wait(
@@ -5941,7 +5767,7 @@ local FarmLoop = task.spawn(function()
             )
         )
 
-        if Running and State.AutoFarm and not FarmBusy and not AdvancedAutomationBusy then
+        if Running and State.AutoFarm and not FarmBusy then
             FarmOnce()
         end
     end
@@ -5951,8 +5777,22 @@ local PickupLoop = task.spawn(function()
     while Running do
         task.wait(0.25)
 
-        if Running and State.AutoPickup and not State.AutoFarm and not PickupBusy and not AdvancedAutomationBusy then
+        if Running and State.AutoPickup and not State.AutoFarm and not PickupBusy then
             AutoPickupOnce()
+        end
+    end
+end)
+
+
+--============================================================--
+-- LOOP 2026 VERIFICADO
+--============================================================--
+
+local VerifiedLoop = task.spawn(function()
+    while Running do
+        task.wait(0.20)
+        if Running then
+            VerifiedTick()
         end
     end
 end)
@@ -5978,17 +5818,14 @@ StopHandler = function()
     State.InfiniteJump = false
     State.AntiAFK = false
     State.Flying = false
-    State.AutoPlaceEggs = false
-    State.AutoHatchEggs = false
-    State.AutoBestPets = false
-    State.AutoIndexRewards = false
-    State.AutoFavorites = false
-    State.AutoFeedPets = false
-    State.AutoBuyFood = false
-    State.AutoSellPets = false
-    AdvancedEpoch = AdvancedEpoch + 1
-    AdvancedAutomationBusy = false
-    State.AdvancedAutomationBusy = false
+    Verified.AutoPlace = false
+    Verified.AutoHatch = false
+    Verified.AutoIndex = false
+    Verified.AutoBestPets = false
+    Verified.AutoFeed = false
+    Verified.AutoBuyFood = false
+    Verified.AutoFavorites = false
+    Verified.Busy = false
     State.ESPEnabled = false
     State.PlayerESP = false
     State.HidePlayers = false
@@ -6058,6 +5895,5 @@ end
 
 ENV[TOKEN_NAMES[1]] = {
     Stop = StopHandler,
-    AdvancedStop = AdvancedStopAll,
 }
 
