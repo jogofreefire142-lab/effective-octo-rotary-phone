@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v16 AUTOFARM FLIGHT + NOCLIP + STATE MACHINE + SAFE HOLD
+-- MONTAR UM PET - MASTER v18 AUTOFARM FLIGHT + NOCLIP + STATE MACHINE + SAFE HOLD
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 (stable)
 -- Config: salvamento manual + persistência do Rayfield
@@ -120,17 +120,10 @@ if not ReplaceEvent or not ReplaceEvent:IsA("BindableEvent") then
     ReplaceEvent.Parent = ControlFolder
 end
 
--- Importantíssimo: dispara ANTES de conectar a execução nova.
-pcall(function()
-    ReplaceEvent:Fire()
-end)
-
-task.wait(0.10)
-
+-- A geração só será publicada depois que a nova interface carregar.
+-- Assim uma falha do loader não apaga a interface que já estava funcionando.
 local generation = tonumber(ControlFolder:GetAttribute("Generation")) or 0
-generation = generation + 1
-ControlFolder:SetAttribute("Generation", generation)
-local MY_GENERATION = generation
+local MY_GENERATION = generation + 1
 
 local Running = true
 local StopHandler = nil
@@ -228,7 +221,7 @@ local function LooksLikeOurRayfieldGui(gui)
                 or t:find("MASTER v6", 1, true)
                 or t:find("MASTER v7", 1, true)
                 or t:find("MASTER v14", 1, true)
-                or t:find("MASTER v16", 1, true) then
+                or t:find("MASTER v17", 1, true) then
                 hasHubSubtitle = true
             end
 
@@ -3889,13 +3882,13 @@ end
 local okWindow, Window = pcall(function()
     return Rayfield:CreateWindow({
         name = "Montar um Pet",
-        subtitle = "MASTER v16 • Delta Mobile",
+        subtitle = "MASTER v18 • Delta Mobile",
         sidebarLayout = true,
         toggleUIKeybind = "K",
         configuration = {
             autoSave = true,
             autoLoad = true,
-            fileName = "MontarUmPet_Master_v15",
+            fileName = "MontarUmPet_Master_v17",
         },
     })
 end)
@@ -3915,7 +3908,26 @@ if not okWindow or not Window then
     return
 end
 
-if not Running or (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
+-- A nova janela existe. Só agora esta execução assume a geração atual.
+-- As versões anteriores detectam a troca pela Generation e se encerram.
+ControlFolder:SetAttribute("Generation", MY_GENERATION)
+task.wait(0.08)
+
+if not Running then
+    pcall(function()
+        if Rayfield and Rayfield.Destroy then
+            Rayfield:Destroy()
+        end
+    end)
+    pcall(function()
+        if GuardConnection then GuardConnection:Disconnect() end
+        if ReplaceConnection then ReplaceConnection:Disconnect() end
+        if Guard then Guard:Destroy() end
+    end)
+    return
+end
+
+if (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
     pcall(function()
         if Rayfield and Rayfield.Destroy then
             Rayfield:Destroy()
@@ -3952,7 +3964,9 @@ local TabConfig = Window:CreateTab({name = "Config"})
 
 TabFarm:CreateSection({name = "Automação principal"})
 
-TabFarm:CreateLabel("Ciclo: validar base → selecionar/confirmar alvo → subir → cruzar obstáculos → alinhar → descer com margem segura → estabilizar → coletar e confirmar → subir → voltar à base → estabilizar → entregar → pausar → subir → repetir.")
+pcall(function()
+    TabFarm:CreateLabel("Auto Farm completo — coleta, retorno e entrega")
+end)
 
 TabFarm:CreateToggle({
     name = "Auto Farm",
@@ -4662,7 +4676,9 @@ TabVisual:CreateToggle({
 
 TabPerf:CreateSection({name = "Desempenho local"})
 
-TabPerf:CreateLabel("Estas opções mexem só na renderização local. Não alteram o Auto Farm nem a lógica do script.")
+pcall(function()
+    TabPerf:CreateLabel("Desempenho local — não altera a lógica do Auto Farm")
+end)
 
 TabPerf:CreateSlider({
     name = "FPS Cap",
@@ -4751,7 +4767,7 @@ local function SaveConfigNow()
     if CanUseConfigFiles() then
         EnsureConfigFolder()
 
-        local data = { __version = 16 }
+        local data = { __version = 17 }
         pcall(function()
             for flagName, flag in pairs(Rayfield.Flags or {}) do
                 if type(flag) == "table" then
