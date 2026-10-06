@@ -296,7 +296,7 @@ local State = {
 
     -- Auto Farm engine
     FarmMoveMode = "Instant",      -- Instant or Tween
-    FarmPickupMode = "Auto",       -- Auto, Prompt, Remote
+    FarmPickupMode = "Remote",     -- Auto, Prompt, Remote
     FarmPickupRetries = 6,
     FarmPickupWait = 0.25,
     FarmPickupRadius = 12,
@@ -572,6 +572,33 @@ local RarityPriority = {
     Divine = 7,
 }
 
+local KnownEggLuck = {
+    ["Cherub Egg"] = 1e12,
+    ["Blackhole Egg"] = 1e11,
+    ["Galaxy Egg"] = 1.5e9,
+    ["Aurora Egg"] = 3e8,
+    ["Soul Egg"] = 7e6,
+    ["Sinister Egg"] = 3e6,
+    ["Flaming Egg"] = 1e6,
+    ["Dominus Egg"] = 7e5,
+    ["Asteroid Egg"] = 5e5,
+    ["Skull Egg"] = 2.5e5,
+    ["Crystal Egg"] = 1.5e5,
+    ["Diamond Egg"] = 9e4,
+    ["Golden Egg"] = 3e4,
+    ["Glass Egg"] = 1e4,
+    ["Ice Egg"] = 3e3,
+    ["Slime Egg"] = 1e3,
+    ["Flower Egg"] = 750,
+    ["Mushroom Egg"] = 500,
+    ["Leaf Egg"] = 200,
+    ["Stone Egg"] = 100,
+    ["Easter Egg"] = 50,
+    ["Cracked Egg"] = 30,
+    ["Brown Egg"] = 5,
+    ["White Egg"] = 1,
+}
+
 local function GetEggRarity(eggName, instance)
     local data = EggData[eggName]
     if type(data) == "table" and type(data.Rarity) == "string" then
@@ -686,7 +713,16 @@ local function GetEggLuck(instance)
     end
 
     local value = instance:GetAttribute("Luck")
-    return type(value) == "number" and value or nil
+    if type(value) == "number" then
+        return value
+    end
+
+    local eggName = instance:GetAttribute("Egg")
+    if type(eggName) == "string" then
+        return KnownEggLuck[eggName]
+    end
+
+    return KnownEggLuck[instance.Name]
 end
 
 local function GetRealRenderedEggName(model)
@@ -922,6 +958,115 @@ local function SelectBestCandidate(candidates)
                 if candidate.Luck > best.Luck then
                     best = candidate
                 elseif candidate.Luck == best.Luck and candidate.Distance < best.Distance then
+                    best = candidate
+                end
+            end
+        end
+    end
+
+    return best
+end
+
+--============================================================--
+-- AUTO FARM: SCANNER DIRETO DO SERVERDATA.ACTIVEEGGS
+--============================================================--
+
+local function GetFarmCandidates()
+    local _, root = GetCharacter()
+    local activeEggs = GetActiveEggFolder()
+
+    if not root or not activeEggs then
+        return {}
+    end
+
+    local result = {}
+
+    for _, egg in ipairs(activeEggs:GetChildren()) do
+        if egg:IsA("Configuration") then
+            local eggName = egg:GetAttribute("Egg")
+
+            if type(eggName) == "string" and MeetsFilters(egg, eggName) then
+                local position = egg:GetAttribute("Position")
+
+                if typeof(position) == "CFrame" then
+                    position = position.Position
+                end
+
+                if typeof(position) ~= "Vector3" then
+                    position = GetEggPosition(egg)
+                end
+
+                if position then
+                    local weight = GetEggWeight(egg) or 0
+                    local luck = GetEggLuck(egg) or 0
+                    local rarity = GetEggRarity(eggName, egg)
+                    local uid = egg.Name
+
+                    if not FailedFarmTargets[uid]
+                        or os.clock() >= FailedFarmTargets[uid] then
+
+                        result[#result + 1] = {
+                            Instance = egg,
+                            UID = uid,
+                            ID = uid,
+                            Name = eggName,
+                            Position = position,
+                            Distance = (position - root.Position).Magnitude,
+                            Weight = weight,
+                            Luck = luck,
+                            Rarity = rarity,
+                            RarityScore = RarityPriority[rarity] or 0,
+                            Mutation = GetEggMutation(egg),
+                        }
+                    end
+                end
+            end
+        end
+    end
+
+    return result
+end
+
+local function SelectBestFarmCandidate(candidates)
+    local best = nil
+
+    for _, candidate in ipairs(candidates) do
+        if not best then
+            best = candidate
+        elseif State.TargetPriority == "Closest" then
+            if candidate.Distance < best.Distance then
+                best = candidate
+            end
+        elseif State.TargetPriority == "Highest Weight" then
+            if candidate.Weight > best.Weight then
+                best = candidate
+            elseif candidate.Weight == best.Weight
+                and candidate.Luck > best.Luck then
+                best = candidate
+            elseif candidate.Weight == best.Weight
+                and candidate.Luck == best.Luck
+                and candidate.Distance < best.Distance then
+                best = candidate
+            end
+        elseif State.TargetPriority == "Highest Luck" then
+            if candidate.Luck > best.Luck then
+                best = candidate
+            elseif candidate.Luck == best.Luck
+                and candidate.RarityScore > best.RarityScore then
+                best = candidate
+            elseif candidate.Luck == best.Luck
+                and candidate.RarityScore == best.RarityScore
+                and candidate.Distance < best.Distance then
+                best = candidate
+            end
+        else
+            if candidate.RarityScore > best.RarityScore then
+                best = candidate
+            elseif candidate.RarityScore == best.RarityScore then
+                if candidate.Luck > best.Luck then
+                    best = candidate
+                elseif candidate.Luck == best.Luck
+                    and candidate.Distance < best.Distance then
                     best = candidate
                 end
             end
@@ -1265,27 +1410,32 @@ local function ConfirmPickup(candidate, beforeCount, timeout)
     return false
 end
 
-local function TryPromptPickup(candidate)
-    if not candidate or type(fireproximityprompt) ~= "function" then
-        return false
+local function GetLiveActiveEgg(uid)
+    local activeEggs = GetActiveEggFolder()
+    if not activeEggs or not uid then
+        return nil
     end
 
-    local prompt = FindPromptOnEgg(candidate)
-    if not prompt then
-        return false
+    return activeEggs:FindFirstChild(uid)
+end
+
+local function ConfirmFarmPickup(candidate, beforeBasket, timeout)
+    local deadline = os.clock() + (timeout or 2)
+
+    while FarmIsRunning() and os.clock() < deadline do
+        if GetBasketCount() > beforeBasket then
+            return true
+        end
+
+        if candidate and candidate.UID
+            and not GetLiveActiveEgg(candidate.UID) then
+            return true
+        end
+
+        task.wait(0.05)
     end
 
-    local before = GetBasketCount()
-
-    local ok = pcall(function()
-        fireproximityprompt(prompt)
-    end)
-
-    if not ok then
-        return false
-    end
-
-    return ConfirmPickup(candidate, before, 2)
+    return false
 end
 
 local function TryRemotePickup(candidate)
@@ -1295,23 +1445,54 @@ local function TryRemotePickup(candidate)
         return false
     end
 
-    local pickupId = candidate.ID
-
-    if not pickupId then
+    local uid = candidate and (candidate.UID or candidate.ID)
+    if not uid then
         return false
     end
 
-    local before = GetBasketCount()
+    local beforeBasket = GetBasketCount()
 
     local ok = pcall(function()
-        remote:FireServer(pickupId)
+        remote:FireServer(uid)
     end)
 
     if not ok then
         return false
     end
 
-    return ConfirmPickup(candidate, before, 2)
+    return ConfirmFarmPickup(candidate, beforeBasket, 2)
+end
+
+local function FindPromptOnEgg(candidate)
+    local model = candidate and candidate.Rendered
+    if not model or not model.Parent then
+        return nil
+    end
+
+    return model:FindFirstChildWhichIsA("ProximityPrompt", true)
+end
+
+local function TryPromptPickup(candidate)
+    if type(fireproximityprompt) ~= "function" then
+        return false
+    end
+
+    local prompt = FindPromptOnEgg(candidate)
+    if not prompt then
+        return false
+    end
+
+    local beforeBasket = GetBasketCount()
+
+    local ok = pcall(function()
+        fireproximityprompt(prompt)
+    end)
+
+    if not ok then
+        return false
+    end
+
+    return ConfirmFarmPickup(candidate, beforeBasket, 2)
 end
 
 local function AttemptPickup(candidate)
@@ -1320,50 +1501,49 @@ local function AttemptPickup(candidate)
     end
 
     local retries = math.clamp(
-        math.floor(tonumber(State.FarmPickupRetries) or 6),
+        math.floor(tonumber(State.FarmPickupRetries) or 5),
         1,
         10
     )
 
     local mode = State.FarmPickupMode
 
-    for attempt = 1, retries do
+    for _ = 1, retries do
         if not FarmIsRunning() then
             return false
         end
 
-        if mode == "Prompt" then
-            if TryPromptPickup(candidate) then
-                return true
-            end
-        elseif mode == "Remote" then
+        -- Remote é o caminho principal confirmado pelo script open-source
+        -- do SixZensED: Game.EggPickup:FireServer(uid).
+        if mode == "Remote" then
             if TryRemotePickup(candidate) then
                 return true
             end
+
+        elseif mode == "Prompt" then
+            if TryPromptPickup(candidate) then
+                return true
+            end
+
         else
-            -- AUTO: prefer the same ProximityPrompt path used by the
-            -- recent public VintHub implementation, then fall back to
-            -- the confirmed Game.EggPickup RemoteEvent path.
-            if TryPromptPickup(candidate) then
-                return true
-            end
-
+            -- AUTO: Remote primeiro; Prompt só como fallback.
             if TryRemotePickup(candidate) then
                 return true
             end
+
+            if TryPromptPickup(candidate) then
+                return true
+            end
         end
 
-        task.wait(math.max(0.05, tonumber(State.FarmPickupWait) or 0.25))
-
-        -- If the egg vanished, the pickup succeeded even when the Basket
-        -- update is delayed.
-        if candidate.Rendered and not candidate.Rendered.Parent then
+        if not GetLiveActiveEgg(candidate.UID or candidate.ID) then
             return true
         end
 
-        if candidate.Instance and not candidate.Instance.Parent then
-            return true
-        end
+        task.wait(math.max(
+            0.05,
+            tonumber(State.FarmPickupWait) or 0.20
+        ))
     end
 
     return false
@@ -1522,62 +1702,95 @@ local function FarmOnce()
     end
 
     FarmBusy = true
-    FarmStatus("Scanning eggs...")
 
     local success = pcall(function()
         if not FarmIsRunning() then
             return
         end
 
-        -- If an egg is already carried, always finish the delivery first.
+        -- 1) Nunca pegue um segundo ovo enquanto carrega o anterior.
         if GetBasketCount() > 0 then
             FarmStatus("Returning to base...")
             if IsInVolcano() then
                 ReturnFromVolcanoToPlot()
+                task.wait(0.20)
             end
-
             ReturnToPlotForFarm()
             return
         end
 
-        -- Mount only once before collecting, matching the public game flow.
+        -- 2) Monta um pet válido antes de iniciar o trajeto.
         if State.AutoMountPet and not IsRidingPet() then
             FarmStatus("Mounting pet...")
             MountBestPet()
-            task.wait(0.15)
+            task.wait(0.35)
+
+            if not IsRidingPet() then
+                FarmStatus("Pet mount failed.")
+                task.wait(0.50)
+                return
+            end
         end
 
-        if not FarmIsRunning() then
-            return
-        end
-
-        local candidates = GetCandidates()
-        local target = SelectBestCandidate(candidates)
+        -- 3) A lista do farm vem somente de ActiveEggs.
+        local candidates = GetFarmCandidates()
+        local target = SelectBestFarmCandidate(candidates)
 
         if not target then
-            FarmStatus("No matching egg found.")
+            FarmStatus("No matching active egg.")
+            task.wait(0.30)
             return
         end
 
-        local isVolcanic = string.lower(target.Name) == "volcanic egg"
+        local volcanic = string.lower(target.Name) == "volcanic egg"
 
-        if isVolcanic and State.VolcanicSupport then
-            FarmStatus("Entering volcano...")
-
+        -- 4) Tratamento específico do Volcano.
+        if volcanic and State.VolcanicSupport then
             if not IsInVolcano() then
+                FarmStatus("Entering volcano...")
+
                 if not EnterVolcano() then
                     FarmStatus("Volcano entry failed.")
+                    FailedFarmTargets[target.UID] = os.clock() + 3
                     return
                 end
+
+                task.wait(0.25)
             end
         elseif IsInVolcano() then
             ReturnFromVolcanoToPlot()
+            task.wait(0.25)
             return
         end
 
         if not FarmIsRunning() then
             return
         end
+
+        -- 5) Revalida o alvo antes de mover. O ovo pode ter desaparecido.
+        local liveTarget = GetLiveActiveEgg(target.UID)
+        if not liveTarget then
+            FailedFarmTargets[target.UID] = os.clock() + 2
+            return
+        end
+
+        local livePosition = liveTarget:GetAttribute("Position")
+
+        if typeof(livePosition) == "CFrame" then
+            livePosition = livePosition.Position
+        end
+
+        if typeof(livePosition) ~= "Vector3" then
+            livePosition = GetEggPosition(liveTarget)
+        end
+
+        if not livePosition then
+            FailedFarmTargets[target.UID] = os.clock() + 3
+            FarmStatus("Target position unavailable.")
+            return
+        end
+
+        target.Position = livePosition
 
         local _, root = GetCharacter()
         if not root then
@@ -1585,93 +1798,119 @@ local function FarmOnce()
             return
         end
 
-        -- The candidate can disappear while the character is moving.
-        if target.Instance and not target.Instance.Parent and target.Synthetic ~= true then
-            FarmStatus("Target expired.")
-            return
-        end
+        target.Distance = (target.Position - root.Position).Magnitude
 
-        local freshPosition = target.Position
-        if target.Instance and target.Instance.Parent then
-            freshPosition = GetEggPosition(target.Instance) or freshPosition
-        elseif target.Rendered and target.Rendered.Parent then
-            freshPosition = GetEggPosition(target.Rendered) or freshPosition
-        end
-
-        target.Position = freshPosition
-        target.Distance = (freshPosition - root.Position).Magnitude
-
-        local radius = math.clamp(
-            tonumber(State.FarmPickupRadius) or 12,
-            5,
+        -- 6) Movimento: o mesmo padrão usado no source open-source:
+        -- teleporta até a posição quando está longe e deixa o próximo
+        -- ciclo fazer a coleta já estando na área de pickup.
+        local pickupRadius = math.clamp(
+            tonumber(State.FarmPickupRadius) or 20,
+            8,
             30
         )
 
-        if target.Distance > radius then
-            FarmStatus("Moving to " .. tostring(target.Name) .. "...")
+        if target.Distance > pickupRadius then
+            FarmStatus("Going to " .. tostring(target.Name) .. "...")
 
             if not FarmMoveTo(target.Position) then
-                FailedFarmTargets[target.ID] = os.clock() + 5
+                FailedFarmTargets[target.UID] = os.clock() + 4
                 FarmStatus("Movement failed.")
                 return
             end
+
+            task.wait(0.15)
         end
 
         if not FarmIsRunning() then
             return
         end
 
-        -- Refresh the rendered/active references after movement.
-        local candidatesAfterMove = GetCandidates()
-        local replacement = nil
+        -- 7) Revalidação final do UID/posição.
+        liveTarget = GetLiveActiveEgg(target.UID)
 
-        for _, candidate in ipairs(candidatesAfterMove) do
-            if candidate.ID == target.ID then
-                replacement = candidate
-                break
+        if not liveTarget then
+            FailedFarmTargets[target.UID] = os.clock() + 2
+            return
+        end
+
+        livePosition = liveTarget:GetAttribute("Position")
+        if typeof(livePosition) == "CFrame" then
+            livePosition = livePosition.Position
+        end
+        if typeof(livePosition) ~= "Vector3" then
+            livePosition = GetEggPosition(liveTarget)
+        end
+
+        if livePosition then
+            local _, liveRoot = GetCharacter()
+            if liveRoot and
+                (livePosition - liveRoot.Position).Magnitude > pickupRadius then
+
+                FarmStatus("Position changed; correcting...")
+                if not FarmMoveTo(livePosition) then
+                    FailedFarmTargets[target.UID] = os.clock() + 4
+                    return
+                end
+
+                task.wait(0.10)
             end
         end
 
-        if replacement then
-            target = replacement
-        end
-
+        -- 8) Coleta pelo UID real do ActiveEggs.
         FarmStatus("Collecting " .. tostring(target.Name) .. "...")
 
-        local pickedUp = AttemptPickup(target)
+        local picked = AttemptPickup({
+            UID = liveTarget.Name,
+            ID = liveTarget.Name,
+            Name = target.Name,
+            Rendered = target.Rendered,
+            Instance = liveTarget,
+        })
 
-        if not pickedUp then
-            FailedFarmTargets[target.ID] = os.clock() + 10
-            FarmStatus("Pickup failed; retrying later.")
-            task.wait(math.max(0.1, tonumber(State.FarmRetryDelay) or 0.30))
+        if not picked then
+            FailedFarmTargets[target.UID] = os.clock() + 7
+            FarmStatus("Pickup failed; target skipped briefly.")
+            task.wait(math.max(
+                0.10,
+                tonumber(State.FarmRetryDelay) or 0.30
+            ))
             return
         end
 
-        FailedFarmTargets[target.ID] = nil
+        FailedFarmTargets[target.UID] = nil
         FarmStatus("Collected " .. tostring(target.Name))
 
-        task.wait(math.max(0.05, tonumber(State.FarmPickupWait) or 0.25))
+        -- 9) Espera um pouco para o Basket atualizar e então volta à base.
+        task.wait(math.max(
+            0.08,
+            tonumber(State.FarmPickupWait) or 0.20
+        ))
 
         if not FarmIsRunning() then
             return
         end
 
-        if GetBasketCount() > 0 then
-            if State.ReturnToPlot then
-                FarmStatus("Returning to base...")
-                if IsInVolcano() then
-                    ReturnFromVolcanoToPlot()
-                end
-                ReturnToPlotForFarm()
+        if GetBasketCount() > 0 and State.ReturnToPlot then
+            FarmStatus("Returning to base...")
+
+            if IsInVolcano() then
+                ReturnFromVolcanoToPlot()
+                task.wait(0.15)
             end
+
+            ReturnToPlotForFarm()
+            task.wait(0.20)
         end
     end)
 
     FarmBusy = false
 
     if not success then
-        FarmStatus("Farm cycle error; recovering...")
-        task.wait(math.max(0.1, tonumber(State.FarmRetryDelay) or 0.30))
+        FarmStatus("Farm cycle recovered from an error.")
+        task.wait(math.max(
+            0.15,
+            tonumber(State.FarmRetryDelay) or 0.30
+        ))
     end
 end
 
@@ -2765,10 +3004,35 @@ TabFarm:CreateDropdown({
 TabFarm:CreateDropdown({
     name = "Prioridade",
     flag = "TargetPriority",
-    options = {"Highest Rarity", "Closest", "Highest Weight"},
+    options = {"Highest Rarity", "Highest Luck", "Closest", "Highest Weight"},
     value = "Highest Rarity",
     callback = function(value)
         State.TargetPriority = value
+    end,
+})
+
+TabFarm:CreateDropdown({
+    name = "Método de coleta",
+    flag = "FarmPickupMode",
+    description = "Remote usa Game.EggPickup; Auto usa Remote e Prompt como fallback.",
+    options = {"Remote", "Auto", "Prompt"},
+    value = State.FarmPickupMode,
+    callback = function(value)
+        if value == "Remote" or value == "Auto" or value == "Prompt" then
+            State.FarmPickupMode = value
+        end
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Raio de coleta",
+    flag = "FarmPickupRadius",
+    range = {8, 30},
+    increment = 1,
+    value = State.FarmPickupRadius,
+    suffix = " studs",
+    callback = function(value)
+        State.FarmPickupRadius = math.clamp(math.floor(tonumber(value) or 20), 8, 30)
     end,
 })
 
@@ -3333,7 +3597,7 @@ TabConfig:CreateButton({
 
 local FarmLoop = task.spawn(function()
     while Running do
-        task.wait(0.20)
+        task.wait(0.15)
 
         if Running and State.AutoFarm and not FarmBusy then
             FarmOnce()
