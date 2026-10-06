@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v13 AUTOFARM FLIGHT + NOCLIP + DEPOSIT + CONFIG
+-- MONTAR UM PET - MASTER v14 AUTOFARM FLIGHT + NOCLIP + DEPOSIT + CONFIG
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 (stable)
 -- Config: salvamento manual + persistência do Rayfield
@@ -227,7 +227,7 @@ local function LooksLikeOurRayfieldGui(gui)
             elseif t:find("MASTER v5", 1, true)
                 or t:find("MASTER v6", 1, true)
                 or t:find("MASTER v7", 1, true)
-                or t:find("MASTER v13", 1, true) then
+                or t:find("MASTER v14", 1, true) then
                 hasHubSubtitle = true
             end
 
@@ -283,7 +283,14 @@ local State = {
     AutoFarm = false,
     FarmMode = "Rarity",
     SelectedEggs = {},
+    -- Em uma instalação nova, o Auto Farm começa aceitando todas as raridades.
+    -- O usuário pode restringir isso na aba Farm e salvar a configuração.
     SelectedRarities = {
+        Common = true,
+        Rare = true,
+        Epic = true,
+        Legendary = true,
+        Mythic = true,
         Ethereal = true,
         Divine = true,
     },
@@ -323,7 +330,7 @@ local State = {
     FarmHoverRadius = 18,
     FarmHoverHeight = 55,
     FarmLoopDelay = 0.10,
-    FarmRequireMountedPet = true,
+    FarmRequireMountedPet = false,
 
     ESPEnabled = false,
     ESPOnlySelected = false,
@@ -1148,23 +1155,29 @@ local function MountBestPet()
     end
 
     local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-    if not backpack then
-        return false
-    end
 
     local selectedPet = nil
     local lowestWeight = math.huge
 
-    for _, item in ipairs(backpack:GetChildren()) do
-        if item:IsA("Tool") and item:GetAttribute("PetName") ~= nil then
-            local weight = item:GetAttribute("Weight")
+    local function consider(container)
+        if not container then
+            return
+        end
+        for _, item in ipairs(container:GetChildren()) do
+            if item:IsA("Tool") and item:GetAttribute("PetName") ~= nil then
+                local weight = item:GetAttribute("Weight")
 
-            if type(weight) == "number" and weight < lowestWeight then
-                lowestWeight = weight
-                selectedPet = item
+                if type(weight) == "number" and weight < lowestWeight then
+                    lowestWeight = weight
+                    selectedPet = item
+                end
             end
         end
     end
+
+    -- Pode estar no Backpack ou já equipado no Character.
+    consider(backpack)
+    consider(character)
 
     if not selectedPet then
         return false
@@ -2382,20 +2395,22 @@ local function FarmOnce()
         end
 
         -- MOUNT
-        if State.FarmRequireMountedPet
-            and State.AutoMountPet
-            and not IsRidingPet() then
-
+        -- Tenta montar o pet quando habilitado, mas não trava o farm por isso.
+        if State.AutoMountPet and not IsRidingPet() then
             SetFarmPhase("Mounting pet")
 
             local mounted = MountBestPet()
 
             if not mounted and not IsRidingPet() then
-                FarmStatus("Waiting for a usable pet")
-                return
+                if State.FarmRequireMountedPet then
+                    FarmStatus("Waiting for a usable pet")
+                    return
+                else
+                    FarmStatus("Pet não montado - continuando")
+                end
+            else
+                task.wait(0.25)
             end
-
-            task.wait(0.25)
         end
 
         if not FarmIsRunning() then
@@ -3552,7 +3567,7 @@ end
 local okWindow, Window = pcall(function()
     return Rayfield:CreateWindow({
         name = "Montar um Pet",
-        subtitle = "MASTER v13 • Delta Mobile",
+        subtitle = "MASTER v14 • Delta Mobile",
         sidebarLayout = true,
         toggleUIKeybind = "K",
         configuration = {
@@ -3627,6 +3642,12 @@ TabFarm:CreateToggle({
             ClearFarmTarget()
             State.FarmPhase = "Starting"
             LastFarmStatus = "Starting Auto Farm"
+            task.spawn(function()
+                task.wait(0.05)
+                if Running and State.AutoFarm and not FarmBusy then
+                    FarmOnce()
+                end
+            end)
         else
             CancelGlide()
             DestroyFarmFlightMovers()
@@ -3762,6 +3783,16 @@ TabFarm:CreateToggle({
     value = State.AutoMountPet,
     callback = function(value)
         State.AutoMountPet = value
+    end,
+})
+
+TabFarm:CreateToggle({
+    name = "Exigir pet montado",
+    flag = "FarmRequireMountedPet",
+    description = "Desligado por padrão para o Auto Farm não ficar preso na base se o pet não montar.",
+    value = State.FarmRequireMountedPet,
+    callback = function(value)
+        State.FarmRequireMountedPet = value
     end,
 })
 
@@ -4306,7 +4337,7 @@ local function SaveConfigNow()
     if CanUseConfigFiles() then
         EnsureConfigFolder()
 
-        local data = { __version = 13 }
+        local data = { __version = 14 }
         pcall(function()
             for flagName, flag in pairs(Rayfield.Flags or {}) do
                 if type(flag) == "table" then
