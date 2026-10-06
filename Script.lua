@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v15 AUTOFARM FLIGHT + NOCLIP + SAFE APPROACH + CONFIG
+-- MONTAR UM PET - MASTER v15 AUTOFARM FLIGHT + NOCLIP + SAFE APPROACH + CONFIG (UI FIX)
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 (stable)
 -- Config: salvamento manual + persistência do Rayfield
@@ -3788,7 +3788,6 @@ local TabConfig = Window:CreateTab({name = "Config"})
 
 TabFarm:CreateSection({name = "Automação principal"})
 
-TabFarm:CreateLabel("Ciclo: subir → voar → descer com segurança → coletar → subir → base → pausar → entregar → repetir.")
 
 TabFarm:CreateToggle({
     name = "Auto Farm",
@@ -4453,7 +4452,6 @@ TabVisual:CreateToggle({
 
 TabPerf:CreateSection({name = "Desempenho local"})
 
-TabPerf:CreateLabel("Estas opções mexem só na renderização local. Não alteram o Auto Farm nem a lógica do script.")
 
 TabPerf:CreateSlider({
     name = "FPS Cap",
