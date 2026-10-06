@@ -32,11 +32,141 @@ local TeleportService = game:GetService("TeleportService")
 
 local LocalPlayer = Players.LocalPlayer
 
+-- Delta/mobile bootstrap: evita que uma falha em qualquer parte do hub
+-- aconteça antes de existir alguma evidência visual de que o script iniciou.
+pcall(function()
+    if not game:IsLoaded() then
+        game.Loaded:Wait()
+    end
+end)
+
 if not LocalPlayer then
     return
 end
 
+local __BootstrapText
+local __BootstrapGui
+
+local function __GetUIParent()
+    local candidates = {}
+
+    if typeof(gethui) == "function" then
+        local ok, h = pcall(gethui)
+        if ok and typeof(h) == "Instance" then
+            table.insert(candidates, h)
+        end
+    end
+
+    local okCore, core = pcall(function()
+        return game:GetService("CoreGui")
+    end)
+    if okCore and typeof(core) == "Instance" then
+        table.insert(candidates, core)
+    end
+
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        or LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then
+        local okPg, value = pcall(function()
+            return LocalPlayer:WaitForChild("PlayerGui", 10)
+        end)
+        if okPg then pg = value end
+    end
+    if pg and typeof(pg) == "Instance" then
+        table.insert(candidates, pg)
+    end
+
+    for _, parent in ipairs(candidates) do
+        local ok = pcall(function()
+            local probe = Instance.new("ScreenGui")
+            probe.Name = "__MUP_PARENT_PROBE"
+            probe.ResetOnSpawn = false
+            probe.Enabled = true
+            probe.Parent = parent
+            local attached = probe.Parent == parent
+            probe:Destroy()
+            assert(attached)
+        end)
+        if ok then
+            return parent
+        end
+    end
+
+    return nil
+end
+
+pcall(function()
+    local parent = __GetUIParent()
+    if not parent then return end
+
+    __BootstrapGui = Instance.new("ScreenGui")
+    __BootstrapGui.Name = "MontarUmPet_DeltaBootstrap"
+    __BootstrapGui.ResetOnSpawn = false
+    __BootstrapGui.IgnoreGuiInset = true
+    __BootstrapGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+    __BootstrapGui.DisplayOrder = 999999
+    __BootstrapGui.Enabled = true
+    __BootstrapGui.Parent = parent
+
+    local frame = Instance.new("Frame")
+    frame.AnchorPoint = Vector2.new(0.5, 0.5)
+    frame.Position = UDim2.fromScale(0.5, 0.18)
+    frame.Size = UDim2.fromOffset(330, 106)
+    frame.BackgroundColor3 = Color3.fromRGB(12, 15, 23)
+    frame.BorderSizePixel = 0
+    frame.Parent = __BootstrapGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 14)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(83, 114, 210)
+    stroke.Thickness = 1
+    stroke.Parent = frame
+
+    local title = Instance.new("TextLabel")
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.fromOffset(14, 10)
+    title.Size = UDim2.new(1, -28, 0, 24)
+    title.Text = "MONTAR UM PET • V15.2026"
+    title.TextColor3 = Color3.fromRGB(245, 247, 252)
+    title.TextSize = 15
+    title.Font = Enum.Font.GothamBold
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = frame
+
+    __BootstrapText = Instance.new("TextLabel")
+    __BootstrapText.BackgroundTransparency = 1
+    __BootstrapText.Position = UDim2.fromOffset(14, 38)
+    __BootstrapText.Size = UDim2.new(1, -28, 0, 52)
+    __BootstrapText.Text = "Delta: UI bootstrap OK\nAguardando a interface principal..."
+    __BootstrapText.TextColor3 = Color3.fromRGB(171, 181, 203)
+    __BootstrapText.TextSize = 12
+    __BootstrapText.Font = Enum.Font.Gotham
+    __BootstrapText.TextWrapped = true
+    __BootstrapText.TextXAlignment = Enum.TextXAlignment.Left
+    __BootstrapText.TextYAlignment = Enum.TextYAlignment.Top
+    __BootstrapText.Parent = frame
+end)
+
+local function __SetBootstrap(status)
+    pcall(function()
+        if __BootstrapText then
+            __BootstrapText.Text = tostring(status)
+            __BootstrapText.TextColor3 = Color3.fromRGB(220, 226, 240)
+        end
+    end)
+    pcall(function() warn("[MontarUmPet] " .. tostring(status)) end)
+end
+
+__SetBootstrap("Delta: script iniciou\nPlaceId: " .. tostring(game.PlaceId) .. "\nPreparando o núcleo...")
+
 if game.PlaceId ~= 124216119978534 then
+    __SetBootstrap("PLACE ID DIFERENTE\nEsperado: 124216119978534\nAtual: " .. tostring(game.PlaceId))
+    return
+end
+
     warn("Montar um Pet: este script foi feito para o PlaceId 124216119978534.")
     return
 end
@@ -4392,17 +4522,8 @@ end)
 -- Window:CreateTab, Tab:CreateToggle/Slider/Dropdown/Input/Button...
 --============================================================--
 
-local UI_PARENT = PlayerGui
-
-pcall(function()
-    if typeof(gethui) == "function" then
-        local h = gethui()
-        if typeof(h) == "Instance" then
-            UI_PARENT = h
-            return
-        end
-    end
-end)
+local UI_PARENT = __GetUIParent() or PlayerGui
+__SetBootstrap("Delta: parent de UI encontrado\nCriando a interface principal...")
 
 local GUI_NAME = "MontarUmPet_2026_DeltaUI"
 
@@ -4518,7 +4639,9 @@ ScreenGui.Name = GUI_NAME
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-ScreenGui.DisplayOrder = 100000
+ScreenGui.DisplayOrder = 999998
+ScreenGui.Enabled = true
+ScreenGui.Archivable = false
 
 local UIAttached = false
 pcall(function()
@@ -4534,7 +4657,7 @@ if not UIAttached and UI_PARENT ~= PlayerGui then
 end
 
 if not UIAttached then
-    warn("Montar um Pet: não foi possível criar a interface no Delta (gethui/PlayerGui indisponível).")
+    __SetBootstrap("FALHA AO ANEXAR A UI\ngethui/CoreGui/PlayerGui não aceitaram ScreenGui.\nTeste o arquivo Delta_UI_DIAGNOSTICO antes de usar o hub.")
     Running = false
     pcall(function()
         if ReplaceConnection then ReplaceConnection:Disconnect() end
@@ -4545,6 +4668,8 @@ if not UIAttached then
     return
 end
 
+__SetBootstrap("UI principal anexada\nCriando abas e controles...")
+
 local Root = Instance.new("Frame")
 Root.Name = "Root"
 Root.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -4552,6 +4677,8 @@ Root.Position = UDim2.fromScale(0.5, 0.5)
 Root.Size = clampUiSize()
 Root.BackgroundColor3 = UI_COLORS.Background
 Root.BorderSizePixel = 0
+Root.Visible = true
+Root.Active = true
 Root.Parent = ScreenGui
 UICorner(Root, 16)
 UIStroke(Root, UI_COLORS.Stroke, 0)
@@ -5199,6 +5326,17 @@ local TabMove = Window:CreateTab({name = "Movimento"})
 local TabVisual = Window:CreateTab({name = "Visual"})
 local TabPerf = Window:CreateTab({name = "Performance"})
 local TabConfig = Window:CreateTab({name = "Config"})
+pcall(function()
+    __SetBootstrap("V15.2026 carregada com sucesso\nInterface principal pronta no Delta.")
+    task.delay(1.2, function()
+        pcall(function()
+            if __BootstrapGui then
+                __BootstrapGui:Destroy()
+            end
+        end)
+    end)
+end)
+
 --============================================================--
 -- FARM TAB
 --============================================================--
@@ -6498,3 +6636,10 @@ ENV[TOKEN_NAMES[1]] = {
     Stop = StopHandler,
 }
 
+
+-- Bootstrap safety cleanup
+pcall(function()
+    if __BootstrapGui then
+        __BootstrapGui:Destroy()
+    end
+end)
