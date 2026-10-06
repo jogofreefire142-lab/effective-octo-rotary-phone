@@ -1,7 +1,8 @@
 --============================================================--
--- MONTAR UM PET - MASTER v11 AUTOFARM FLIGHT + NOCLIP + DEPOSIT
+-- MONTAR UM PET - MASTER v13 AUTOFARM FLIGHT + NOCLIP + DEPOSIT + CONFIG
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 (stable)
+-- Config: salvamento manual + persistência do Rayfield
 -- Foco: Delta Mobile + Auto Farm por estados + voo sem colisão + retorno/entrega robustos + cleanup robusto
 --
 -- Pesquisa usada para esta versão:
@@ -24,6 +25,7 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Lighting = game:GetService("Lighting")
+local HttpService = game:GetService("HttpService")
 local VirtualUser = game:GetService("VirtualUser")
 
 local LocalPlayer = Players.LocalPlayer
@@ -224,7 +226,8 @@ local function LooksLikeOurRayfieldGui(gui)
                 hasTitle = true
             elseif t:find("MASTER v5", 1, true)
                 or t:find("MASTER v6", 1, true)
-                or t:find("MASTER v7", 1, true) then
+                or t:find("MASTER v7", 1, true)
+                or t:find("MASTER v13", 1, true) then
                 hasHubSubtitle = true
             end
 
@@ -304,10 +307,12 @@ local State = {
     FarmReturnInstant = true,
 
     -- Auto Farm Flight
-    FarmFlightSpeed = 750,
+    FarmFlightSpeed = 400,
     FarmFlightHeight = 90,
     FarmFlightDescendHeight = 3,
     FarmFlightArriveRadius = 4,
+    FarmArrivalPause = 0.35,
+    FarmPickupPause = 0.30,
 
     -- Auto Farm state machine
     FarmPhase = "Idle",
@@ -342,6 +347,7 @@ local State = {
 
     FPSCap = 60,
     LowGraphics = false,
+    LowShadows = false,
     Fullbright = false,
     NoFog = false,
     Disable3D = false,
@@ -1480,8 +1486,8 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
 
     local maxSpeed = math.clamp(
         tonumber(speed) or State.FarmFlightSpeed,
-        100,
-        2000
+        50,
+        1200
     )
 
     local arrivedRadius = math.clamp(
@@ -1526,8 +1532,8 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier)
 
         -- Diminui a velocidade perto do ponto final para não passar direto.
         local currentSpeed = math.clamp(
-            remaining * 8,
-            55,
+            remaining * 5,
+            40,
             maxSpeed
         )
 
@@ -1694,6 +1700,12 @@ local function FarmFlyTo(targetPosition, speed, descend)
     end
 
     DestroyFarmFlightMovers()
+
+    -- Pequena estabilização após pousar na coluna do alvo/base para dar
+    -- tempo ao jogo de registrar a posição e processar a interação.
+    if ok and descend ~= false and FarmIsRunning() then
+        task.wait(math.clamp(tonumber(State.FarmArrivalPause) or 0.35, 0.10, 0.80))
+    end
 
     if humanoid and humanoid.Parent then
         pcall(function()
@@ -2302,6 +2314,9 @@ local function FarmDeposit()
         return false
     end
 
+    -- Estabiliza a posição na área da base antes de esperar a entrega.
+    task.wait(0.40)
+
     -- O jogo deposita ao chegar na área da base; confirma a cesta esvaziando.
     local deadline = os.clock() + 3.5
     while FarmIsRunning()
@@ -2486,6 +2501,7 @@ local function FarmOnce()
         end
 
         SetFarmPhase("Collecting " .. tostring(target.Name))
+        task.wait(math.clamp(tonumber(State.FarmPickupPause) or 0.30, 0.10, 0.80))
 
         local picked = AttemptPickup({
             UID = target.UID,
@@ -2534,6 +2550,7 @@ local function FarmOnce()
 
         -- DEPOSIT
         if State.ReturnToPlot then
+            task.wait(math.clamp(tonumber(State.FarmPickupPause) or 0.30, 0.10, 0.80))
             FarmDeposit()
         else
             SetFarmPhase("Collected")
@@ -3398,7 +3415,7 @@ local function ApplyLightingState()
             Lighting.ClockTime = OriginalLighting.ClockTime
         end
 
-        if State.Fullbright or State.LowGraphics then
+        if State.Fullbright or State.LowGraphics or State.LowShadows then
             Lighting.GlobalShadows = false
         else
             Lighting.GlobalShadows = OriginalLighting.GlobalShadows
@@ -3442,6 +3459,11 @@ local function SetLowGraphics(enabled)
         end)
     end
 
+    ApplyLightingState()
+end
+
+local function SetLowShadows(enabled)
+    State.LowShadows = enabled
     ApplyLightingState()
 end
 
@@ -3530,13 +3552,13 @@ end
 local okWindow, Window = pcall(function()
     return Rayfield:CreateWindow({
         name = "Montar um Pet",
-        subtitle = "MASTER v10 • Delta Mobile",
+        subtitle = "MASTER v13 • Delta Mobile",
         sidebarLayout = true,
         toggleUIKeybind = "K",
         configuration = {
             autoSave = true,
             autoLoad = true,
-            fileName = "MontarUmPet_Master_v11",
+            fileName = "MontarUmPet_Master_v13",
         },
     })
 end)
@@ -3596,7 +3618,7 @@ TabFarm:CreateSection({name = "Automação principal"})
 TabFarm:CreateToggle({
     name = "Auto Farm",
     flag = "AutoFarm",
-    value = false,
+    value = State.AutoFarm,
     callback = function(value)
         State.AutoFarm = value
 
@@ -3620,7 +3642,7 @@ TabFarm:CreateDropdown({
     name = "Modo de seleção",
     flag = "FarmMode",
     options = {"Rarity", "Egg"},
-    value = "Rarity",
+    value = State.FarmMode,
     callback = function(value)
         if value == "Egg" or value == "Rarity" then
             State.FarmMode = value
@@ -3633,7 +3655,12 @@ TabFarm:CreateDropdown({
     flag = "TargetRarities",
     multiSelect = true,
     options = Rarities,
-    value = {"Ethereal", "Divine"},
+    value = (function()
+        local t = {}
+        for k, v in pairs(State.SelectedRarities) do if v then table.insert(t, k) end end
+        table.sort(t)
+        return t
+    end)(),
     placeholder = "Nenhuma",
     callback = function(value)
         State.SelectedRarities = CopyArrayToSet(value)
@@ -3656,7 +3683,7 @@ TabFarm:CreateDropdown({
     name = "Prioridade",
     flag = "TargetPriority",
     options = {"Highest Rarity", "Highest Luck", "Closest", "Highest Weight"},
-    value = "Highest Rarity",
+    value = State.TargetPriority,
     callback = function(value)
         State.TargetPriority = value
     end,
@@ -3689,9 +3716,10 @@ TabFarm:CreateSlider({
 
 TabFarm:CreateInput({
     name = "Peso mínimo do ovo",
+    flag = "MinEggWeight",
     description = "0 desativa o filtro. Ex.: 50000",
     numeric = true,
-    value = "0",
+    value = tostring(State.MinEggWeight),
     callback = function(value)
         State.MinEggWeight = math.max(0, tonumber(value) or 0)
     end,
@@ -3699,9 +3727,10 @@ TabFarm:CreateInput({
 
 TabFarm:CreateInput({
     name = "Luck mínima",
+    flag = "MinEggLuck",
     description = "0 desativa o filtro.",
     numeric = true,
-    value = "0",
+    value = tostring(State.MinEggLuck),
     callback = function(value)
         State.MinEggLuck = math.max(0, tonumber(value) or 0)
     end,
@@ -3710,7 +3739,7 @@ TabFarm:CreateInput({
 TabFarm:CreateToggle({
     name = "Somente ovos mutados",
     flag = "OnlyMutated",
-    value = false,
+    value = State.OnlyMutated,
     callback = function(value)
         State.OnlyMutated = value
     end,
@@ -3720,7 +3749,7 @@ TabFarm:CreateToggle({
     name = "Auto Pickup próximo",
     flag = "AutoPickup",
     description = "Recolhe um alvo dentro de ~20 studs.",
-    value = false,
+    value = State.AutoPickup,
     callback = function(value)
         State.AutoPickup = value
     end,
@@ -3730,7 +3759,7 @@ TabFarm:CreateToggle({
     name = "Auto Mount Pet",
     flag = "AutoMountPet",
     description = "Usa o pet com menor Weight encontrado na mochila, conforme a implementação pública pesquisada.",
-    value = true,
+    value = State.AutoMountPet,
     callback = function(value)
         State.AutoMountPet = value
     end,
@@ -3739,7 +3768,7 @@ TabFarm:CreateToggle({
 TabFarm:CreateToggle({
     name = "Volcanic Support",
     flag = "VolcanicSupport",
-    value = true,
+    value = State.VolcanicSupport,
     callback = function(value)
         State.VolcanicSupport = value
     end,
@@ -3748,7 +3777,7 @@ TabFarm:CreateToggle({
 TabFarm:CreateToggle({
     name = "Retornar para a base",
     flag = "ReturnToPlot",
-    value = true,
+    value = State.ReturnToPlot,
     callback = function(value)
         State.ReturnToPlot = value
     end,
@@ -3771,15 +3800,15 @@ TabFarm:CreateSection({name = "Voo do Auto Farm"})
 TabFarm:CreateSlider({
     name = "Velocidade do voo",
     flag = "FarmFlightSpeed",
-    range = {100, 2000},
+    range = {50, 1200},
     increment = 25,
     value = State.FarmFlightSpeed,
     suffix = " studs/s",
     callback = function(value)
         State.FarmFlightSpeed = math.clamp(
-            math.floor(tonumber(value) or 750),
-            100,
-            2000
+            math.floor(tonumber(value) or 300),
+            50,
+            1200
         )
     end,
 })
@@ -3829,6 +3858,30 @@ TabFarm:CreateSlider({
             1,
             8
         )
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Pausa ao chegar",
+    flag = "FarmArrivalPause",
+    range = {0.10, 0.80},
+    increment = 0.05,
+    value = State.FarmArrivalPause,
+    suffix = " s",
+    callback = function(value)
+        State.FarmArrivalPause = math.clamp(tonumber(value) or 0.35, 0.10, 0.80)
+    end,
+})
+
+TabFarm:CreateSlider({
+    name = "Pausa para confirmar coleta",
+    flag = "FarmPickupPause",
+    range = {0.10, 0.80},
+    increment = 0.05,
+    value = State.FarmPickupPause,
+    suffix = " s",
+    callback = function(value)
+        State.FarmPickupPause = math.clamp(tonumber(value) or 0.30, 0.10, 0.80)
     end,
 })
 
@@ -4162,7 +4215,9 @@ TabVisual:CreateToggle({
 -- PERFORMANCE TAB
 --============================================================--
 
-TabPerf:CreateSection({name = "Desempenho"})
+TabPerf:CreateSection({name = "Desempenho local"})
+
+TabPerf:CreateLabel("Estas opções mexem só na renderização local. Não alteram o Auto Farm nem a lógica do script.")
 
 TabPerf:CreateSlider({
     name = "FPS Cap",
@@ -4179,36 +4234,20 @@ TabPerf:CreateSlider({
 TabPerf:CreateToggle({
     name = "Low Graphics",
     flag = "LowGraphics",
-    value = false,
+    description = "Reduz a qualidade gráfica local para aliviar o celular.",
+    value = State.LowGraphics,
     callback = function(value)
         SetLowGraphics(value)
     end,
 })
 
 TabPerf:CreateToggle({
-    name = "Fullbright",
-    flag = "Fullbright",
-    value = false,
+    name = "Desligar sombras",
+    flag = "LowShadows",
+    description = "Remove apenas as sombras locais para reduzir o custo de renderização.",
+    value = State.LowShadows,
     callback = function(value)
-        SetFullbright(value)
-    end,
-})
-
-TabPerf:CreateToggle({
-    name = "Remover Fog",
-    flag = "NoFog",
-    value = false,
-    callback = function(value)
-        SetNoFog(value)
-    end,
-})
-
-TabPerf:CreateToggle({
-    name = "Desativar 3D rendering",
-    flag = "Disable3D",
-    value = false,
-    callback = function(value)
-        Set3DDisabled(value)
+        SetLowShadows(value)
     end,
 })
 
@@ -4216,12 +4255,153 @@ TabPerf:CreateButton({
     name = "Aplicar FPS Cap atual",
     callback = function()
         SetFPSCap(State.FPSCap)
+        pcall(function()
+            Window:Notify({
+                title = "Desempenho",
+                content = "FPS Cap aplicado. Nenhuma função do Auto Farm foi alterada.",
+                duration = 3,
+            })
+        end)
     end,
 })
 
 --============================================================--
 -- CONFIG TAB
 --============================================================--
+
+TabConfig:CreateSection({name = "Configuração"})
+
+local CONFIG_FOLDER = "MontarUmPet"
+local CONFIG_FILE = "MontarUmPet_MASTER_v13_config.json"
+
+local function CanUseConfigFiles()
+    return type(writefile) == "function"
+        and type(readfile) == "function"
+        and type(isfile) == "function"
+end
+
+local function EnsureConfigFolder()
+    if type(isfolder) == "function" and type(makefolder) == "function" then
+        pcall(function()
+            if not isfolder(CONFIG_FOLDER) then
+                makefolder(CONFIG_FOLDER)
+            end
+        end)
+    end
+end
+
+local function SaveConfigNow()
+    local saved = false
+
+    pcall(function()
+        if type(Rayfield.SaveConfiguration) == "function" then
+            Rayfield:SaveConfiguration()
+            saved = true
+        elseif type(Rayfield.SaveConfig) == "function" then
+            Rayfield:SaveConfig()
+            saved = true
+        end
+    end)
+
+    if CanUseConfigFiles() then
+        EnsureConfigFolder()
+
+        local data = { __version = 13 }
+        pcall(function()
+            for flagName, flag in pairs(Rayfield.Flags or {}) do
+                if type(flag) == "table" then
+                    local value = flag.CurrentValue
+                    if value == nil then value = flag.CurrentOption end
+                    if value == nil then value = flag.CurrentKeybind end
+                    if value ~= nil then
+                        data[flagName] = value
+                    end
+                end
+            end
+        end)
+
+        local ok = pcall(function()
+            writefile(CONFIG_FILE, HttpService:JSONEncode(data))
+        end)
+
+        if ok then
+            saved = true
+        end
+    end
+
+    return saved
+end
+
+local function LoadConfigNow()
+    if CanUseConfigFiles() and isfile(CONFIG_FILE) then
+        local ok, decoded = pcall(function()
+            return HttpService:JSONDecode(readfile(CONFIG_FILE))
+        end)
+
+        if ok and type(decoded) == "table" then
+            local changed = false
+
+            for flagName, value in pairs(decoded) do
+                local flag = Rayfield.Flags and Rayfield.Flags[flagName]
+                if flag and type(flag.Set) == "function" then
+                    pcall(function()
+                        flag:Set(value)
+                        changed = true
+                    end)
+                end
+            end
+
+            return changed
+        end
+    end
+
+    local loaded = false
+
+    pcall(function()
+        if type(Rayfield.LoadConfiguration) == "function" then
+            Rayfield:LoadConfiguration()
+            loaded = true
+        end
+    end)
+
+    return loaded
+end
+
+TabConfig:CreateButton({
+    name = "Salvar config",
+    description = "Salva os toggles, sliders, filtros e seleções atuais no arquivo do hub.",
+    callback = function()
+        local ok = SaveConfigNow()
+
+        pcall(function()
+            Window:Notify({
+                title = "Configuração",
+                content = ok
+                    and "Configuração salva com sucesso."
+                    or "O executor não permitiu salvar a configuração.",
+                duration = 4,
+            })
+        end)
+    end,
+})
+
+TabConfig:CreateButton({
+    name = "Carregar config",
+    description = "Restaura a configuração salva e atualiza os controles.",
+    callback = function()
+        local ok = LoadConfigNow()
+
+        pcall(function()
+            Window:Notify({
+                title = "Configuração",
+                content = ok
+                    and "Configuração carregada."
+                    or "Nenhuma configuração válida foi encontrada.",
+                duration = 4,
+            })
+        end)
+    end,
+})
 
 TabConfig:CreateSection({name = "Compatibilidade"})
 
@@ -4382,6 +4562,7 @@ StopHandler = function()
     State.HidePlayers = false
     State.Fullbright = false
     State.LowGraphics = false
+    State.LowShadows = false
     State.NoFog = false
     State.Disable3D = false
 
