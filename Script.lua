@@ -138,18 +138,19 @@ local MY_GENERATION = generation
 
 local Running = true
 local StopHandler = nil
+local StopInvoked = false
 
 local ReplaceConnection = ReplaceEvent.Event:Connect(function()
     if not Running then
         return
     end
 
-    Running = false
-
     if StopHandler then
         task.spawn(function()
             pcall(StopHandler)
         end)
+    else
+        Running = false
     end
 end)
 
@@ -164,12 +165,12 @@ task.spawn(function()
 
         local currentGeneration = tonumber(ControlFolder:GetAttribute("Generation")) or 0
         if currentGeneration ~= MY_GENERATION then
-            Running = false
-
             if StopHandler then
                 task.spawn(function()
                     pcall(StopHandler)
                 end)
+            else
+                Running = false
             end
 
             break
@@ -191,12 +192,12 @@ local GuardConnection = GuardEvent.Event:Connect(function()
         return
     end
 
-    Running = false
-
     if StopHandler then
         task.spawn(function()
             pcall(StopHandler)
         end)
+    else
+        Running = false
     end
 end)
 
@@ -1947,15 +1948,6 @@ local function TryRemotePickup(candidate)
     return ConfirmFarmPickup(candidate, beforeBasket, 2)
 end
 
-local function FindPromptOnEgg(candidate)
-    local model = candidate and candidate.Rendered
-    if not model or not model.Parent then
-        return nil
-    end
-
-    return model:FindFirstChildWhichIsA("ProximityPrompt", true)
-end
-
 local function TryPromptPickup(candidate)
     if type(fireproximityprompt) ~= "function" then
         return false
@@ -3669,8 +3661,6 @@ end
 -- Recursos sem schema confirmado continuam como "probe only".
 --============================================================--
 
-local TeleportService = game:GetService("TeleportService")
-
 State.Automation2026 = false
 State.AutoCollect2026 = true
 State.AutoPlace2026 = true
@@ -4283,7 +4273,7 @@ function Advanced:CollectOne()
         end
         if not ReturnToPlotForFarm() then return false end
     end
-    return GetBasketCount() > start or true
+    return GetBasketCount() > start
 end
 
 function Advanced:RunCycle()
@@ -4407,7 +4397,7 @@ local UI_PARENT = PlayerGui
 pcall(function()
     if typeof(gethui) == "function" then
         local h = gethui()
-        if h then
+        if typeof(h) == "Instance" then
             UI_PARENT = h
             return
         end
@@ -4439,6 +4429,21 @@ local UI_COLORS = {
     Success = Color3.fromRGB(71, 205, 132),
     Danger = Color3.fromRGB(241, 91, 91),
 }
+
+local UIConnections = {}
+local function UITrack(connection)
+    if connection then
+        table.insert(UIConnections, connection)
+    end
+    return connection
+end
+
+local function DisconnectUI()
+    for _, connection in ipairs(UIConnections) do
+        pcall(function() connection:Disconnect() end)
+    end
+    table.clear(UIConnections)
+end
 
 local function UICorner(parent, radius)
     local c = Instance.new("UICorner")
@@ -4481,17 +4486,17 @@ local function makeButton(parent, text, height)
     b.Parent = parent
     UICorner(b, 9)
     UIStroke(b, UI_COLORS.Stroke, 0.15)
-    b.MouseEnter:Connect(function()
+    UITrack(b.MouseEnter:Connect(function()
         pcall(function() b.BackgroundColor3 = UI_COLORS.Panel2 end)
-    end)
-    b.MouseLeave:Connect(function()
+    end))
+    UITrack(b.MouseLeave:Connect(function()
         pcall(function() b.BackgroundColor3 = UI_COLORS.Panel3 end)
-    end)
-    b.InputBegan:Connect(function(input)
+    end))
+    UITrack(b.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.Touch then
             b.BackgroundColor3 = UI_COLORS.Panel2
         end
-    end)
+    end))
     return b
 end
 
@@ -4514,7 +4519,31 @@ ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 ScreenGui.DisplayOrder = 100000
-ScreenGui.Parent = UI_PARENT
+
+local UIAttached = false
+pcall(function()
+    ScreenGui.Parent = UI_PARENT
+    UIAttached = ScreenGui.Parent == UI_PARENT
+end)
+
+if not UIAttached and UI_PARENT ~= PlayerGui then
+    pcall(function()
+        ScreenGui.Parent = PlayerGui
+        UIAttached = ScreenGui.Parent == PlayerGui
+    end)
+end
+
+if not UIAttached then
+    warn("Montar um Pet: não foi possível criar a interface no Delta (gethui/PlayerGui indisponível).")
+    Running = false
+    pcall(function()
+        if ReplaceConnection then ReplaceConnection:Disconnect() end
+        if GuardConnection then GuardConnection:Disconnect() end
+        if Guard then Guard:Destroy() end
+        ScreenGui:Destroy()
+    end)
+    return
+end
 
 local Root = Instance.new("Frame")
 Root.Name = "Root"
@@ -4635,21 +4664,21 @@ local function beginDrag(frame, handle)
     local dragging = false
     local dragStart
     local startPos
-    handle.InputBegan:Connect(function(input)
+    UITrack(handle.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
             dragStart = input.Position
             startPos = frame.Position
             local conn
-            conn = input.Changed:Connect(function()
+            conn = UITrack(input.Changed:Connect(function()
                 if input.UserInputState == Enum.UserInputState.End then
                     dragging = false
                     if conn then conn:Disconnect() end
                 end
-            end)
+            end))
         end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
+    end))
+    UITrack(UserInputService.InputChanged:Connect(function(input)
         if not dragging then return end
         if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
         local delta = input.Position - dragStart
@@ -4659,7 +4688,7 @@ local function beginDrag(frame, handle)
             startPos.Y.Scale,
             startPos.Y.Offset + delta.Y
         )
-    end)
+    end))
 end
 
 beginDrag(Root, Header)
@@ -4734,7 +4763,7 @@ function Window:CreateTab(settings)
     tab.Button = tabButton
     tab.Window = Window
 
-    tabButton.MouseButton1Click:Connect(function()
+    UITrack(tabButton.MouseButton1Click:Connect(function()
         for _, data in pairs(Tabs) do
             data.Page.Visible = false
             data.Button.BackgroundColor3 = UI_COLORS.Panel3
@@ -4742,7 +4771,7 @@ function Window:CreateTab(settings)
         page.Visible = true
         tabButton.BackgroundColor3 = UI_COLORS.Accent2
         CurrentTab = tab
-    end)
+    end))
 
     function tab:CreateSection(cfg)
         local section = Instance.new("Frame")
@@ -4779,10 +4808,10 @@ function Window:CreateTab(settings)
             desc.Size = UDim2.new(1, -100, 0, 28)
             desc.TextWrapped = true
         end
-        click.MouseButton1Click:Connect(function()
+        UITrack(click.MouseButton1Click:Connect(function()
             local ok, err = pcall(cfg.callback or function() end)
             if not ok then showToast("Erro", tostring(err), 5) end
-        end)
+        end))
         return click
     end
 
@@ -4817,7 +4846,7 @@ function Window:CreateTab(settings)
                 if not ok then showToast("Erro em " .. tostring(cfg.name), tostring(err), 5) end
             end
         end
-        switch.MouseButton1Click:Connect(function() api:Set(not value) end)
+        UITrack(switch.MouseButton1Click:Connect(function() api:Set(not value) end))
         api:Set(value, true)
         addFlag(Rayfield, cfg.flag, api)
         return api
@@ -4867,7 +4896,7 @@ function Window:CreateTab(settings)
             box.Text = value
             if not silent then commit() end
         end
-        box.FocusLost:Connect(function() commit() end)
+        UITrack(box.FocusLost:Connect(function() commit() end))
         addFlag(Rayfield, cfg.flag, api)
         return api
     end
@@ -4980,7 +5009,7 @@ function Window:CreateTab(settings)
             b.Name = tostring(option)
             b.LayoutOrder = #optScroll:GetChildren()
             b.ZIndex = 22
-            b.MouseButton1Click:Connect(function()
+            UITrack(b.MouseButton1Click:Connect(function()
                 if multi then
                     selected[option] = not selected[option]
                 else
@@ -4991,12 +5020,12 @@ function Window:CreateTab(settings)
                 syncDisplay()
                 local ok, err = pcall(cfg.callback or function() end, api.CurrentOption)
                 if not ok then showToast("Erro em " .. tostring(cfg.name), tostring(err), 5) end
-            end)
+            end))
         end
 
-        open.MouseButton1Click:Connect(function()
+        UITrack(open.MouseButton1Click:Connect(function()
             list.Visible = not list.Visible
-        end)
+        end))
 
         function api:Set(newValue, silent)
             for key in pairs(selected) do selected[key] = nil end
@@ -5084,9 +5113,9 @@ function Window:CreateTab(settings)
         function api:Set(newValue, silent)
             commit(numericValue(newValue, min), silent)
         end
-        minus.MouseButton1Click:Connect(function() commit(value - step, false) end)
-        plus.MouseButton1Click:Connect(function() commit(value + step, false) end)
-        valBox.FocusLost:Connect(function() commit(numericValue(valBox.Text, value), false) end)
+        UITrack(minus.MouseButton1Click:Connect(function() commit(value - step, false) end))
+        UITrack(plus.MouseButton1Click:Connect(function() commit(value + step, false) end))
+        UITrack(valBox.FocusLost:Connect(function() commit(numericValue(valBox.Text, value), false) end))
 
         local dragging = false
         local function setFromInput(input)
@@ -5097,22 +5126,22 @@ function Window:CreateTab(settings)
             local alpha = math.clamp((x - left) / width, 0, 1)
             commit(min + (max - min) * alpha, false)
         end
-        bar.InputBegan:Connect(function(input)
+        UITrack(bar.InputBegan:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                 dragging = true
                 setFromInput(input)
             end
-        end)
-        UserInputService.InputChanged:Connect(function(input)
+        end))
+        UITrack(UserInputService.InputChanged:Connect(function(input)
             if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
                 setFromInput(input)
             end
-        end)
-        UserInputService.InputEnded:Connect(function(input)
+        end))
+        UITrack(UserInputService.InputEnded:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                 dragging = false
             end
-        end)
+        end))
         commit(value, true)
         addFlag(Rayfield, cfg.flag, api)
         return api
@@ -5150,17 +5179,17 @@ Rayfield.Destroy = function(self)
     Window:Destroy()
 end
 
-MinBtn.MouseButton1Click:Connect(function()
+UITrack(MinBtn.MouseButton1Click:Connect(function()
     Window:SetVisibility(false)
-end)
-CloseBtn.MouseButton1Click:Connect(function()
+end))
+UITrack(CloseBtn.MouseButton1Click:Connect(function()
     if StopHandler then
         pcall(StopHandler)
     end
-end)
-Floating.MouseButton1Click:Connect(function()
+end))
+UITrack(Floating.MouseButton1Click:Connect(function()
     Window:SetVisibility(true)
-end)
+end))
 
 -- Cria as abas imediatamente; a UI fica disponível mesmo se uma automação
 -- posterior falhar. O restante do script usa a mesma API de elementos.
@@ -6371,14 +6400,15 @@ end)
 --============================================================--
 
 StopHandler = function()
-    if not Running then
+    if StopInvoked then
         return
     end
+    StopInvoked = true
+    Running = false
 
     CancelGlide()
     DestroyFarmFlightMovers()
     ClearFarmTarget()
-    Running = false
 
     State.AutoFarm = false
     State.AutoPickup = false
@@ -6435,6 +6465,7 @@ StopHandler = function()
     end)
 
     DisconnectAll()
+    pcall(DisconnectUI)
 
     pcall(function()
         if Rayfield and Rayfield.Destroy then
