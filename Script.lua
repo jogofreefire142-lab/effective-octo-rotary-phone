@@ -1,8 +1,6 @@
--- ================================================================
--- MONTAR UM PET / RIDE A PET
--- VELOCIDADE
--- EXECUÇÃO DUPLA: mantém somente uma interface
--- ================================================================
+--// MONTAR UM PET - VELOCIDADE
+--// Interface simples para Delta Mobile
+--// Aba Ovos reservada para depois
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -13,55 +11,38 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 local ENV = (getgenv and getgenv()) or _G
 
--- ================================================================
--- STOP DA EXECUÇÃO ANTERIOR
--- ================================================================
-
+--// ENCERRA INSTÂNCIA ANTERIOR
 pcall(function()
-    local antigo = ENV.__MONTAR_UM_PET_VELOCIDADE
+    if ENV.__MONTAR_UM_PET_VELOCIDADE
+        and ENV.__MONTAR_UM_PET_VELOCIDADE.Stop then
 
-    if antigo and antigo.Stop then
-        antigo.Stop()
+        ENV.__MONTAR_UM_PET_VELOCIDADE.Stop()
     end
 end)
 
--- Remove qualquer GUI antiga que tenha sobrado
+--// REMOVE QUALQUER GUI ANTIGA
 pcall(function()
-    for _, gui in ipairs(PlayerGui:GetChildren()) do
-        if gui.Name == "MontarUmPetVelocidade" then
-            gui:Destroy()
+    for _, obj in ipairs(PlayerGui:GetDescendants()) do
+        if obj.Name == "MontarUmPetVelocidade" then
+            obj:Destroy()
         end
     end
 end)
 
--- ================================================================
--- ESTADO DA NOVA EXECUÇÃO
--- ================================================================
-
 local Estado = {
     Ativo = true,
     Velocidade = 150,
-    VelocidadeAtiva = false,
+    VelocidadeAtiva = false
 }
 
 local Conexoes = {}
 
 local function Registrar(conexao)
-    if conexao then
-        table.insert(Conexoes, conexao)
-    end
-
+    table.insert(Conexoes, conexao)
     return conexao
 end
 
-local function PararTudo()
-    if not Estado.Ativo then
-        return
-    end
-
-    Estado.Ativo = false
-    Estado.VelocidadeAtiva = false
-
+local function DesconectarTudo()
     for _, conexao in ipairs(Conexoes) do
         pcall(function()
             conexao:Disconnect()
@@ -69,710 +50,316 @@ local function PararTudo()
     end
 
     table.clear(Conexoes)
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MontarUmPetVelocidade"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 999999
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = PlayerGui
+
+--// PAINEL PRINCIPAL
+local Painel = Instance.new("Frame")
+Painel.Name = "Painel"
+Painel.Size = UDim2.fromOffset(290, 205)
+Painel.Position = UDim2.new(0.5, -145, 0.5, -100)
+Painel.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+Painel.BorderSizePixel = 0
+Painel.Parent = ScreenGui
+
+local Canto = Instance.new("UICorner")
+Canto.CornerRadius = UDim.new(0, 10)
+Canto.Parent = Painel
+
+--// BARRA DO TOPO
+local Topo = Instance.new("Frame")
+Topo.Size = UDim2.new(1, 0, 0, 38)
+Topo.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+Topo.BorderSizePixel = 0
+Topo.Parent = Painel
+
+local Titulo = Instance.new("TextLabel")
+Titulo.Size = UDim2.new(1, -45, 1, 0)
+Titulo.Position = UDim2.fromOffset(10, 0)
+Titulo.BackgroundTransparency = 1
+Titulo.Text = "MONTAR UM PET"
+Titulo.TextColor3 = Color3.fromRGB(255, 255, 255)
+Titulo.TextSize = 16
+Titulo.Font = Enum.Font.GothamBold
+Titulo.TextXAlignment = Enum.TextXAlignment.Left
+Titulo.Parent = Topo
+
+local Fechar = Instance.new("TextButton")
+Fechar.Size = UDim2.fromOffset(38, 38)
+Fechar.Position = UDim2.new(1, -38, 0, 0)
+Fechar.BackgroundTransparency = 1
+Fechar.Text = "✕"
+Fechar.TextColor3 = Color3.fromRGB(255, 255, 255)
+Fechar.TextSize = 18
+Fechar.Font = Enum.Font.GothamBold
+Fechar.Parent = Topo
+
+--// ABAS
+local AbaVelocidade = Instance.new("TextButton")
+AbaVelocidade.Size = UDim2.fromOffset(132, 32)
+AbaVelocidade.Position = UDim2.fromOffset(10, 45)
+AbaVelocidade.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+AbaVelocidade.BorderSizePixel = 0
+AbaVelocidade.Text = "⚡ Velocidade"
+AbaVelocidade.TextColor3 = Color3.fromRGB(255, 255, 255)
+AbaVelocidade.TextSize = 13
+AbaVelocidade.Font = Enum.Font.GothamBold
+AbaVelocidade.Parent = Painel
+
+local AbaOvos = Instance.new("TextButton")
+AbaOvos.Size = UDim2.fromOffset(132, 32)
+AbaOvos.Position = UDim2.fromOffset(148, 45)
+AbaOvos.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+AbaOvos.BorderSizePixel = 0
+AbaOvos.Text = "🥚 Ovos"
+AbaOvos.TextColor3 = Color3.fromRGB(180, 180, 180)
+AbaOvos.TextSize = 13
+AbaOvos.Font = Enum.Font.GothamBold
+AbaOvos.Parent = Painel
+
+--// PÁGINA VELOCIDADE
+local PaginaVelocidade = Instance.new("Frame")
+PaginaVelocidade.Size = UDim2.new(1, -20, 0, 115)
+PaginaVelocidade.Position = UDim2.fromOffset(10, 82)
+PaginaVelocidade.BackgroundTransparency = 1
+PaginaVelocidade.Parent = Painel
+
+local TextoVelocidade = Instance.new("TextLabel")
+TextoVelocidade.Size = UDim2.new(1, 0, 0, 25)
+TextoVelocidade.BackgroundTransparency = 1
+TextoVelocidade.Text = "Velocidade:"
+TextoVelocidade.TextColor3 = Color3.fromRGB(220, 220, 220)
+TextoVelocidade.TextSize = 13
+TextoVelocidade.Font = Enum.Font.Gotham
+TextoVelocidade.TextXAlignment = Enum.TextXAlignment.Left
+TextoVelocidade.Parent = PaginaVelocidade
+
+local CampoVelocidade = Instance.new("TextBox")
+CampoVelocidade.Size = UDim2.fromOffset(120, 34)
+CampoVelocidade.Position = UDim2.fromOffset(0, 28)
+CampoVelocidade.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+CampoVelocidade.BorderSizePixel = 0
+CampoVelocidade.ClearTextOnFocus = false
+CampoVelocidade.Text = tostring(Estado.Velocidade)
+CampoVelocidade.TextColor3 = Color3.fromRGB(255, 255, 255)
+CampoVelocidade.TextSize = 14
+CampoVelocidade.Font = Enum.Font.GothamBold
+CampoVelocidade.PlaceholderText = "Valor"
+CampoVelocidade.Parent = PaginaVelocidade
+
+local Aplicar = Instance.new("TextButton")
+Aplicar.Size = UDim2.fromOffset(120, 34)
+Aplicar.Position = UDim2.fromOffset(130, 28)
+Aplicar.BackgroundColor3 = Color3.fromRGB(65, 65, 65)
+Aplicar.BorderSizePixel = 0
+Aplicar.Text = "Aplicar"
+Aplicar.TextColor3 = Color3.fromRGB(255, 255, 255)
+Aplicar.TextSize = 13
+Aplicar.Font = Enum.Font.GothamBold
+Aplicar.Parent = PaginaVelocidade
+
+local Ativar = Instance.new("TextButton")
+Ativar.Size = UDim2.fromOffset(250, 36)
+Ativar.Position = UDim2.fromOffset(0, 70)
+Ativar.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+Ativar.BorderSizePixel = 0
+Ativar.Text = "ATIVAR VELOCIDADE"
+Ativar.TextColor3 = Color3.fromRGB(255, 255, 255)
+Ativar.TextSize = 13
+Ativar.Font = Enum.Font.GothamBold
+Ativar.Parent = PaginaVelocidade
+
+--// PÁGINA OVOS
+local PaginaOvos = Instance.new("Frame")
+PaginaOvos.Size = UDim2.new(1, -20, 0, 115)
+PaginaOvos.Position = UDim2.fromOffset(10, 82)
+PaginaOvos.BackgroundTransparency = 1
+PaginaOvos.Visible = false
+PaginaOvos.Parent = Painel
+
+local TextoOvos = Instance.new("TextLabel")
+TextoOvos.Size = UDim2.new(1, 0, 1, 0)
+TextoOvos.BackgroundTransparency = 1
+TextoOvos.Text = ""
+TextoOvos.TextColor3 = Color3.fromRGB(255, 255, 255)
+TextoOvos.TextSize = 13
+TextoOvos.Font = Enum.Font.Gotham
+TextoOvos.Parent = PaginaOvos
+
+--// BOTÃO DE REABRIR
+local Abrir = Instance.new("TextButton")
+Abrir.Size = UDim2.fromOffset(48, 48)
+Abrir.Position = UDim2.fromOffset(15, 180)
+Abrir.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+Abrir.BorderSizePixel = 0
+Abrir.Text = "▶"
+Abrir.TextColor3 = Color3.fromRGB(255, 255, 255)
+Abrir.TextSize = 18
+Abrir.Font = Enum.Font.GothamBold
+Abrir.Visible = false
+Abrir.Parent = ScreenGui
+
+local CantoAbrir = Instance.new("UICorner")
+CantoAbrir.CornerRadius = UDim.new(0, 10)
+CantoAbrir.Parent = Abrir
+
+--// TROCA DE ABA
+Registrar(AbaVelocidade.Activated:Connect(function()
+    PaginaVelocidade.Visible = true
+    PaginaOvos.Visible = false
+
+    AbaVelocidade.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+    AbaVelocidade.TextColor3 = Color3.fromRGB(255, 255, 255)
+
+    AbaOvos.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    AbaOvos.TextColor3 = Color3.fromRGB(180, 180, 180)
+end))
+
+Registrar(AbaOvos.Activated:Connect(function()
+    PaginaVelocidade.Visible = false
+    PaginaOvos.Visible = true
+
+    AbaOvos.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+    AbaOvos.TextColor3 = Color3.fromRGB(255, 255, 255)
+
+    AbaVelocidade.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    AbaVelocidade.TextColor3 = Color3.fromRGB(180, 180, 180)
+end))
+
+--// APLICAR VELOCIDADE
+Registrar(Aplicar.Activated:Connect(function()
+    local valor = tonumber(CampoVelocidade.Text)
+
+    if valor then
+        Estado.Velocidade = valor
+        CampoVelocidade.Text = tostring(valor)
+    else
+        CampoVelocidade.Text = tostring(Estado.Velocidade)
+    end
+end))
+
+--// ATIVAR / DESATIVAR
+local function AtualizarBotao()
+    if Estado.VelocidadeAtiva then
+        Ativar.Text = "DESATIVAR VELOCIDADE"
+        Ativar.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    else
+        Ativar.Text = "ATIVAR VELOCIDADE"
+        Ativar.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+    end
+end
+
+Registrar(Ativar.Activated:Connect(function()
+    Estado.VelocidadeAtiva = not Estado.VelocidadeAtiva
+    AtualizarBotao()
+end))
+
+--// VELOCIDADE
+Registrar(RunService.RenderStepped:Connect(function()
+    if not Estado.Ativo or not Estado.VelocidadeAtiva then
+        return
+    end
+
+    local character = LocalPlayer.Character
+    if not character then
+        return
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        return
+    end
+
+    local direcao = humanoid.MoveDirection
+
+    if direcao.Magnitude > 0 then
+        pcall(function()
+            character:TranslateBy(
+                direcao * (Estado.Velocidade / 135)
+            )
+        end)
+    end
+end))
+
+--// ABRIR / FECHAR
+Registrar(Fechar.Activated:Connect(function()
+    Painel.Visible = false
+    Abrir.Visible = true
+end))
+
+Registrar(Abrir.Activated:Connect(function()
+    Painel.Visible = true
+    Abrir.Visible = false
+end))
+
+--// ARRASTAR NO CELULAR
+local Arrastando = false
+local InicioToque = nil
+local InicioPosicao = nil
+
+Registrar(Topo.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch
+        or input.UserInputType == Enum.UserInputType.MouseButton1 then
+
+        Arrastando = true
+        InicioToque = input.Position
+        InicioPosicao = Painel.Position
+    end
+end))
+
+Registrar(UserInputService.InputChanged:Connect(function(input)
+    if not Arrastando then
+        return
+    end
+
+    if input.UserInputType ~= Enum.UserInputType.Touch
+        and input.UserInputType ~= Enum.UserInputType.MouseMovement then
+        return
+    end
+
+    local delta = input.Position - InicioToque
+
+    Painel.Position = UDim2.new(
+        InicioPosicao.X.Scale,
+        InicioPosicao.X.Offset + delta.X,
+        InicioPosicao.Y.Scale,
+        InicioPosicao.Y.Offset + delta.Y
+    )
+end))
+
+Registrar(UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch
+        or input.UserInputType == Enum.UserInputType.MouseButton1 then
+
+        Arrastando = false
+    end
+end))
+
+--// FINALIZAÇÃO GLOBAL
+function Estado:Stop()
+    if not self.Ativo then
+        return
+    end
+
+    self.Ativo = false
+    self.VelocidadeAtiva = false
+
+    DesconectarTudo()
 
     pcall(function()
-        local gui = PlayerGui:FindFirstChild(
-            "MontarUmPetVelocidade"
-        )
-
-        if gui then
-            gui:Destroy()
+        if ScreenGui then
+            ScreenGui:Destroy()
         end
     end)
 end
 
-ENV.__MONTAR_UM_PET_VELOCIDADE = {
-    Stop = PararTudo,
-    Estado = Estado,
-}
+ENV.__MONTAR_UM_PET_VELOCIDADE = Estado
 
--- ================================================================
--- PERSONAGEM
--- ================================================================
-
-local function GetCharacter()
-    return LocalPlayer.Character
-end
-
-local function GetHumanoid()
-    local character = GetCharacter()
-
-    if not character then
-        return nil
-    end
-
-    return character:FindFirstChildOfClass(
-        "Humanoid"
-    )
-end
-
--- ================================================================
--- VELOCIDADE
--- Mesma fórmula do arquivo original
--- ================================================================
-
-Registrar(
-    RunService.RenderStepped:Connect(
-        function()
-
-            if not Estado.Ativo then
-                return
-            end
-
-            if not Estado.VelocidadeAtiva then
-                return
-            end
-
-            local character = GetCharacter()
-            local humanoid = GetHumanoid()
-
-            if not character or not humanoid then
-                return
-            end
-
-            local direcao =
-                humanoid.MoveDirection
-
-            if direcao.Magnitude <= 0 then
-                return
-            end
-
-            pcall(function()
-                character:TranslateBy(
-                    direcao
-                    * (Estado.Velocidade / 135)
-                )
-            end)
-        end
-    )
-)
-
--- ================================================================
--- INTERFACE
--- ================================================================
-
-local ScreenGui = Instance.new("ScreenGui")
-
-ScreenGui.Name =
-    "MontarUmPetVelocidade"
-
-ScreenGui.ResetOnSpawn = false
-ScreenGui.ZIndexBehavior =
-    Enum.ZIndexBehavior.Sibling
-
-ScreenGui.Parent = PlayerGui
-
--- ================================================================
--- JANELA
--- ================================================================
-
-local Frame = Instance.new("Frame")
-
-Frame.Size =
-    UDim2.fromOffset(
-        230,
-        135
-    )
-
-Frame.Position =
-    UDim2.new(
-        0.05,
-        0,
-        0.18,
-        0
-    )
-
-Frame.BackgroundColor3 =
-    Color3.fromRGB(
-        18,
-        18,
-        24
-    )
-
-Frame.BorderSizePixel = 0
-Frame.Active = true
-Frame.Parent = ScreenGui
-
-Instance.new(
-    "UICorner",
-    Frame
-).CornerRadius =
-    UDim.new(0, 10)
-
-local Borda = Instance.new("UIStroke")
-
-Borda.Color =
-    Color3.fromRGB(
-        60,
-        60,
-        70
-    )
-
-Borda.Thickness = 1
-Borda.Parent = Frame
-
--- ================================================================
--- TÍTULO
--- ================================================================
-
-local Titulo = Instance.new("TextLabel")
-
-Titulo.Size =
-    UDim2.new(
-        1,
-        -55,
-        0,
-        30
-    )
-
-Titulo.Position =
-    UDim2.fromOffset(
-        9,
-        3
-    )
-
-Titulo.BackgroundTransparency = 1
-Titulo.Text =
-    "⚡ Velocidade"
-
-Titulo.TextColor3 =
-    Color3.new(
-        1,
-        1,
-        1
-    )
-
-Titulo.Font =
-    Enum.Font.SourceSansBold
-
-Titulo.TextSize = 16
-Titulo.TextXAlignment =
-    Enum.TextXAlignment.Left
-
-Titulo.Parent = Frame
-
--- ================================================================
--- BOTÃO FECHAR
--- ================================================================
-
-local Fechar = Instance.new("TextButton")
-
-Fechar.Size =
-    UDim2.fromOffset(
-        30,
-        26
-    )
-
-Fechar.Position =
-    UDim2.new(
-        1,
-        -36,
-        0,
-        5
-    )
-
-Fechar.BackgroundColor3 =
-    Color3.fromRGB(
-        80,
-        40,
-        40
-    )
-
-Fechar.Text = "×"
-
-Fechar.TextColor3 =
-    Color3.new(
-        1,
-        1,
-        1
-    )
-
-Fechar.Font =
-    Enum.Font.SourceSansBold
-
-Fechar.TextSize = 18
-Fechar.Parent = Frame
-
-Instance.new(
-    "UICorner",
-    Fechar
-).CornerRadius =
-    UDim.new(0, 6)
-
--- ================================================================
--- BOTÃO ABRIR / FECHAR PAINEL
--- ================================================================
-
-local AbrirFechar = Instance.new("TextButton")
-
-AbrirFechar.Size =
-    UDim2.fromOffset(
-        30,
-        26
-    )
-
-AbrirFechar.Position =
-    UDim2.new(
-        1,
-        -72,
-        0,
-        5
-    )
-
-AbrirFechar.BackgroundColor3 =
-    Color3.fromRGB(
-        45,
-        45,
-        55
-    )
-
-AbrirFechar.Text = "—"
-
-AbrirFechar.TextColor3 =
-    Color3.new(
-        1,
-        1,
-        1
-    )
-
-AbrirFechar.Font =
-    Enum.Font.SourceSansBold
-
-AbrirFechar.TextSize = 17
-AbrirFechar.Parent = Frame
-
-Instance.new(
-    "UICorner",
-    AbrirFechar
-).CornerRadius =
-    UDim.new(0, 6)
-
--- ================================================================
--- CONTEÚDO
--- ================================================================
-
-local Conteudo = Instance.new("Frame")
-
-Conteudo.Size =
-    UDim2.new(
-        1,
-        0,
-        1,
-        -35
-    )
-
-Conteudo.Position =
-    UDim2.fromOffset(
-        0,
-        35
-    )
-
-Conteudo.BackgroundTransparency = 1
-Conteudo.Parent = Frame
-
--- ================================================================
--- CAMPO
--- ================================================================
-
-local Input = Instance.new("TextBox")
-
-Input.Size =
-    UDim2.fromOffset(
-        120,
-        34
-    )
-
-Input.Position =
-    UDim2.fromOffset(
-        9,
-        4
-    )
-
-Input.BackgroundColor3 =
-    Color3.fromRGB(
-        30,
-        30,
-        38
-    )
-
-Input.Text =
-    tostring(Estado.Velocidade)
-
-Input.TextColor3 =
-    Color3.new(
-        1,
-        1,
-        1
-    )
-
-Input.PlaceholderText =
-    "Velocidade"
-
-Input.PlaceholderColor3 =
-    Color3.fromRGB(
-        140,
-        140,
-        150
-    )
-
-Input.Font =
-    Enum.Font.SourceSans
-
-Input.TextSize = 14
-Input.ClearTextOnFocus = false
-Input.Parent = Conteudo
-
-Instance.new(
-    "UICorner",
-    Input
-).CornerRadius =
-    UDim.new(0, 7)
-
--- ================================================================
--- APLICAR
--- ================================================================
-
-local Aplicar = Instance.new("TextButton")
-
-Aplicar.Size =
-    UDim2.fromOffset(
-        70,
-        34
-    )
-
-Aplicar.Position =
-    UDim2.fromOffset(
-        141,
-        4
-    )
-
-Aplicar.BackgroundColor3 =
-    Color3.fromRGB(
-        40,
-        110,
-        70
-    )
-
-Aplicar.Text =
-    "Aplicar"
-
-Aplicar.TextColor3 =
-    Color3.new(
-        1,
-        1,
-        1
-    )
-
-Aplicar.Font =
-    Enum.Font.SourceSansBold
-
-Aplicar.TextSize = 13
-Aplicar.Parent = Conteudo
-
-Instance.new(
-    "UICorner",
-    Aplicar
-).CornerRadius =
-    UDim.new(0, 7)
-
--- ================================================================
--- ATIVAR
--- ================================================================
-
-local Ativar = Instance.new("TextButton")
-
-Ativar.Size =
-    UDim2.new(
-        1,
-        -18,
-        0,
-        34
-    )
-
-Ativar.Position =
-    UDim2.fromOffset(
-        9,
-        46
-    )
-
-Ativar.BackgroundColor3 =
-    Color3.fromRGB(
-        48,
-        48,
-        58
-    )
-
-Ativar.Text =
-    "Velocidade: DESATIVADA"
-
-Ativar.TextColor3 =
-    Color3.new(
-        1,
-        1,
-        1
-    )
-
-Ativar.Font =
-    Enum.Font.SourceSansBold
-
-Ativar.TextSize = 13
-Ativar.Parent = Conteudo
-
-Instance.new(
-    "UICorner",
-    Ativar
-).CornerRadius =
-    UDim.new(0, 7)
-
--- ================================================================
--- STATUS
--- ================================================================
-
-local Status = Instance.new("TextLabel")
-
-Status.Size =
-    UDim2.new(
-        1,
-        -18,
-        0,
-        22
-    )
-
-Status.Position =
-    UDim2.fromOffset(
-        9,
-        87
-    )
-
-Status.BackgroundTransparency = 1
-Status.Text =
-    "Valor: 150"
-
-Status.TextColor3 =
-    Color3.fromRGB(
-        180,
-        180,
-        190
-    )
-
-Status.Font =
-    Enum.Font.SourceSans
-
-Status.TextSize = 12
-Status.TextXAlignment =
-    Enum.TextXAlignment.Left
-
-Status.Parent = Conteudo
-
--- ================================================================
--- VISUAL
--- ================================================================
-
-local function AtualizarVisual()
-
-    Status.Text =
-        "Valor: "
-        .. tostring(
-            Estado.Velocidade
-        )
-
-    if Estado.VelocidadeAtiva then
-
-        Ativar.Text =
-            "Velocidade: ATIVADA"
-
-        Ativar.BackgroundColor3 =
-            Color3.fromRGB(
-                35,
-                125,
-                75
-            )
-
-    else
-
-        Ativar.Text =
-            "Velocidade: DESATIVADA"
-
-        Ativar.BackgroundColor3 =
-            Color3.fromRGB(
-                48,
-                48,
-                58
-            )
-    end
-end
-
-AtualizarVisual()
-
--- ================================================================
--- APLICAR VALOR
--- ================================================================
-
-Registrar(
-    Aplicar.MouseButton1Click:Connect(
-        function()
-
-            local valor =
-                tonumber(Input.Text)
-
-            if not valor then
-                Input.Text =
-                    tostring(
-                        Estado.Velocidade
-                    )
-                return
-            end
-
-            Estado.Velocidade =
-                math.clamp(
-                    valor,
-                    16,
-                    1000
-                )
-
-            Input.Text =
-                tostring(
-                    Estado.Velocidade
-                )
-
-            AtualizarVisual()
-        end
-    )
-)
-
--- ================================================================
--- ON / OFF
--- ================================================================
-
-Registrar(
-    Ativar.MouseButton1Click:Connect(
-        function()
-
-            Estado.VelocidadeAtiva =
-                not Estado.VelocidadeAtiva
-
-            AtualizarVisual()
-        end
-    )
-)
-
--- ================================================================
--- ABRIR / FECHAR
--- ================================================================
-
-local Aberto = true
-
-Registrar(
-    AbrirFechar.MouseButton1Click:Connect(
-        function()
-
-            Aberto = not Aberto
-
-            if Aberto then
-
-                Conteudo.Visible = true
-
-                Frame.Size =
-                    UDim2.fromOffset(
-                        230,
-                        135
-                    )
-
-                AbrirFechar.Text =
-                    "—"
-
-            else
-
-                Conteudo.Visible = false
-
-                Frame.Size =
-                    UDim2.fromOffset(
-                        230,
-                        40
-                    )
-
-                AbrirFechar.Text =
-                    "+"
-            end
-        end
-    )
-)
-
--- ================================================================
--- ARRASTAR
--- ================================================================
-
-local Arrastando = false
-local Inicio
-local PosicaoInicial
-
-Registrar(
-    Frame.InputBegan:Connect(
-        function(input)
-
-            if input.UserInputType
-                == Enum.UserInputType.Touch
-                or input.UserInputType
-                == Enum.UserInputType.MouseButton1 then
-
-                Arrastando = true
-                Inicio = input.Position
-                PosicaoInicial =
-                    Frame.Position
-            end
-        end
-    )
-)
-
-Registrar(
-    UserInputService.InputChanged:Connect(
-        function(input)
-
-            if not Arrastando then
-                return
-            end
-
-            if input.UserInputType
-                ~= Enum.UserInputType.Touch
-                and input.UserInputType
-                ~= Enum.UserInputType.MouseMovement then
-
-                return
-            end
-
-            local Delta =
-                input.Position
-                - Inicio
-
-            Frame.Position =
-                UDim2.new(
-                    PosicaoInicial.X.Scale,
-                    PosicaoInicial.X.Offset
-                        + Delta.X,
-
-                    PosicaoInicial.Y.Scale,
-                    PosicaoInicial.Y.Offset
-                        + Delta.Y
-                )
-        end
-    )
-)
-
-Registrar(
-    UserInputService.InputEnded:Connect(
-        function(input)
-
-            if input.UserInputType
-                == Enum.UserInputType.Touch
-                or input.UserInputType
-                == Enum.UserInputType.MouseButton1 then
-
-                Arrastando = false
-            end
-        end
-    )
-)
-
-print(
-    "[MONTAR UM PET] Apenas uma interface de velocidade está ativa."
-)
+AtualizarBotao()
