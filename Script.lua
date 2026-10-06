@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v27 • UI ORIGINAL v15 • DELTA STABLE
+-- MONTAR UM PET - MASTER v29.1 • UI ORIGINAL v15 • DELTA STABLE
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
@@ -1577,8 +1577,8 @@ end
 
 --============================================================--
 -- AUTO FARM FLIGHT ENGINE
--- Vai voando em altitude, desce apenas no alvo, coleta e
--- volta voando para a base. Não usa teleport para o ciclo do farm.
+-- Modelo de fases: CRUZEIRO = noclip ON; APROXIMAÇÃO/DESCIDA = noclip OFF;
+-- PARADO = colisão restaurada. Não usa teleport para o ciclo do farm.
 --============================================================--
 
 local FarmFlightVelocity = nil
@@ -1804,7 +1804,7 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier, allow
         return false
     end
 
-    local useNoclip = allowNoclip ~= false or not State.FarmFloorGuard
+    local useNoclip = allowNoclip == true
     if useNoclip then
         StartFarmNoclip()
     else
@@ -1923,13 +1923,37 @@ local function FarmFlightSegment(targetPosition, speed, timeoutMultiplier, allow
 
         pcall(function()
             local velocityVector = direction * currentSpeed
+
             if State.FarmFloorGuard then
-                velocityVector = Vector3.new(
-                    velocityVector.X,
-                    math.max(velocityVector.Y, -math.abs(tonumber(State.FarmMaxDescendSpeed) or 70)),
-                    velocityVector.Z
-                )
+                local floorY = GetFarmFloorY(root.Position, 140)
+                if floorY then
+                    local clearance = math.max(3, tonumber(State.FarmFloorClearance) or 6)
+                    local minimumY = floorY + clearance
+
+                    -- Limita a velocidade de descida em todo o trajeto.
+                    local maxDescend = math.abs(tonumber(State.FarmMaxDescendSpeed) or 70)
+                    local safeYVelocity = math.max(velocityVector.Y, -maxDescend)
+
+                    -- Se estiver próximo demais do piso, não aceita mais
+                    -- velocidade negativa: primeiro sobe/estabiliza.
+                    if root.Position.Y <= minimumY + 2 then
+                        safeYVelocity = math.max(safeYVelocity, 10)
+                    end
+
+                    velocityVector = Vector3.new(
+                        velocityVector.X,
+                        safeYVelocity,
+                        velocityVector.Z
+                    )
+                else
+                    velocityVector = Vector3.new(
+                        velocityVector.X,
+                        math.max(velocityVector.Y, -math.abs(tonumber(State.FarmMaxDescendSpeed) or 70)),
+                        velocityVector.Z
+                    )
+                end
             end
+
             FarmFlightVelocity.Velocity = velocityVector
             FarmFlightGyro.CFrame = CFrame.lookAt(
                 root.Position,
@@ -1965,9 +1989,13 @@ local function FarmFlyTo(targetPosition, speed, descend)
         return false
     end
 
+    -- Uma sessão de voo começa com colisões desativadas para atravessar
+    -- paredes/obstáculos. A sessão termina com a restauração da colisão.
     StartFarmNoclip()
+    SetFarmPhase("Voando")
 
     if not CreateFarmFlightMovers(root) then
+        StopFarmNoclip()
         return false
     end
 
@@ -1982,7 +2010,8 @@ local function FarmFlyTo(targetPosition, speed, descend)
         humanoid.AutoRotate = false
     end
 
-    -- Noclip persistente durante todo o ciclo do Auto Farm.
+    -- Durante subida/cruzeiro, o noclip fica ativo para atravessar paredes.
+    StartFarmNoclip()
     EnforceFarmNoclip()
 
     local flightHeight = math.clamp(
@@ -2013,7 +2042,8 @@ local function FarmFlyTo(targetPosition, speed, descend)
     local ok = FarmFlightSegment(
         upPoint,
         speed or State.FarmFlightSpeed,
-        2
+        2,
+        true
     )
 
     -- 2. Voa rápido acima do ovo/base.
@@ -2027,7 +2057,8 @@ local function FarmFlyTo(targetPosition, speed, descend)
         ok = FarmFlightSegment(
             cruisePoint,
             speed or State.FarmFlightSpeed,
-            2.5
+            2.5,
+            true
         )
     end
 
@@ -2045,6 +2076,12 @@ local function FarmFlyTo(targetPosition, speed, descend)
             ok = false
         else
             -- Aproximação final deliberadamente mais lenta.
+            -- Aqui o voo deixa de ser “cruzeiro”: desligamos o noclip antes
+            -- da descida para que o personagem volte a respeitar as paredes
+            -- e o chão do mapa.
+            StopFarmNoclip()
+            SetFarmPhase("Descendo / colisão ativa")
+
             ok = FarmFlightSegment(
                 dropPoint,
                 math.min(
@@ -2052,7 +2089,7 @@ local function FarmFlyTo(targetPosition, speed, descend)
                     180
                 ),
                 2.5,
-                not State.FarmFloorGuard
+                false
             )
         end
     end
@@ -2072,12 +2109,11 @@ local function FarmFlyTo(targetPosition, speed, descend)
         end)
     end
 
-    -- Em uma descida protegida, deixamos a colisão restaurada para o personagem
-    -- ficar preso ao chão/plot somente de forma física, sem atravessar a base.
-    if State.FarmFloorGuard and descend ~= false then
-        StopFarmNoclip()
-    else
-        EnforceFarmNoclip()
+    -- Toda sessão termina com a colisão restaurada. Assim, quando o voo para,
+    -- o personagem deixa imediatamente de atravessar paredes.
+    StopFarmNoclip()
+    if ok then
+        SetFarmPhase("Parado / colisão ativa")
     end
 
     return ok
