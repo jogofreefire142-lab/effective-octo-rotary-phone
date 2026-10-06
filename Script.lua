@@ -1,8 +1,8 @@
 --============================================================--
--- MONTAR UM PET - MASTER v15 AUTOFARM FLIGHT + NOCLIP + SAFE APPROACH + CONFIG
+-- MONTAR UM PET - MASTER v21 UI NATIVA + AUTOFARM FLIGHT + NOCLIP + CONFIG
 -- PlaceId: 124216119978534
--- UI: Rayfield Gen2 (stable)
--- Config: salvamento manual + persistência do Rayfield
+-- UI: Nativa, sem dependência externa; layout mobile/PC
+-- Config: salvamento manual em arquivo + flags compatíveis
 -- Foco: Delta Mobile + Auto Farm por estados + voo sem colisão + retorno/entrega robustos + cleanup robusto
 --
 -- Pesquisa usada para esta versão:
@@ -60,9 +60,34 @@ local GUI_HINTS = {
     "MontarUmPetVelocidade",
     "MontarUmPet_Master",
     "MontarUmPet_RayfieldGen2",
+    "MontarUmPet_NativeUI",
 }
 
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- Limpeza direta da UI nativa desta versão, inclusive quando a janela
+-- antiga foi parentada no gethui/CoreGui e o handler anterior não chegou
+-- a ser registrado.
+local function RemoveOldNativeUI(container)
+    if not container then
+        return
+    end
+    pcall(function()
+        for _, child in ipairs(container:GetChildren()) do
+            if child.Name == "MontarUmPet_NativeUI" then
+                child:Destroy()
+            end
+        end
+    end)
+end
+
+pcall(function()
+    RemoveOldNativeUI(PlayerGui)
+    RemoveOldNativeUI(game:GetService("CoreGui"))
+    if typeof(gethui) == "function" then
+        RemoveOldNativeUI(gethui())
+    end
+end)
 
 -- Para versões anteriores que já tenham um Stop exposto.
 for _, tokenName in ipairs(TOKEN_NAMES) do
@@ -3657,899 +3682,1102 @@ local function Set3DDisabled(enabled)
     end)
 end
 
-
 --============================================================--
--- 2026 VERIFIED EXTENSION
--- Base: UI/engine v15 (stable)
--- Only functions with concrete public implementations are exposed here.
+-- GUI: UI NATIVA ESTÁVEL / ZERO DEPENDÊNCIA
+-- A interface não depende de HttpGet/loadstring de biblioteca externa.
+-- Mantém a mesma API usada pelo restante do script (Window/Tab/Rayfield.Flags).
 --============================================================--
 
-local Verified = {
-    AutoPlace = false,
-    AutoHatch = false,
-    AutoIndex = false,
-    AutoBestPets = false,
-    AutoFeed = false,
-    AutoBuyFood = false,
-    AutoFavorites = false,
-    BestMetric = "Income",
-    FeedAgeMax = 100,
-    SelectedFoods = {},
-    SelectedPets = {},
-    FavoritePets = {},
-    FavoriteRarities = {},
-    Status = "Idle",
-    Busy = false,
-    Cooldowns = {},
-}
+local NativeUI = {}
+NativeUI.Flags = {}
+NativeUI._windows = {}
 
-local VerifiedData = {
-    General = nil,
-    Pets = nil,
-    Foods = nil,
-    Shop = nil,
-    IndexRewards = nil,
-    Mutations = nil,
-    PetAging = nil,
-    DayNight = nil,
-}
-
-local VerifiedFoodNames = {}
-local VerifiedPetNames = {}
-local VerifiedRarities = {}
-
-local function VerifiedStatus(text)
-    Verified.Status = tostring(text or "Idle")
-end
-
-local function VerifiedReady(key, seconds)
-    local now = os.clock()
-    local nextTime = tonumber(Verified.Cooldowns[key]) or 0
-    if now < nextTime then
-        return false
-    end
-    Verified.Cooldowns[key] = now + math.max(0.1, tonumber(seconds) or 1)
-    return true
-end
-
-local function VerifiedRemote(name)
-    local remotes = GetGameRemotes()
-    local remote = remotes and remotes:FindFirstChild(name)
-    if remote and remote:IsA("RemoteEvent") then
-        return remote
-    end
-    return nil
-end
-
-local function VerifiedFire(name, ...)
-    local remote = VerifiedRemote(name)
-    if not remote then
-        VerifiedStatus("API ausente: " .. tostring(name))
-        return false
-    end
-    local ok = pcall(function()
-        remote:FireServer(...)
+local function uiParent()
+    local ok, hui = pcall(function()
+        if typeof(gethui) == "function" then
+            return gethui()
+        end
     end)
-    if not ok then
-        VerifiedStatus("Falha ao executar: " .. tostring(name))
+    if ok and hui then
+        return hui
     end
-    return ok
+
+    local okCore, core = pcall(function()
+        return game:GetService("CoreGui")
+    end)
+    if okCore and core then
+        return core
+    end
+
+    return PlayerGui
 end
 
-local function VerifiedWait(predicate, timeout)
-    local deadline = os.clock() + math.max(0.1, tonumber(timeout) or 3)
-    while Running and os.clock() < deadline do
-        local ok, result = pcall(predicate)
-        if ok and result then
+local function make(className, props, parent)
+    local obj = Instance.new(className)
+    if props then
+        for key, value in pairs(props) do
+            pcall(function()
+                obj[key] = value
+            end)
+        end
+    end
+    obj.Parent = parent
+    return obj
+end
+
+local function corner(parent, radius)
+    return make("UICorner", {
+        CornerRadius = UDim.new(0, radius or 8),
+    }, parent)
+end
+
+local function stroke(parent, color, thickness, transparency)
+    return make("UIStroke", {
+        Color = color or Color3.fromRGB(45, 48, 58),
+        Thickness = thickness or 1,
+        Transparency = transparency or 0,
+    }, parent)
+end
+
+local COLORS = {
+    bg = Color3.fromRGB(12, 14, 18),
+    panel = Color3.fromRGB(18, 21, 27),
+    panel2 = Color3.fromRGB(23, 27, 34),
+    hover = Color3.fromRGB(31, 36, 46),
+    accent = Color3.fromRGB(92, 124, 255),
+    accent2 = Color3.fromRGB(73, 102, 230),
+    text = Color3.fromRGB(238, 241, 247),
+    sub = Color3.fromRGB(153, 160, 175),
+    line = Color3.fromRGB(40, 45, 55),
+    good = Color3.fromRGB(79, 208, 126),
+    bad = Color3.fromRGB(231, 90, 98),
+    white = Color3.fromRGB(255, 255, 255),
+}
+
+local function tween(obj, props, duration)
+    pcall(function()
+        TweenService:Create(
+            obj,
+            TweenInfo.new(duration or 0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            props
+        ):Play()
+    end)
+end
+
+local function clampNumber(v, a, b)
+    local n = tonumber(v) or a
+    return math.clamp(n, a, b)
+end
+
+local function arrayHas(tbl, value)
+    if type(tbl) ~= "table" then
+        return false
+    end
+    for _, v in ipairs(tbl) do
+        if v == value then
             return true
         end
-        task.wait(0.08)
     end
     return false
 end
 
-local function VerifiedLoadModules()
-    local gameData = ReplicatedStorage:FindFirstChild("GameData")
-    local gameServices = ReplicatedStorage:FindFirstChild("GameServices")
+local function clearChildrenOfClass(parent, className)
+    for _, c in ipairs(parent:GetChildren()) do
+        if c:IsA(className) then
+            c:Destroy()
+        end
+    end
+end
 
-    local function load(parent, name, key)
-        local module = parent and parent:FindFirstChild(name)
-        if module and module:IsA("ModuleScript") then
-            local ok, value = pcall(require, module)
-            if ok and type(value) == "table" then
-                VerifiedData[key] = value
+local function createFlag(flagName, initialValue, setter)
+    if not flagName or flagName == "" then
+        return nil
+    end
+
+    local flag = NativeUI.Flags[flagName]
+    if not flag then
+        flag = {}
+        NativeUI.Flags[flagName] = flag
+    end
+
+    flag.CurrentValue = initialValue
+    flag.CurrentOption = initialValue
+    flag.CurrentKeybind = initialValue
+    flag.Set = function(_, value)
+        setter(value, true)
+    end
+
+    return flag
+end
+
+function NativeUI:CreateWindow(options)
+    -- Derruba qualquer janela nativa anterior do próprio hub.
+    for _, w in pairs(self._windows) do
+        pcall(function()
+            if w.Destroy then
+                w:Destroy()
             end
+        end)
+    end
+    self._windows = {}
+
+    local gui = make("ScreenGui", {
+        Name = "MontarUmPet_NativeUI",
+        ResetOnSpawn = false,
+        IgnoreGuiInset = true,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        DisplayOrder = 1000000,
+    }, uiParent())
+
+    local root = make("Frame", {
+        Name = "Window",
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.52),
+        Size = UDim2.new(0.92, 0, 0.80, 0),
+        BackgroundColor3 = COLORS.bg,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+    }, gui)
+    corner(root, 12)
+    stroke(root, Color3.fromRGB(50, 56, 68), 1)
+
+    local top = make("Frame", {
+        Name = "TopBar",
+        Size = UDim2.new(1, 0, 0, 58),
+        BackgroundColor3 = COLORS.panel,
+        BorderSizePixel = 0,
+    }, root)
+
+    local title = make("TextLabel", {
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 16, 0, 7),
+        Size = UDim2.new(0.48, 0, 0, 24),
+        Font = Enum.Font.GothamBold,
+        Text = tostring(options and options.name or "Montar um Pet"),
+        TextColor3 = COLORS.text,
+        TextSize = 18,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, top)
+
+    local subtitle = make("TextLabel", {
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 16, 0, 31),
+        Size = UDim2.new(0.55, 0, 0, 18),
+        Font = Enum.Font.Gotham,
+        Text = tostring(options and options.subtitle or "MASTER • UI Nativa"),
+        TextColor3 = COLORS.sub,
+        TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, top)
+
+    local status = make("TextLabel", {
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -54, 0.5, 0),
+        Size = UDim2.new(0, 78, 0, 26),
+        BackgroundColor3 = Color3.fromRGB(26, 50, 37),
+        Text = "ONLINE",
+        Font = Enum.Font.GothamBold,
+        TextColor3 = COLORS.good,
+        TextSize = 10,
+        TextXAlignment = Enum.TextXAlignment.Center,
+    }, top)
+    corner(status, 8)
+
+    local close = make("TextButton", {
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -12, 0.5, 0),
+        Size = UDim2.new(0, 30, 0, 30),
+        BackgroundColor3 = COLORS.panel2,
+        AutoButtonColor = false,
+        Text = "×",
+        Font = Enum.Font.GothamBold,
+        TextColor3 = COLORS.text,
+        TextSize = 20,
+    }, top)
+    corner(close, 8)
+
+    local body = make("Frame", {
+        Position = UDim2.new(0, 0, 0, 58),
+        Size = UDim2.new(1, 0, 1, -58),
+        BackgroundTransparency = 1,
+    }, root)
+
+    local sidebarWidth = 148
+
+    local sidebar = make("Frame", {
+        Size = UDim2.new(0, sidebarWidth, 1, 0),
+        BackgroundColor3 = COLORS.panel,
+        BorderSizePixel = 0,
+    }, body)
+
+    local sidebarLine = make("Frame", {
+        Position = UDim2.new(1, -1, 0, 0),
+        Size = UDim2.new(0, 1, 1, 0),
+        BackgroundColor3 = COLORS.line,
+        BorderSizePixel = 0,
+    }, sidebar)
+
+    local tabList = make("ScrollingFrame", {
+        Position = UDim2.new(0, 8, 0, 10),
+        Size = UDim2.new(1, -16, 1, -20),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        CanvasSize = UDim2.new(),
+        ScrollBarThickness = 2,
+        ScrollBarImageColor3 = COLORS.accent,
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+    }, sidebar)
+
+    local tabLayout = make("UIListLayout", {
+        Padding = UDim.new(0, 6),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    }, tabList)
+
+    local content = make("Frame", {
+        Position = UDim2.new(0, sidebarWidth, 0, 0),
+        Size = UDim2.new(1, -sidebarWidth, 1, 0),
+        BackgroundColor3 = COLORS.bg,
+        BorderSizePixel = 0,
+    }, body)
+
+    local pages = {}
+    local pageButtons = {}
+    local currentTab
+
+    local function updateCanvas(scroll)
+        if not scroll then return end
+        local layout = scroll:FindFirstChildOfClass("UIListLayout")
+        if layout then
+            scroll.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + 18)
         end
     end
 
-    load(gameData, "General", "General")
-    load(gameData, "Pets", "Pets")
-    load(gameData, "Foods", "Foods")
-    load(gameData, "Shop", "Shop")
-    load(gameData, "IndexRewards", "IndexRewards")
-    load(gameData, "Mutations", "Mutations")
-    load(gameServices, "PetAging", "PetAging")
-    load(gameServices, "DayNight", "DayNight")
+    local dragging = false
+    local dragStart
+    local startPos
+    local dragConn
 
-    table.clear(VerifiedFoodNames)
-    if type(VerifiedData.Shop) == "table" and type(VerifiedData.Shop.Food) == "table"
-        and type(VerifiedData.Foods) == "table" then
-        for name, def in pairs(VerifiedData.Shop.Food) do
-            if type(name) == "string" and type(def) == "table" and VerifiedData.Foods[name] then
-                table.insert(VerifiedFoodNames, name)
+    top.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = root.Position
+
+            if dragConn then
+                dragConn:Disconnect()
+            end
+
+            dragConn = UserInputService.InputChanged:Connect(function(changed)
+                if not dragging then
+                    return
+                end
+                if changed.UserInputType ~= Enum.UserInputType.MouseMovement
+                    and changed.UserInputType ~= Enum.UserInputType.Touch then
+                    return
+                end
+
+                local delta = changed.Position - dragStart
+                root.Position = UDim2.new(
+                    startPos.X.Scale,
+                    startPos.X.Offset + delta.X,
+                    startPos.Y.Scale,
+                    startPos.Y.Offset + delta.Y
+                )
+            end)
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+            if dragConn then
+                dragConn:Disconnect()
+                dragConn = nil
             end
         end
-        table.sort(VerifiedFoodNames, function(a, b)
-            local ap = tonumber(VerifiedData.Shop.Food[a].Price) or math.huge
-            local bp = tonumber(VerifiedData.Shop.Food[b].Price) or math.huge
-            if ap == bp then return a < b end
-            return ap < bp
+    end)
+
+    local uiVisible = true
+
+    local function setUIVisible(v)
+        uiVisible = not not v
+        root.Visible = uiVisible
+    end
+
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then
+            return
+        end
+        if input.KeyCode == Enum.KeyCode.K then
+            setUIVisible(not uiVisible)
+        end
+    end)
+
+    local minimized = false
+    local normalSize = root.Size
+
+    local minimize = make("TextButton", {
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -90, 0.5, 0),
+        Size = UDim2.new(0, 30, 0, 30),
+        BackgroundColor3 = COLORS.panel2,
+        AutoButtonColor = false,
+        Text = "–",
+        Font = Enum.Font.GothamBold,
+        TextColor3 = COLORS.text,
+        TextSize = 18,
+    }, top)
+    corner(minimize, 8)
+
+    local function setMinimized()
+        minimized = not minimized
+        if minimized then
+            normalSize = root.Size
+            tween(root, {Size = UDim2.new(0, math.min(380, 520), 0, 58)}, 0.16)
+            body.Visible = false
+            minimize.Text = "+"
+        else
+            body.Visible = true
+            tween(root, {Size = normalSize}, 0.16)
+            minimize.Text = "–"
+        end
+    end
+    minimize.MouseButton1Click:Connect(setMinimized)
+
+    local window = {}
+    self._windows[#self._windows + 1] = window
+
+    function window:Notify(data)
+        data = data or {}
+        local note = make("Frame", {
+            AnchorPoint = Vector2.new(1, 0),
+            Position = UDim2.new(1, -14, 0, 72),
+            Size = UDim2.new(0, 270, 0, 72),
+            BackgroundColor3 = COLORS.panel2,
+            BorderSizePixel = 0,
+            ZIndex = 2000,
+        }, gui)
+        corner(note, 10)
+        stroke(note, COLORS.line, 1)
+
+        make("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0, 12, 0, 8),
+            Size = UDim2.new(1, -24, 0, 20),
+            Font = Enum.Font.GothamBold,
+            Text = tostring(data.title or "Montar um Pet"),
+            TextColor3 = COLORS.text,
+            TextSize = 13,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 2001,
+        }, note)
+
+        make("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0, 12, 0, 29),
+            Size = UDim2.new(1, -24, 0, 36),
+            Font = Enum.Font.Gotham,
+            Text = tostring(data.content or ""),
+            TextWrapped = true,
+            TextColor3 = COLORS.sub,
+            TextSize = 11,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Top,
+            ZIndex = 2001,
+        }, note)
+
+        task.delay(tonumber(data.duration) or 3, function()
+            pcall(function()
+                tween(note, {BackgroundTransparency = 1}, 0.15)
+                task.wait(0.16)
+                note:Destroy()
+            end)
         end)
     end
 
-    table.clear(VerifiedPetNames)
-    if type(VerifiedData.Pets) == "table" then
-        for name, def in pairs(VerifiedData.Pets) do
-            if type(name) == "string" and type(def) == "table" and def.Rarity then
-                table.insert(VerifiedPetNames, name)
+    function window:Destroy()
+        pcall(function()
+            if dragConn then
+                dragConn:Disconnect()
+                dragConn = nil
             end
+        end)
+        pcall(function()
+            if gui then
+                gui:Destroy()
+            end
+        end)
+    end
+
+    close.MouseButton1Click:Connect(function()
+        Running = false
+        if StopHandler then
+            task.spawn(function()
+                pcall(StopHandler)
+            end)
         end
-        table.sort(VerifiedPetNames)
-    end
+        window:Destroy()
+    end)
 
-    local seen = {}
-    table.clear(VerifiedRarities)
-    for _, name in ipairs(VerifiedPetNames) do
-        local rarity = VerifiedData.Pets[name] and VerifiedData.Pets[name].Rarity
-        if type(rarity) == "string" and not seen[rarity] then
-            seen[rarity] = true
-            table.insert(VerifiedRarities, rarity)
+    function window:CreateTab(tabOptions)
+        local tabName = tostring((tabOptions and tabOptions.name) or "Tab")
+
+        local page = make("ScrollingFrame", {
+            Name = "Page_" .. tabName:gsub("%W", ""),
+            Size = UDim2.new(1, -22, 1, -18),
+            Position = UDim2.new(0, 11, 0, 9),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            ScrollBarThickness = 3,
+            ScrollBarImageColor3 = COLORS.accent,
+            CanvasSize = UDim2.new(),
+            Visible = false,
+            AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        }, content)
+
+        local layout = make("UIListLayout", {
+            Padding = UDim.new(0, 8),
+            SortOrder = Enum.SortOrder.LayoutOrder,
+        }, page)
+
+        local pad = make("UIPadding", {
+            PaddingTop = UDim.new(0, 2),
+            PaddingBottom = UDim.new(0, 10),
+        }, page)
+
+        local button = make("TextButton", {
+            Size = UDim2.new(1, 0, 0, 38),
+            BackgroundColor3 = COLORS.panel,
+            AutoButtonColor = false,
+            Text = tabName,
+            Font = Enum.Font.GothamMedium,
+            TextColor3 = COLORS.sub,
+            TextSize = 12,
+        }, tabList)
+        corner(button, 8)
+
+        local tab = {
+            _page = page,
+            _button = button,
+            _layout = layout,
+        }
+
+        local function select()
+            for _, record in pairs(pages) do
+                record.page.Visible = false
+            end
+            for _, b in pairs(pageButtons) do
+                b.BackgroundColor3 = COLORS.panel
+                b.TextColor3 = COLORS.sub
+            end
+
+            page.Visible = true
+            button.BackgroundColor3 = COLORS.hover
+            button.TextColor3 = COLORS.text
+            currentTab = tabName
         end
-    end
-    table.sort(VerifiedRarities)
-end
 
--- Importante: não carregue módulos do jogo antes da UI.
--- Alguns ModuleScripts podem aguardar estado do servidor; fazer isso aqui
--- impedia o Rayfield de chegar ao CreateWindow. O carregamento agora é assíncrono.
-local VerifiedModulesLoaded = false
-task.spawn(function()
-    if not Running then
-        return
-    end
-    local ok = pcall(VerifiedLoadModules)
-    VerifiedModulesLoaded = ok
-    if not ok then
-        VerifiedStatus("Módulos 2026: carregamento indisponível")
-    end
-end)
+        button.MouseButton1Click:Connect(select)
 
-local function VerifiedBasketCount()
-    local basket = LocalPlayer:FindFirstChild("Basket")
-    return basket and #basket:GetChildren() or 0
-end
+        pages[tabName] = {page = page, tab = tab}
+        pageButtons[tabName] = button
 
-local function VerifiedTools()
-    local result = {}
-    local backpack = LocalPlayer:FindFirstChild("Backpack")
-    local character = LocalPlayer.Character
-    for _, container in ipairs({backpack, character}) do
-        if container then
-            for _, object in ipairs(container:GetChildren()) do
-                if object:IsA("Tool") then
-                    table.insert(result, object)
+        local function addBox(height)
+            local box = make("Frame", {
+                Size = UDim2.new(1, 0, 0, height or 54),
+                BackgroundColor3 = COLORS.panel,
+                BorderSizePixel = 0,
+            }, page)
+            corner(box, 9)
+            stroke(box, COLORS.line, 1)
+            return box
+        end
+
+        function tab:CreateSection(o)
+            local text = tostring((o and o.name) or "Seção")
+            local box = make("TextLabel", {
+                Size = UDim2.new(1, 0, 0, 28),
+                BackgroundTransparency = 1,
+                Font = Enum.Font.GothamBold,
+                Text = text,
+                TextColor3 = COLORS.accent,
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            }, page)
+            return box
+        end
+
+        function tab:CreateLabel(text)
+            local box = make("TextLabel", {
+                Size = UDim2.new(1, 0, 0, 30),
+                BackgroundTransparency = 1,
+                Font = Enum.Font.Gotham,
+                Text = tostring(text or ""),
+                TextColor3 = COLORS.sub,
+                TextSize = 11,
+                TextWrapped = true,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            }, page)
+            return box
+        end
+
+        function tab:CreateButton(o)
+            o = o or {}
+            local box = addBox(54)
+            local b = make("TextButton", {
+                Position = UDim2.new(0, 10, 0, 7),
+                Size = UDim2.new(1, -20, 0, 40),
+                BackgroundColor3 = COLORS.panel2,
+                AutoButtonColor = false,
+                Text = tostring(o.name or "Button"),
+                Font = Enum.Font.GothamMedium,
+                TextColor3 = COLORS.text,
+                TextSize = 12,
+            }, box)
+            corner(b, 8)
+            b.MouseEnter:Connect(function() tween(b, {BackgroundColor3 = COLORS.hover}, 0.08) end)
+            b.MouseLeave:Connect(function() tween(b, {BackgroundColor3 = COLORS.panel2}, 0.08) end)
+            b.MouseButton1Click:Connect(function()
+                pcall(o.callback)
+            end)
+            return b
+        end
+
+        function tab:CreateToggle(o)
+            o = o or {}
+            local value = not not o.value
+            local box = addBox(58)
+            local label = make("TextLabel", {
+                BackgroundTransparency = 1,
+                Position = UDim2.new(0, 12, 0, 7),
+                Size = UDim2.new(1, -92, 0, 20),
+                Font = Enum.Font.GothamMedium,
+                Text = tostring(o.name or "Toggle"),
+                TextColor3 = COLORS.text,
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            }, box)
+
+            local desc = make("TextLabel", {
+                BackgroundTransparency = 1,
+                Position = UDim2.new(0, 12, 0, 28),
+                Size = UDim2.new(1, -104, 0, 18),
+                Font = Enum.Font.Gotham,
+                Text = tostring(o.description or ""),
+                TextColor3 = COLORS.sub,
+                TextSize = 9,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                TextTruncate = Enum.TextTruncate.AtEnd,
+            }, box)
+
+            local btn = make("TextButton", {
+                AnchorPoint = Vector2.new(1, 0.5),
+                Position = UDim2.new(1, -12, 0.5, 0),
+                Size = UDim2.new(0, 48, 0, 26),
+                BackgroundColor3 = COLORS.line,
+                AutoButtonColor = false,
+                Text = "",
+            }, box)
+            corner(btn, 13)
+
+            local dot = make("Frame", {
+                AnchorPoint = Vector2.new(0, 0.5),
+                Position = UDim2.new(0, 3, 0.5, 0),
+                Size = UDim2.new(0, 20, 0, 20),
+                BackgroundColor3 = COLORS.sub,
+                BorderSizePixel = 0,
+            }, btn)
+            corner(dot, 10)
+
+            local function render()
+                btn.BackgroundColor3 = value and COLORS.accent2 or COLORS.line
+                dot.Position = value and UDim2.new(1, -23, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
+                dot.BackgroundColor3 = value and COLORS.white or COLORS.sub
+            end
+
+            local function setValue(v, fire)
+                value = not not v
+                render()
+                local flag = o.flag and NativeUI.Flags[o.flag]
+                if flag then
+                    flag.CurrentValue = value
+                    flag.CurrentOption = value
+                end
+                if fire and o.callback then
+                    pcall(o.callback, value)
                 end
             end
-        end
-    end
-    return result
-end
 
-local function VerifiedEggTools()
-    local result = {}
-    for _, tool in ipairs(VerifiedTools()) do
-        if type(EggData) == "table" and EggData[tool.Name] and not tool:GetAttribute("PetKey") then
-            table.insert(result, tool)
-        end
-    end
-    table.sort(result, function(a, b)
-        local ad = EggData[a.Name]
-        local bd = EggData[b.Name]
-        return (type(ad) == "table" and tonumber(ad.Luck) or 0) > (type(bd) == "table" and tonumber(bd.Luck) or 0)
-    end)
-    return result
-end
+            createFlag(o.flag, value, setValue)
 
-local function VerifiedFindPetTool(key)
-    for _, tool in ipairs(VerifiedTools()) do
-        if tool:GetAttribute("PetKey") == key then
-            return tool
-        end
-    end
-    return nil
-end
+            btn.MouseButton1Click:Connect(function()
+                setValue(not value, true)
+            end)
+            render()
 
-local function VerifiedEquip(tool)
-    local character = LocalPlayer.Character
-    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-    if not humanoid or not tool or not tool.Parent then return false end
-    return pcall(function() humanoid:EquipTool(tool) end)
-end
-
-local function VerifiedFreeNests()
-    local result = {}
-    local plot = GetMyPlot()
-    local nests = plot and plot:FindFirstChild("Nests")
-    if not nests then return result end
-
-    for _, nest in ipairs(nests:GetChildren()) do
-        if nest:GetAttribute("Unlocked") == true and nest:GetAttribute("Occupied") ~= true then
-            table.insert(result, nest)
-        end
-    end
-
-    table.sort(result, function(a, b)
-        return (tonumber(a.Name) or 0) < (tonumber(b.Name) or 0)
-    end)
-    return result
-end
-
-local function VerifiedDismount()
-    if LocalPlayer:GetAttribute("IsRiding") ~= true then
-        return true
-    end
-    local remote = VerifiedRemote("PetDismount")
-    if not remote then
-        return false
-    end
-    local ok = pcall(function()
-        remote:FireServer()
-    end)
-    if not ok then return false end
-    return VerifiedWait(function()
-        return LocalPlayer:GetAttribute("IsRiding") ~= true
-    end, 3)
-end
-
-local function VerifiedHome()
-    local plot = GetMyPlot()
-    local base = plot and plot:FindFirstChild("Baseplate")
-    local _, root = GetCharacter()
-    if not plot or not base or not root then return false end
-    if (root.Position - (base.Position + Vector3.new(0, 5, 0))).Magnitude > 12 then
-        if not SafeTeleport(base.Position + Vector3.new(0, 5, 0)) then
-            return false
-        end
-    end
-    return true
-end
-
-local function VerifiedPlaceEggsOnce()
-    if not Running or not Verified.AutoPlace then return false end
-    if VerifiedBasketCount() <= 0 and #VerifiedEggTools() == 0 then return false end
-
-    VerifiedStatus("Auto Place: voltando para o plot")
-    if not VerifiedHome() then return false end
-    task.wait(0.20)
-
-    local nests = VerifiedFreeNests()
-    if #nests == 0 then
-        VerifiedStatus("Auto Place: aguardando ninho livre")
-        return false
-    end
-
-    if not VerifiedWait(function() return #VerifiedEggTools() > 0 end, 2) then
-        VerifiedStatus("Auto Place: ovo não apareceu na mochila")
-        return false
-    end
-
-    for _, nest in ipairs(nests) do
-        if not Running or not Verified.AutoPlace then break end
-        local tool = VerifiedEggTools()[1]
-        if not tool then break end
-        if not VerifiedEquip(tool) then
-            VerifiedStatus("Auto Place: falha ao equipar ovo")
-            return false
-        end
-        task.wait(0.15)
-
-        VerifiedStatus("Auto Place: " .. tostring(tool.Name))
-        VerifiedDismount()
-        if not VerifiedFire("EggPlaced", {NestId = nest.Name}) then
-            return false
+            return btn
         end
 
-        local confirmed = VerifiedWait(function()
-            return nest.Parent and nest:GetAttribute("Occupied") == true
-        end, 3)
+        function tab:CreateSlider(o)
+            o = o or {}
+            local range = o.range or {0, 100}
+            local minV = tonumber(range[1]) or 0
+            local maxV = tonumber(range[2]) or 100
+            local increment = tonumber(o.increment) or 1
+            local value = clampNumber(o.value, minV, maxV)
 
-        if not confirmed then
-            VerifiedStatus("Auto Place: entrega não confirmada")
-            return false
-        end
-    end
+            local box = addBox(68)
+            make("TextLabel", {
+                BackgroundTransparency = 1,
+                Position = UDim2.new(0, 12, 0, 8),
+                Size = UDim2.new(0.62, 0, 0, 20),
+                Font = Enum.Font.GothamMedium,
+                Text = tostring(o.name or "Slider"),
+                TextColor3 = COLORS.text,
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            }, box)
 
-    VerifiedStatus("Auto Place: concluído")
-    return true
-end
+            local valueLabel = make("TextLabel", {
+                BackgroundTransparency = 1,
+                AnchorPoint = Vector2.new(1, 0),
+                Position = UDim2.new(1, -12, 0, 8),
+                Size = UDim2.new(0.30, 0, 0, 20),
+                Font = Enum.Font.GothamBold,
+                TextColor3 = COLORS.accent,
+                TextSize = 11,
+                TextXAlignment = Enum.TextXAlignment.Right,
+            }, box)
 
-local function VerifiedEggTimers()
-    local result = {}
-    local plot = GetMyPlot()
-    local eggs = plot and plot:FindFirstChild("Eggs")
-    if not eggs or type(EggData) ~= "table" then return result end
+            local bar = make("TextButton", {
+                Position = UDim2.new(0, 12, 0, 37),
+                Size = UDim2.new(1, -24, 0, 12),
+                BackgroundColor3 = COLORS.line,
+                AutoButtonColor = false,
+                Text = "",
+            }, box)
+            corner(bar, 6)
 
-    if type(VerifiedData.General) ~= "table" or type(VerifiedData.DayNight) ~= "table"
-        or type(VerifiedData.General.GrowthTimeFor) ~= "function"
-        or type(VerifiedData.DayNight.GrowthRealRemaining) ~= "function" then
-        return result
-    end
+            local fill = make("Frame", {
+                Size = UDim2.new(0, 0, 1, 0),
+                BackgroundColor3 = COLORS.accent,
+                BorderSizePixel = 0,
+            }, bar)
+            corner(fill, 6)
 
-    for _, egg in ipairs(eggs:GetChildren()) do
-        local info = egg:FindFirstChild("EggData", true)
-        local start = info and info:FindFirstChild("PlaceTime")
-        local weight = info and info:FindFirstChild("Weight")
-        local data = EggData[egg.Name]
-        local key = egg:GetAttribute("EggKey")
+            local knob = make("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.new(0, 0, 0.5, 0),
+                Size = UDim2.new(0, 16, 0, 16),
+                BackgroundColor3 = COLORS.white,
+                BorderSizePixel = 0,
+            }, bar)
+            corner(knob, 8)
 
-        if data and start and key then
-            local total
-            local remaining
-            pcall(function()
-                total = VerifiedData.General.GrowthTimeFor(
-                    tonumber(data.GrowthTime) or 0,
-                    weight and tonumber(weight.Value) or 1
+            local draggingSlider = false
+
+            local function quantize(v)
+                local steps = math.floor(((v - minV) / increment) + 0.5)
+                return math.clamp(minV + steps * increment, minV, maxV)
+            end
+
+            local function render()
+                local alpha = maxV == minV and 0 or (value - minV) / (maxV - minV)
+                fill.Size = UDim2.new(alpha, 0, 1, 0)
+                knob.Position = UDim2.new(alpha, 0, 0.5, 0)
+                valueLabel.Text = tostring(math.floor(value * 100) / 100) .. tostring(o.suffix or "")
+            end
+
+            local function setValue(v, fire)
+                value = quantize(clampNumber(v, minV, maxV))
+                render()
+                local flag = o.flag and NativeUI.Flags[o.flag]
+                if flag then
+                    flag.CurrentValue = value
+                    flag.CurrentOption = value
+                end
+                if fire and o.callback then
+                    pcall(o.callback, value)
+                end
+            end
+
+            createFlag(o.flag, value, setValue)
+
+            local function setFromInput(x)
+                local alpha = math.clamp(
+                    (x - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1),
+                    0, 1
                 )
-                remaining = VerifiedData.DayNight.GrowthRealRemaining(start.Value, total)
+                setValue(minV + (maxV - minV) * alpha, true)
+            end
+
+            bar.InputBegan:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1
+                    or input.UserInputType == Enum.UserInputType.Touch then
+                    draggingSlider = true
+                    setFromInput(input.Position.X)
+                end
             end)
 
-            if total and remaining ~= nil then
-                table.insert(result, {
-                    Object = egg,
-                    Key = key,
-                    Name = egg.Name,
-                    Remaining = tonumber(remaining) or math.huge,
-                })
-            end
-        end
-    end
-
-    table.sort(result, function(a, b) return a.Remaining < b.Remaining end)
-    return result
-end
-
-local function VerifiedHatchReadyOnce()
-    if not Running or not Verified.AutoHatch then return false end
-    local timers = VerifiedEggTimers()
-    for _, entry in ipairs(timers) do
-        if not Running or not Verified.AutoHatch then break end
-        if entry.Remaining <= 0 then
-            local _, root = GetCharacter()
-            if not root or not entry.Object or not entry.Object.Parent then return false end
-
-            VerifiedStatus("Auto Hatch: " .. tostring(entry.Name))
-            VerifiedDismount()
-            if (root.Position - entry.Object:GetPivot().Position).Magnitude > 12 then
-                if not SafeTeleport(entry.Object:GetPivot().Position + Vector3.new(0, 4, 0)) then
-                    return false
+            UserInputService.InputChanged:Connect(function(input)
+                if not draggingSlider then return end
+                if input.UserInputType == Enum.UserInputType.MouseMovement
+                    or input.UserInputType == Enum.UserInputType.Touch then
+                    setFromInput(input.Position.X)
                 end
-                task.wait(0.20)
-            end
+            end)
 
-            if VerifiedFire("Hatch", {EggKey = entry.Key}) then
-                local gone = VerifiedWait(function()
-                    return not entry.Object.Parent
-                end, 8)
-                if gone then
-                    VerifiedStatus("Auto Hatch: concluído")
-                    return true
+            UserInputService.InputEnded:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1
+                    or input.UserInputType == Enum.UserInputType.Touch then
+                    draggingSlider = false
+                end
+            end)
+
+            render()
+            return bar
+        end
+
+        function tab:CreateInput(o)
+            o = o or {}
+            local value = tostring(o.value or "")
+            local box = addBox(64)
+
+            make("TextLabel", {
+                BackgroundTransparency = 1,
+                Position = UDim2.new(0, 12, 0, 7),
+                Size = UDim2.new(0.45, 0, 0, 20),
+                Font = Enum.Font.GothamMedium,
+                Text = tostring(o.name or "Input"),
+                TextColor3 = COLORS.text,
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            }, box)
+
+            local input = make("TextBox", {
+                AnchorPoint = Vector2.new(1, 0),
+                Position = UDim2.new(1, -10, 0, 7),
+                Size = UDim2.new(0.50, 0, 0, 34),
+                BackgroundColor3 = COLORS.panel2,
+                Text = value,
+                PlaceholderText = tostring(o.placeholder or ""),
+                ClearTextOnFocus = false,
+                Font = Enum.Font.Gotham,
+                TextColor3 = COLORS.text,
+                PlaceholderColor3 = COLORS.sub,
+                TextSize = 11,
+            }, box)
+            corner(input, 8)
+
+            make("TextLabel", {
+                BackgroundTransparency = 1,
+                Position = UDim2.new(0, 12, 0, 34),
+                Size = UDim2.new(0.42, 0, 0, 22),
+                Font = Enum.Font.Gotham,
+                Text = tostring(o.description or ""),
+                TextColor3 = COLORS.sub,
+                TextSize = 8,
+                TextTruncate = Enum.TextTruncate.AtEnd,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            }, box)
+
+            local function setValue(v, fire)
+                value = tostring(v or "")
+                input.Text = value
+                local flag = o.flag and NativeUI.Flags[o.flag]
+                if flag then
+                    flag.CurrentValue = value
+                    flag.CurrentOption = value
+                end
+                if fire and o.callback then
+                    pcall(o.callback, value)
                 end
             end
+
+            createFlag(o.flag, value, setValue)
+
+            input.FocusLost:Connect(function()
+                setValue(input.Text, true)
+            end)
+
+            return input
         end
+
+        function tab:CreateDropdown(o)
+            o = o or {}
+            local optionsList = {}
+            for _, option in ipairs(o.options or {}) do
+                optionsList[#optionsList + 1] = tostring(option)
+            end
+
+            local multi = o.multiSelect == true
+            local selected = {}
+
+            if multi then
+                for _, v in ipairs(o.value or {}) do
+                    selected[tostring(v)] = true
+                end
+            else
+                local initial = o.value
+                if initial ~= nil then
+                    selected[tostring(initial)] = true
+                elseif optionsList[1] then
+                    selected[optionsList[1]] = true
+                end
+            end
+
+            local expanded = false
+            local box = addBox(58)
+
+            make("TextLabel", {
+                BackgroundTransparency = 1,
+                Position = UDim2.new(0, 12, 0, 7),
+                Size = UDim2.new(1, -24, 0, 20),
+                Font = Enum.Font.GothamMedium,
+                Text = tostring(o.name or "Dropdown"),
+                TextColor3 = COLORS.text,
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            }, box)
+
+            local selectButton = make("TextButton", {
+                Position = UDim2.new(0, 10, 0, 29),
+                Size = UDim2.new(1, -20, 0, 26),
+                BackgroundColor3 = COLORS.panel2,
+                AutoButtonColor = false,
+                Text = "",
+                Font = Enum.Font.Gotham,
+                TextColor3 = COLORS.text,
+                TextSize = 10,
+            }, box)
+            corner(selectButton, 7)
+
+            local summary = make("TextLabel", {
+                BackgroundTransparency = 1,
+                Position = UDim2.new(0, 9, 0, 0),
+                Size = UDim2.new(1, -18, 1, 0),
+                Font = Enum.Font.Gotham,
+                TextColor3 = COLORS.sub,
+                TextSize = 10,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                TextTruncate = Enum.TextTruncate.AtEnd,
+            }, selectButton)
+
+            local listFrame
+
+            local function currentValue()
+                if multi then
+                    local t = {}
+                    for _, opt in ipairs(optionsList) do
+                        if selected[opt] then
+                            t[#t + 1] = opt
+                        end
+                    end
+                    return t
+                end
+
+                for _, opt in ipairs(optionsList) do
+                    if selected[opt] then
+                        return opt
+                    end
+                end
+                return nil
+            end
+
+            local function renderSummary()
+                if multi then
+                    local vals = currentValue()
+                    if #vals == 0 then
+                        summary.Text = tostring(o.placeholder or "Nenhuma")
+                    elseif #vals <= 2 then
+                        summary.Text = table.concat(vals, ", ")
+                    else
+                        summary.Text = tostring(#vals) .. " selecionados"
+                    end
+                else
+                    summary.Text = tostring(currentValue() or o.placeholder or "Selecionar")
+                end
+            end
+
+            local function fire()
+                local v = currentValue()
+                local flag = o.flag and NativeUI.Flags[o.flag]
+                if flag then
+                    flag.CurrentValue = v
+                    flag.CurrentOption = v
+                end
+                if o.callback then
+                    pcall(o.callback, v)
+                end
+            end
+
+            local function rebuildList()
+                if listFrame then
+                    listFrame:Destroy()
+                    listFrame = nil
+                end
+
+                if not expanded then
+                    box.Size = UDim2.new(1, 0, 0, 58)
+                    return
+                end
+
+                local rows = math.max(#optionsList, 1)
+                local listHeight = math.min(rows * 30 + 4, 190)
+
+                box.Size = UDim2.new(1, 0, 0, 58 + listHeight)
+
+                listFrame = make("Frame", {
+                    Position = UDim2.new(0, 10, 0, 58),
+                    Size = UDim2.new(1, -20, 0, listHeight),
+                    BackgroundColor3 = COLORS.panel2,
+                    BorderSizePixel = 0,
+                }, box)
+                corner(listFrame, 8)
+                stroke(listFrame, COLORS.line, 1)
+
+                local sc = make("ScrollingFrame", {
+                    Size = UDim2.new(1, -8, 1, -8),
+                    Position = UDim2.new(0, 4, 0, 4),
+                    BackgroundTransparency = 1,
+                    BorderSizePixel = 0,
+                    ScrollBarThickness = 2,
+                    CanvasSize = UDim2.new(0, 0, 0, rows * 30),
+                }, listFrame)
+
+                local ll = make("UIListLayout", {
+                    Padding = UDim.new(0, 2),
+                    SortOrder = Enum.SortOrder.LayoutOrder,
+                }, sc)
+
+                for _, option in ipairs(optionsList) do
+                    local item = make("TextButton", {
+                        Size = UDim2.new(1, -2, 0, 28),
+                        BackgroundColor3 = selected[option] and COLORS.hover or COLORS.panel2,
+                        AutoButtonColor = false,
+                        Text = (selected[option] and "✓  " or "    ") .. option,
+                        Font = Enum.Font.Gotham,
+                        TextColor3 = selected[option] and COLORS.text or COLORS.sub,
+                        TextSize = 10,
+                        TextXAlignment = Enum.TextXAlignment.Left,
+                    }, sc)
+                    corner(item, 6)
+
+                    item.MouseButton1Click:Connect(function()
+                        if multi then
+                            selected[option] = not selected[option]
+                            renderSummary()
+                            fire()
+                            rebuildList()
+                        else
+                            for k in pairs(selected) do
+                                selected[k] = nil
+                            end
+                            selected[option] = true
+                            expanded = false
+                            renderSummary()
+                            fire()
+                            rebuildList()
+                        end
+                    end)
+                end
+            end
+
+            local function setValue(v, fireCallback)
+                for k in pairs(selected) do
+                    selected[k] = nil
+                end
+
+                if multi then
+                    for _, item in ipairs(v or {}) do
+                        selected[tostring(item)] = true
+                    end
+                else
+                    if v ~= nil then
+                        selected[tostring(v)] = true
+                    end
+                end
+
+                renderSummary()
+                if fireCallback then
+                    fire()
+                end
+                rebuildList()
+            end
+
+            createFlag(o.flag, currentValue(), setValue)
+
+            selectButton.MouseButton1Click:Connect(function()
+                expanded = not expanded
+                rebuildList()
+            end)
+
+            renderSummary()
+            rebuildList()
+            return selectButton
+        end
+
+        -- Recalcula o canvas após alterações de altura (especialmente dropdowns).
+        layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            updateCanvas(page)
+        end)
+
+        task.defer(function()
+            updateCanvas(page)
+        end)
+
+        if not currentTab then
+            select()
+        end
+
+        return tab
     end
-    return false
-end
 
-local function VerifiedClaimIndexOnce()
-    if not Running or not Verified.AutoIndex or type(VerifiedData.IndexRewards) ~= "table" then return false end
-
-    local saved = LocalPlayer:FindFirstChild("SavedData")
-    local stageValue = saved and saved:FindFirstChild("IndexRewardStage")
-    local ownedPets = saved and saved:FindFirstChild("OwnedPets")
-    if not stageValue or not ownedPets then return false end
-
-    local stage = tonumber(stageValue.Value) or 0
-    local reward
-    local count
-
-    pcall(function()
-        if type(VerifiedData.IndexRewards.StageAt) == "function" then
-            reward = VerifiedData.IndexRewards.StageAt(stage)
-        end
-        if type(VerifiedData.IndexRewards.DiscoveredCount) == "function" then
-            count = VerifiedData.IndexRewards.DiscoveredCount(tostring(ownedPets.Value or ""))
-        end
-    end)
-
-    if not reward or count == nil or count < (tonumber(reward.Goal) or math.huge) then
-        return false
-    end
-
-    VerifiedStatus("Auto Index: resgatando")
-    if not VerifiedFire("ClaimIndexReward") then return false end
-
-    local confirmed = VerifiedWait(function()
-        return tonumber(stageValue.Value) ~= stage
-    end, 3)
-
-    if confirmed then
-        VerifiedStatus("Auto Index: concluído")
+    -- API de configuração.
+    function self:SaveConfiguration()
         return true
     end
-    return false
+
+    function self:LoadConfiguration()
+        return true
+    end
+
+    function self:Destroy()
+        window:Destroy()
+    end
+
+    return window
 end
 
-local function VerifiedPetRecords()
-    local result = {}
-    local seen = {}
-    local plot = GetMyPlot()
-
-    local function add(object, placed)
-        if not object or type(VerifiedData.Pets) ~= "table" then return end
-        local key = object:GetAttribute("PetKey")
-        local name = object:GetAttribute("PetName") or object.Name
-        local data = VerifiedData.Pets[name]
-        if not key or not data or seen[key] then return end
-        seen[key] = true
-
-        local age = tonumber(object:GetAttribute("Age")) or 1
-        local weight = tonumber(object:GetAttribute("Weight")) or 10
-        local mutation = object:GetAttribute("Mutation")
-        local spawnMutation = object:GetAttribute("SpawnMutation")
-        local factor = 1
-
-        pcall(function()
-            if VerifiedData.Mutations and type(VerifiedData.Mutations.CombinedFactor) == "function" then
-                factor = tonumber(VerifiedData.Mutations.CombinedFactor(mutation, spawnMutation)) or 1
-            end
-        end)
-
-        local income = (tonumber(data.Income) or 0) * weight / 10 * factor
-        local speed = tonumber(data.Speed) or 0
-        pcall(function()
-            if VerifiedData.PetAging and type(VerifiedData.PetAging.DisplaySpeedFor) == "function" then
-                speed = tonumber(VerifiedData.PetAging.DisplaySpeedFor(tonumber(data.Speed) or 0, weight)) or speed
-                speed = speed * factor
-            end
-        end)
-
-        table.insert(result, {
-            Key = key,
-            Name = name,
-            Object = object,
-            Placed = placed,
-            Age = age,
-            Weight = weight,
-            Income = income,
-            Speed = speed,
-            Rarity = data.Rarity,
-            Mutation = mutation,
-            Favorite = object:GetAttribute("Favorited") == true,
-        })
-    end
-
-    local backpack = LocalPlayer:FindFirstChild("Backpack")
-    local character = LocalPlayer.Character
-    for _, container in ipairs({backpack, character}) do
-        if container then
-            for _, item in ipairs(container:GetChildren()) do
-                if item:IsA("Tool") and item:GetAttribute("PetKey") then
-                    add(item, false)
-                end
-            end
-        end
-    end
-
-    local plotPets = plot and plot:FindFirstChild("Pets")
-    if plotPets then
-        for _, pet in ipairs(plotPets:GetChildren()) do
-            add(pet, true)
-        end
-    end
-
-    local _, root = GetCharacter()
-    local joint = root and root:FindFirstChild("PetMountJoint")
-    if joint and joint.Part1 and joint.Part1.Parent then
-        add(joint.Part1.Parent, false)
-    end
-
-    table.sort(result, function(a, b)
-        if Verified.BestMetric == "Speed" then
-            return (a.Speed or 0) > (b.Speed or 0)
-        end
-        return (a.Income or 0) > (b.Income or 0)
-    end)
-    return result
-end
-
-local function VerifiedPlaceBestPetsOnce()
-    if not Running or not Verified.AutoBestPets then return false end
-    local plot = GetMyPlot()
-    local base = plot and plot:FindFirstChild("Baseplate")
-    if not plot or not base then return false end
-
-    local pets = VerifiedPetRecords()
-    if #pets == 0 then return false end
-
-    local saved = LocalPlayer:FindFirstChild("SavedData")
-    local capacityValue = LocalPlayer:GetAttribute("MaxPets")
-        or (saved and saved:FindFirstChild("MaxPets") and saved.MaxPets.Value)
-        or 5
-    local capacity = math.max(1, tonumber(capacityValue) or 5)
-
-    local desired = {}
-    for i = 1, math.min(capacity, #pets) do
-        desired[pets[i].Key] = true
-    end
-
-    VerifiedStatus("Auto Best Pets: preparando")
-
-    for _, pet in ipairs(pets) do
-        if not Running or not Verified.AutoBestPets then return false end
-        if pet.Placed and not desired[pet.Key] then
-            if not VerifiedFire("PickupPet", pet.Key) then return false end
-            if not VerifiedWait(function() return VerifiedFindPetTool(pet.Key) ~= nil end, 3) then
-                return false
-            end
-        end
-    end
-
-    if LocalPlayer:GetAttribute("IsRiding") then
-        local dismount = VerifiedRemote("PetDismount")
-        if dismount then
-            pcall(function() dismount:FireServer() end)
-            task.wait(0.2)
-        end
-    end
-
-    local cols = math.max(1, math.ceil(math.sqrt(capacity)))
-    local spacing = math.min(9, (math.min(base.Size.X, base.Size.Z) - 12) / cols)
-    local changed = false
-
-    for i = 1, math.min(capacity, #pets) do
-        if not Running or not Verified.AutoBestPets then break end
-        local pet = pets[i]
-        local tool = VerifiedFindPetTool(pet.Key)
-        if tool and VerifiedEquip(tool) then
-            task.wait(0.15)
-            local position = (base.CFrame * CFrame.new(
-                ((i - 1) % cols - (cols - 1) / 2) * spacing,
-                4,
-                math.floor((i - 1) / cols) * spacing
-            )).Position
-
-            if VerifiedFire("PlacePet", pet.Key, position) then
-                local confirmed = VerifiedWait(function()
-                    for _, current in ipairs(VerifiedPetRecords()) do
-                        if current.Key == pet.Key and current.Placed then
-                            return true
-                        end
-                    end
-                    return false
-                end, 3)
-                changed = changed or confirmed
-            end
-        end
-    end
-
-    VerifiedStatus(changed and "Auto Best Pets: concluído" or "Auto Best Pets: nada a alterar")
-    return changed
-end
-
-local function VerifiedFoodAmount(tool)
-    if not tool or not tool.Parent then return 0 end
-    local data = tool:FindFirstChild("Data")
-    local amount = data and data:FindFirstChild("Amount")
-    if amount and amount:IsA("ValueBase") then
-        return math.max(0, math.floor(tonumber(amount.Value) or 0))
-    end
-    return 1
-end
-
-local function VerifiedFoodCount(name)
-    local count = 0
-    for _, tool in ipairs(VerifiedTools()) do
-        if tool.Name == name then
-            count = count + VerifiedFoodAmount(tool)
-        end
-    end
-    return count
-end
-
-local function VerifiedCSVSet(text)
-    local result = {}
-    for item in tostring(text or ""):gmatch("[^,]+") do
-        item = item:match("^%s*(.-)%s*$")
-        if item ~= "" then result[item] = true end
-    end
-    return result
-end
-
-local function VerifiedFeedOnce()
-    if not Running or not Verified.AutoFeed then return false end
-    if #VerifiedFoodNames == 0 then return false end
-
-    local pets = VerifiedPetRecords()
-    for _, pet in ipairs(pets) do
-        if not Running or not Verified.AutoFeed then break end
-        if Verified.SelectedPets[pet.Name] and pet.Age < Verified.FeedAgeMax then
-            for _, foodName in ipairs(VerifiedFoodNames) do
-                if Verified.SelectedFoods[foodName] and VerifiedFoodCount(foodName) > 0 then
-                    local foodTool
-                    for _, candidate in ipairs(VerifiedTools()) do
-                        if candidate.Name == foodName then
-                            foodTool = candidate
-                            break
-                        end
-                    end
-                    if foodTool and VerifiedEquip(foodTool) then
-                        if pet.Placed and pet.Object and pet.Object:IsA("Model") then
-                            SafeTeleport(pet.Object:GetPivot().Position + Vector3.new(0, 4, 0))
-                            task.wait(0.20)
-                        end
-                        task.wait(0.15)
-                        local before = VerifiedFoodAmount(foodTool)
-                        VerifiedStatus("Auto Feed: " .. tostring(pet.Name))
-                        if VerifiedFire("FeedPet", pet.Key, foodName) then
-                            if VerifiedWait(function()
-                                return VerifiedFoodAmount(foodTool) < before
-                            end, 3) then
-                                VerifiedStatus("Auto Feed: concluído")
-                                return true
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-    return false
-end
-
-local function VerifiedFoodStock(name)
-    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-    local main = playerGui and playerGui:FindFirstChild("Main")
-    local shop = main and main:FindFirstChild("Shop")
-    local holders = shop and shop:FindFirstChild("Holders")
-    local food = holders and holders:FindFirstChild("Food")
-    local card = food and food:FindFirstChild(name)
-    local stock = card and card:FindFirstChild("Stock", true)
-    if stock and stock:IsA("TextLabel") then
-        return tonumber(stock.Text:match("(%d+)"))
-    end
-    return nil
-end
-
-local function VerifiedBuyFoodOnce()
-    if not Running or not Verified.AutoBuyFood then return false end
-    if type(VerifiedData.Shop) ~= "table" or type(VerifiedData.Shop.Food) ~= "table" then return false end
-
-    for _, name in ipairs(VerifiedFoodNames) do
-        if Verified.SelectedFoods[name] then
-            local item = VerifiedData.Shop.Food[name]
-            local price = item and tonumber(item.Price) or math.huge
-            local stock = VerifiedFoodStock(name)
-            local saved = LocalPlayer:FindFirstChild("SavedData")
-            local cashValue = saved and saved:FindFirstChild("Cash")
-            local cash = cashValue and tonumber(cashValue.Value) or 0
-
-            if stock == nil then
-                VerifiedStatus("Auto Buy Food: abra a loja de comida para carregar o estoque")
-                return false
-            end
-
-            if stock > 0 and cash >= price then
-                local before = VerifiedFoodCount(name)
-                VerifiedStatus("Auto Buy Food: " .. tostring(name))
-                if VerifiedFire("BuyWithCash", "Food", name) then
-                    if VerifiedWait(function()
-                        return VerifiedFoodCount(name) > before
-                    end, 3) then
-                        VerifiedStatus("Auto Buy Food: comprado " .. tostring(name))
-                        return true
-                    end
-                end
-            end
-        end
-    end
-    return false
-end
-
-local function VerifiedFavoriteOnce()
-    if not Running or not Verified.AutoFavorites then return false end
-    for _, pet in ipairs(VerifiedPetRecords()) do
-        if not pet.Placed and not pet.Favorite then
-            local nameMatch = next(Verified.FavoritePets) ~= nil and Verified.FavoritePets[pet.Name] == true
-            local rarityMatch = next(Verified.FavoriteRarities) ~= nil and Verified.FavoriteRarities[pet.Rarity] == true
-            if nameMatch or rarityMatch then
-                VerifiedStatus("Auto Favorite: " .. tostring(pet.Name))
-                if VerifiedFire("FavoritePet", pet.Key) then
-                    local confirmed = VerifiedWait(function()
-                        for _, current in ipairs(VerifiedPetRecords()) do
-                            if current.Key == pet.Key and current.Favorite then
-                                return true
-                            end
-                        end
-                        return false
-                    end, 3)
-                    if confirmed then
-                        VerifiedStatus("Auto Favorite: concluído")
-                        return true
-                    end
-                end
-            end
-        end
-    end
-    return false
-end
-
-local function VerifiedAnyAdvancedBusy()
-    return Verified.Busy
-end
-
-local function VerifiedRun(name, fn)
-    if not Running or Verified.Busy then return false end
-    if State.AutoFarm or State.AutoPickup then return false end
-
-    Verified.Busy = true
-    VerifiedStatus(name)
-    local ok, result = pcall(fn)
-    Verified.Busy = false
-    if not ok then
-        VerifiedStatus("Erro: " .. tostring(result))
-        return false
-    end
-    return result ~= false
-end
-
-local function VerifiedTick()
-    if not Running or VerifiedAnyAdvancedBusy() then return end
-    if State.AutoFarm or State.AutoPickup then return end
-
-    if Verified.AutoPlace and VerifiedReady("Place", 2) then
-        if VerifiedRun("Auto Place", VerifiedPlaceEggsOnce) then return end
-    end
-    if Verified.AutoHatch and VerifiedReady("Hatch", 2) then
-        if VerifiedRun("Auto Hatch", VerifiedHatchReadyOnce) then return end
-    end
-    if Verified.AutoIndex and VerifiedReady("Index", 4) then
-        if VerifiedRun("Auto Index", VerifiedClaimIndexOnce) then return end
-    end
-    if Verified.AutoBestPets and VerifiedReady("Best", 20) then
-        if VerifiedRun("Auto Best Pets", VerifiedPlaceBestPetsOnce) then return end
-    end
-    if Verified.AutoFavorites and VerifiedReady("Favorite", 1.5) then
-        if VerifiedRun("Auto Favorites", VerifiedFavoriteOnce) then return end
-    end
-    if Verified.AutoFeed and VerifiedReady("Feed", 3) then
-        if VerifiedRun("Auto Feed", VerifiedFeedOnce) then return end
-    end
-    if Verified.AutoBuyFood and VerifiedReady("BuyFood", 1) then
-        VerifiedRun("Auto Buy Food", VerifiedBuyFoodOnce)
-    end
-end
-
-
---============================================================--
--- GUI: RAYFIELD GEN2
---============================================================--
-
-local okRayfield, Rayfield = pcall(function()
-    local source = game:HttpGet("https://sirius.menu/gen2")
-    local loader = loadstring(source)
-    assert(type(loader) == "function", "Rayfield Gen2 loader inválido")
-    return loader()
-end)
-
--- Outra execução pode ter assumido o singleton enquanto o loader carregava.
-if not Running or (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
-    pcall(function()
-        if Rayfield and Rayfield.Destroy then
-            Rayfield:Destroy()
-        end
-    end)
-    pcall(function()
-        if GuardConnection then
-            GuardConnection:Disconnect()
-        end
-        if ReplaceConnection then
-            ReplaceConnection:Disconnect()
-        end
-        if Guard then
-            Guard:Destroy()
-        end
-    end)
-    return
-end
-
-if not okRayfield or type(Rayfield) ~= "table" then
-    Running = false
-    if GuardConnection then
-        GuardConnection:Disconnect()
-    end
-    Guard:Destroy()
-    warn("Montar um Pet: não foi possível carregar Rayfield Gen2.")
-    return
-end
-
--- Se outra execução pediu shutdown enquanto a biblioteca carregava,
--- não continue criando uma segunda interface.
-if not Running then
-    pcall(function()
-        if Rayfield.Destroy then
-            Rayfield:Destroy()
-        end
-    end)
-    pcall(function()
-        Guard:Destroy()
-    end)
-    return
-end
-
-if not Running or (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
-    pcall(function()
-        if Rayfield and Rayfield.Destroy then
-            Rayfield:Destroy()
-        end
-    end)
-    return
-end
+-- A partir daqui o restante do v15 usa a mesma API, mas com UI nativa.
+local Rayfield = NativeUI
 
 local okWindow, Window = pcall(function()
-    return Rayfield:CreateWindow({
+    return NativeUI:CreateWindow({
         name = "Montar um Pet",
-        subtitle = "MASTER v20.1 • UI v15 • 2026 Verificado",
-        sidebarLayout = true,
-        toggleUIKeybind = "K",
-        configuration = {
-            autoSave = true,
-            autoLoad = true,
-            fileName = "MontarUmPet_Master_v20_1",
-        },
+        subtitle = "MASTER v21 • UI Nativa • Mobile/PC",
     })
 end)
 
 if not okWindow or not Window then
     Running = false
     pcall(function()
-        if Rayfield.Destroy then
-            Rayfield:Destroy()
+        if GuardConnection then
+            GuardConnection:Disconnect()
+        end
+        if Guard then
+            Guard:Destroy()
         end
     end)
-    if GuardConnection then
-        GuardConnection:Disconnect()
-    end
-    Guard:Destroy()
-    warn("Montar um Pet: não foi possível criar a janela.")
+    warn("Montar um Pet: não foi possível criar a UI nativa.")
     return
 end
 
 if not Running or (tonumber(ControlFolder:GetAttribute("Generation")) or 0) ~= MY_GENERATION then
     pcall(function()
-        if Rayfield and Rayfield.Destroy then
-            Rayfield:Destroy()
-        end
-    end)
-    pcall(function()
-        if GuardConnection then
-            GuardConnection:Disconnect()
-        end
-        if ReplaceConnection then
-            ReplaceConnection:Disconnect()
-        end
-        if Guard then
-            Guard:Destroy()
-        end
+        Window:Destroy()
     end)
     return
 end
@@ -4558,234 +4786,34 @@ end
 -- TABS
 --============================================================--
 
+local TabInicio = Window:CreateTab({name = "Início"})
 local TabFarm = Window:CreateTab({name = "Farm"})
 local TabOvos = Window:CreateTab({name = "Ovos"})
 local TabMove = Window:CreateTab({name = "Movimento"})
 local TabVisual = Window:CreateTab({name = "Visual"})
 local TabPerf = Window:CreateTab({name = "Performance"})
 local TabConfig = Window:CreateTab({name = "Config"})
-local okVerifiedTab, VerifiedTabError = pcall(function()
-    local Tab2026 = Window:CreateTab({name = "2026 Verificado"})
 
-    --============================================================--
-    -- TAB 2026 VERIFICADO
-    --============================================================--
-
-    Tab2026:CreateSection({name = "Funções verificadas 2026"})
-    Tab2026:CreateLabel("Somente APIs com implementação pública concreta: Place, Hatch, Index, Pets, Feed, Food e Favorite.")
-
-    Tab2026:CreateToggle({
-        name = "Auto Place Eggs",
-        flag = "V26_AutoPlace",
-        value = Verified.AutoPlace,
-        callback = function(value)
-            Verified.AutoPlace = value
-            VerifiedStatus(value and "Auto Place ativo" or "Auto Place parado")
-        end,
-    })
-
-    Tab2026:CreateToggle({
-        name = "Auto Hatch Eggs",
-        flag = "V26_AutoHatch",
-        value = Verified.AutoHatch,
-        callback = function(value)
-            Verified.AutoHatch = value
-            VerifiedStatus(value and "Auto Hatch ativo" or "Auto Hatch parado")
-        end,
-    })
-
-    Tab2026:CreateToggle({
-        name = "Auto Claim Index",
-        flag = "V26_AutoIndex",
-        value = Verified.AutoIndex,
-        callback = function(value)
-            Verified.AutoIndex = value
-            VerifiedStatus(value and "Auto Index ativo" or "Auto Index parado")
-        end,
-    })
-
-    Tab2026:CreateDropdown({
-        name = "Melhor pet por",
-        flag = "V26_BestMetric",
-        options = {"Income", "Speed"},
-        value = Verified.BestMetric,
-        callback = function(value)
-            Verified.BestMetric = value == "Speed" and "Speed" or "Income"
-        end,
-    })
-
-    Tab2026:CreateToggle({
-        name = "Auto Best Pets",
-        flag = "V26_AutoBestPets",
-        value = Verified.AutoBestPets,
-        callback = function(value)
-            Verified.AutoBestPets = value
-        end,
-    })
-
-    Tab2026:CreateInput({
-        name = "Pets para alimentar",
-        flag = "V26_SelectedPets",
-        description = "Nomes separados por vírgula. Ex.: Cat, Dog",
-        value = "",
-        callback = function(value)
-            Verified.SelectedPets = VerifiedCSVSet(value)
-        end,
-    })
-
-    Tab2026:CreateInput({
-        name = "Comidas para usar/comprar",
-        flag = "V26_SelectedFoods",
-        description = "Nomes separados por vírgula. Ex.: Grass, Apple",
-        value = "Grass",
-        callback = function(value)
-            Verified.SelectedFoods = VerifiedCSVSet(value)
-        end,
-    })
-
-    Tab2026:CreateInput({
-        name = "Idade máxima para alimentar",
-        flag = "V26_FeedAgeMax",
-        description = "O script não alimenta pets acima desse valor.",
-        numeric = true,
-        value = tostring(Verified.FeedAgeMax),
-        callback = function(value)
-            Verified.FeedAgeMax = math.clamp(math.floor(tonumber(value) or 100), 1, 100)
-        end,
-    })
-
-    Tab2026:CreateToggle({
-        name = "Auto Feed Pets",
-        flag = "V26_AutoFeed",
-        value = Verified.AutoFeed,
-        callback = function(value)
-            Verified.AutoFeed = value
-        end,
-    })
-
-    Tab2026:CreateToggle({
-        name = "Auto Buy Food",
-        flag = "V26_AutoBuyFood",
-        value = Verified.AutoBuyFood,
-        callback = function(value)
-            Verified.AutoBuyFood = value
-        end,
-    })
-
-    Tab2026:CreateInput({
-        name = "Pets para favoritar",
-        flag = "V26_FavoritePets",
-        description = "Nomes separados por vírgula.",
-        value = "",
-        callback = function(value)
-            Verified.FavoritePets = VerifiedCSVSet(value)
-        end,
-    })
-
-    Tab2026:CreateInput({
-        name = "Raridades para favoritar",
-        flag = "V26_FavoriteRarities",
-        description = "Ex.: Mythic, Ethereal, Divine",
-        value = "Mythic,Ethereal,Divine",
-        callback = function(value)
-            Verified.FavoriteRarities = VerifiedCSVSet(value)
-        end,
-    })
-
-    Tab2026:CreateToggle({
-        name = "Auto Favorites",
-        flag = "V26_AutoFavorites",
-        value = Verified.AutoFavorites,
-        callback = function(value)
-            Verified.AutoFavorites = value
-        end,
-    })
-
-    Tab2026:CreateSection({name = "Diagnóstico"})
-
-    Tab2026:CreateButton({
-        name = "Verificar APIs 2026",
-        callback = function()
-            local reloadOk = pcall(VerifiedLoadModules)
-            if not reloadOk then
-                VerifiedStatus("Falha ao carregar módulos 2026")
+TabInicio:CreateSection({name = "Montar um Pet • MASTER v21"})
+TabInicio:CreateLabel("UI nativa sem dependência de Rayfield/WindUI. Feita para Delta Mobile e PC, com rolagem, toque, arrastar, minimizar e singleton de uma única janela.")
+TabInicio:CreateLabel("Status: interface carregada. Use a aba Farm para automação e Movimento para voo/velocidade.")
+TabInicio:CreateButton({
+    name = "Ativar Auto Farm",
+    description = "Liga o Auto Farm imediatamente.",
+    callback = function()
+        State.AutoFarm = true
+        pcall(StartFarmNoclip)
+        pcall(ClearFarmTarget)
+        State.FarmPhase = "Starting"
+        LastFarmStatus = "Starting Auto Farm"
+        task.spawn(function()
+            task.wait(0.05)
+            if Running and State.AutoFarm and not FarmBusy then
+                pcall(FarmOnce)
             end
-            local names = {"EggPlaced", "Hatch", "PickupPet", "PlacePet", "PetDismount", "FeedPet", "BuyWithCash", "FavoritePet", "ClaimIndexReward"}
-            local ok = {}
-            for _, name in ipairs(names) do
-                if VerifiedRemote(name) then table.insert(ok, name) end
-            end
-            table.sort(ok)
-            local text = #ok > 0 and ("Detectadas: " .. table.concat(ok, ", ")) or "Nenhuma API avançada detectada."
-            pcall(function()
-                Window:Notify({title = "2026 Verificado", content = text, duration = 7})
-            end)
-        end,
-    })
-
-    Tab2026:CreateButton({
-        name = "Executar Auto Place agora",
-        callback = function()
-            Verified.AutoPlace = true
-            VerifiedRun("Auto Place manual", VerifiedPlaceEggsOnce)
-            Verified.AutoPlace = false
-        end,
-    })
-
-    Tab2026:CreateButton({
-        name = "Executar Hatch agora",
-        callback = function()
-            Verified.AutoHatch = true
-            VerifiedRun("Hatch manual", VerifiedHatchReadyOnce)
-            Verified.AutoHatch = false
-        end,
-    })
-
-    Tab2026:CreateButton({
-        name = "Executar Index agora",
-        callback = function()
-            Verified.AutoIndex = true
-            VerifiedRun("Index manual", VerifiedClaimIndexOnce)
-            Verified.AutoIndex = false
-        end,
-    })
-
-    Tab2026:CreateButton({
-        name = "Parar automações 2026",
-        callback = function()
-            Verified.AutoPlace = false
-            Verified.AutoHatch = false
-            Verified.AutoIndex = false
-            Verified.AutoBestPets = false
-            Verified.AutoFeed = false
-            Verified.AutoBuyFood = false
-            Verified.AutoFavorites = false
-            VerifiedStatus("Automações 2026 paradas")
-        end,
-    })
-
-    Tab2026:CreateButton({
-        name = "Mostrar status 2026",
-        callback = function()
-            pcall(function()
-                Window:Notify({title = "2026 Verificado", content = Verified.Status, duration = 5})
-            end)
-        end,
-    })
-end)
-
-if not okVerifiedTab then
-    warn("Montar um Pet: aba 2026 indisponível: " .. tostring(VerifiedTabError))
-end
-
--- Tenta atualizar os módulos depois que a interface já está na tela.
-task.defer(function()
-    if not Running then return end
-    task.wait(0.35)
-    pcall(function() VerifiedLoadModules() end)
-    VerifiedModulesLoaded = true
-end)
-
+        end)
+    end,
+})
 
 --============================================================--
 -- FARM TAB
@@ -5511,7 +5539,7 @@ TabPerf:CreateButton({
 TabConfig:CreateSection({name = "Configuração"})
 
 local CONFIG_FOLDER = "MontarUmPet"
-local CONFIG_FILE = "MontarUmPet_MASTER_v20_2026_VERIFICADO_config.json"
+local CONFIG_FILE = "MontarUmPet_MASTER_v15_config.json"
 
 local function CanUseConfigFiles()
     return type(writefile) == "function"
@@ -5545,7 +5573,7 @@ local function SaveConfigNow()
     if CanUseConfigFiles() then
         EnsureConfigFolder()
 
-        local data = { __version = 20 }
+        local data = { __version = 15 }
         pcall(function()
             for flagName, flag in pairs(Rayfield.Flags or {}) do
                 if type(flag) == "table" then
@@ -5715,14 +5743,6 @@ TabConfig:CreateButton({
         State.InfiniteJump = false
         State.AntiAFK = false
         State.Flying = false
-        Verified.AutoPlace = false
-        Verified.AutoHatch = false
-        Verified.AutoIndex = false
-        Verified.AutoBestPets = false
-        Verified.AutoFeed = false
-        Verified.AutoBuyFood = false
-        Verified.AutoFavorites = false
-        Verified.Busy = false
 
         StopSpeed()
         CancelGlide()
@@ -5783,20 +5803,6 @@ local PickupLoop = task.spawn(function()
     end
 end)
 
-
---============================================================--
--- LOOP 2026 VERIFICADO
---============================================================--
-
-local VerifiedLoop = task.spawn(function()
-    while Running do
-        task.wait(0.20)
-        if Running then
-            VerifiedTick()
-        end
-    end
-end)
-
 --============================================================--
 -- STOP HANDLER
 --============================================================--
@@ -5818,14 +5824,6 @@ StopHandler = function()
     State.InfiniteJump = false
     State.AntiAFK = false
     State.Flying = false
-    Verified.AutoPlace = false
-    Verified.AutoHatch = false
-    Verified.AutoIndex = false
-    Verified.AutoBestPets = false
-    Verified.AutoFeed = false
-    Verified.AutoBuyFood = false
-    Verified.AutoFavorites = false
-    Verified.Busy = false
     State.ESPEnabled = false
     State.PlayerESP = false
     State.HidePlayers = false
