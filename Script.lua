@@ -8152,3 +8152,409 @@ task.defer(function()
     AdvancedFarmReady = true
     ENV.__MUP_V48_BREAK_TIMER_SYNC = true
 end)
+
+
+--============================================================--
+-- v49 PERSISTENT FLIGHT / NEVER DROP WHILE AUTOFARM IS ACTIVE
+-- Correção final:
+--   * Auto Farm ligado mantém o controlador de voo vivo entre fases.
+--   * Noclip permanece ativo durante todo o ciclo enquanto o usuário não para.
+--   * Ao chegar no ovo, fica pairado no ponto de coleta.
+--   * Após a coleta, retorna sem desligar o controlador.
+--   * Ao chegar na base, fica pairado sobre a base aguardando Basket -> Tool.
+--   * O controlador só é destruído quando Auto Farm é realmente desligado
+--     ou o script é encerrado.
+--============================================================--
+
+task.defer(function()
+    if not Running then
+        return
+    end
+
+    State.FarmPersistentFlight = true
+    State.FarmPersistentArriveRadius = math.clamp(tonumber(State.FarmPersistentArriveRadius) or 1.35, 0.8, 3)
+    State.FarmPersistentEggOffset = math.clamp(tonumber(State.FarmPersistentEggOffset) or 0.85, 0.35, 1.50)
+    State.FarmPersistentHoverCorrection = math.clamp(tonumber(State.FarmPersistentHoverCorrection) or 10, 4, 25)
+
+    local persistentVelocity = nil
+    local persistentGyro = nil
+    local persistentRoot = nil
+    local persistentHumanoid = nil
+    local persistentCollision = {}
+    local persistentMode = "idle"
+    local persistentTarget = nil
+    local persistentConnection = nil
+    local persistentMoving = false
+
+    local oldStopFarmNoclip = StopFarmNoclip
+    local oldDestroyFarmFlightMovers = DestroyFarmFlightMovers
+    local oldFarmFlyTo = FarmFlyTo
+
+    local function persistentRunning()
+        return Running and State.AutoFarm and ENV.__MUP_FARM_WANTED == true
+    end
+
+    local function persistentSaveCharacterCollision(character)
+        if not character then
+            return
+        end
+        for _, obj in ipairs(character:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                if persistentCollision[obj] == nil then
+                    persistentCollision[obj] = obj.CanCollide
+                end
+                obj.CanCollide = false
+            end
+        end
+    end
+
+    local function persistentRestoreCollision()
+        for part, value in pairs(persistentCollision) do
+            if part and part.Parent then
+                pcall(function()
+                    part.CanCollide = value
+                end)
+            end
+        end
+        table.clear(persistentCollision)
+    end
+
+    local function persistentDestroyMovers()
+        if persistentVelocity then
+            pcall(function() persistentVelocity:Destroy() end)
+            persistentVelocity = nil
+        end
+        if persistentGyro then
+            pcall(function() persistentGyro:Destroy() end)
+            persistentGyro = nil
+        end
+        persistentRoot = nil
+        persistentHumanoid = nil
+        persistentTarget = nil
+        persistentMode = "idle"
+        persistentMoving = false
+    end
+
+    local function persistentEnsureMovers()
+        local character, root = GetCharacter()
+        if not character or not root then
+            return false
+        end
+
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid then
+            return false
+        end
+
+        if persistentRoot ~= root
+            or not persistentVelocity
+            or persistentVelocity.Parent ~= root
+            or not persistentGyro
+            or persistentGyro.Parent ~= root then
+
+            persistentDestroyMovers()
+            persistentRoot = root
+            persistentHumanoid = humanoid
+
+            local ok = pcall(function()
+                local velocity = Instance.new("BodyVelocity")
+                velocity.Name = "MUP_V49_PersistentFlight"
+                velocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+                velocity.P = 70000
+                velocity.Velocity = Vector3.zero
+                velocity.Parent = root
+
+                local gyro = Instance.new("BodyGyro")
+                gyro.Name = "MUP_V49_PersistentFlightGyro"
+                gyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+                gyro.P = 100000
+                gyro.D = 3500
+                gyro.CFrame = root.CFrame
+                gyro.Parent = root
+
+                persistentVelocity = velocity
+                persistentGyro = gyro
+            end)
+
+            if not ok or not persistentVelocity or not persistentGyro then
+                persistentDestroyMovers()
+                return false
+            end
+        end
+
+        persistentSaveCharacterCollision(character)
+        humanoid.PlatformStand = true
+        humanoid.AutoRotate = false
+        return true
+    end
+
+    local function persistentStopController(force)
+        if not force and persistentRunning() then
+            return
+        end
+
+        if persistentConnection then
+            pcall(function() persistentConnection:Disconnect() end)
+            persistentConnection = nil
+        end
+
+        persistentDestroyMovers()
+        persistentRestoreCollision()
+
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            pcall(function()
+                humanoid.PlatformStand = false
+                humanoid.AutoRotate = true
+            end)
+        end
+    end
+
+    local function persistentStartController()
+        if persistentConnection then
+            return
+        end
+
+        persistentConnection = RunService.Heartbeat:Connect(function()
+            if not Running then
+                persistentStopController(true)
+                return
+            end
+
+            if ENV.__MUP_FARM_WANTED ~= true or not State.AutoFarm then
+                persistentStopController(true)
+                return
+            end
+
+            local character, root = GetCharacter()
+            if not character or not root then
+                return
+            end
+
+            if persistentRoot ~= root then
+                persistentDestroyMovers()
+                persistentEnsureMovers()
+            end
+
+            if not persistentVelocity or not persistentGyro then
+                persistentEnsureMovers()
+            end
+
+            persistentSaveCharacterCollision(character)
+
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                humanoid.PlatformStand = true
+                humanoid.AutoRotate = false
+            end
+
+            if persistentMode == "hover" and persistentTarget and persistentVelocity and root.Parent then
+                local delta = persistentTarget - root.Position
+                local distance = delta.Magnitude
+                if distance > 0.75 then
+                    local speed = math.clamp(distance * (tonumber(State.FarmPersistentHoverCorrection) or 10), 25, 180)
+                    persistentVelocity.Velocity = delta.Unit * speed
+                    persistentGyro.CFrame = CFrame.lookAt(root.Position, root.Position + delta.Unit)
+                else
+                    -- BodyVelocity com força grande mantém a personagem suspensa,
+                    -- inclusive contra a gravidade, sem deixar cair sobre a base.
+                    persistentVelocity.Velocity = Vector3.zero
+                    persistentGyro.CFrame = CFrame.new(persistentTarget)
+                end
+
+                pcall(function()
+                    root.AssemblyAngularVelocity = Vector3.zero
+                end)
+            end
+        end)
+    end
+
+    local function persistentEggTarget(targetPosition)
+        if typeof(targetPosition) ~= "Vector3" then
+            return targetPosition
+        end
+
+        local phase = tostring(State.FarmPhase or "")
+        if phase:find("Voando até", 1, true)
+            or phase:find("Colado no ovo", 1, true)
+            or phase:find("coletando", 1, true) then
+
+            -- Mantém o RootPart praticamente encostado no ovo, mas não dentro dele.
+            return targetPosition + Vector3.new(0, tonumber(State.FarmPersistentEggOffset) or 0.85, 0)
+        end
+
+        return targetPosition
+    end
+
+    local function persistentFarmFlyTo(targetPosition, speed, hold)
+        if not persistentRunning() then
+            return false
+        end
+
+        local character, root = GetCharacter()
+        if not character or not root or typeof(targetPosition) ~= "Vector3" then
+            return false
+        end
+
+        if not persistentEnsureMovers() then
+            return false
+        end
+
+        persistentStartController()
+        persistentMode = "moving"
+        persistentMoving = true
+
+        local finalTarget = persistentEggTarget(targetPosition)
+        persistentTarget = finalTarget
+
+        local flightSpeed = math.clamp(tonumber(speed) or State.FarmFlightSpeed or 300, 100, 700)
+        local arrive = math.clamp(tonumber(State.FarmPersistentArriveRadius) or 1.35, 0.8, 3)
+        local started = os.clock()
+        local distance = (finalTarget - root.Position).Magnitude
+        local timeout = math.clamp(distance / flightSpeed * 3.0 + 3, 3, 45)
+        local lastPosition = root.Position
+        local lastSample = os.clock()
+        local stuck = 0
+
+        while persistentRunning() and root.Parent and os.clock() - started < timeout do
+            persistentSaveCharacterCollision(character)
+
+            local delta = finalTarget - root.Position
+            local remaining = delta.Magnitude
+            if remaining <= arrive then
+                break
+            end
+
+            local direction = delta.Unit
+            local currentSpeed
+            if remaining <= 7 then
+                currentSpeed = math.clamp(remaining * 7, 22, math.min(flightSpeed, 120))
+            else
+                currentSpeed = math.clamp(remaining * 5, 70, flightSpeed)
+            end
+
+            pcall(function()
+                persistentVelocity.Velocity = direction * currentSpeed
+                persistentGyro.CFrame = CFrame.lookAt(root.Position, root.Position + direction)
+                root.AssemblyLinearVelocity = direction * currentSpeed
+                root.AssemblyAngularVelocity = Vector3.zero
+            end)
+
+            local now = os.clock()
+            if now - lastSample >= 0.30 then
+                local moved = (root.Position - lastPosition).Magnitude
+                if moved < 0.25 and remaining > arrive + 0.8 then
+                    stuck = stuck + (now - lastSample)
+                else
+                    stuck = 0
+                end
+
+                lastPosition = root.Position
+                lastSample = now
+
+                if stuck >= 0.75 then
+                    -- Reforça o movimento; colisão continua desligada.
+                    pcall(function()
+                        persistentVelocity.Velocity = direction * math.max(currentSpeed, 130) + Vector3.new(0, 22, 0)
+                        root.AssemblyLinearVelocity = persistentVelocity.Velocity
+                    end)
+                    stuck = 0
+                end
+            end
+
+            RunService.Heartbeat:Wait()
+        end
+
+        if not persistentRunning() then
+            return false
+        end
+
+        if (finalTarget - root.Position).Magnitude > math.max(arrive + 0.5, 2.5) then
+            return false
+        end
+
+        persistentTarget = finalTarget
+        persistentMode = "hover"
+        persistentMoving = false
+
+        -- Não destrói BodyVelocity/Gyro e não restaura colisão.
+        -- O próximo trecho reutiliza os mesmos movers.
+        pcall(function()
+            persistentVelocity.Velocity = Vector3.zero
+            persistentGyro.CFrame = CFrame.new(finalTarget)
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+
+        if tonumber(hold) and tonumber(hold) > 0 then
+            local deadline = os.clock() + math.clamp(tonumber(hold), 0.05, 8)
+            while persistentRunning() and os.clock() < deadline do
+                if persistentTarget ~= finalTarget then
+                    break
+                end
+                task.wait(0.05)
+            end
+        end
+
+        return true
+    end
+
+    -- Enquanto o Auto Farm estiver ligado, comandos internos de limpeza não podem
+    -- derrubar o controlador de voo. O clique de desligar continua funcionando.
+    StopFarmNoclip = function()
+        if persistentRunning() then
+            persistentStartController()
+            persistentEnsureMovers()
+            return true
+        end
+        persistentStopController(true)
+        return pcall(oldStopFarmNoclip)
+    end
+
+    DestroyFarmFlightMovers = function()
+        if persistentRunning() then
+            -- Não destrói durante o ciclo; apenas estabiliza. O controller mantém voo.
+            if persistentVelocity then
+                pcall(function() persistentVelocity.Velocity = Vector3.zero end)
+            end
+            if persistentRoot then
+                pcall(function()
+                    persistentRoot.AssemblyLinearVelocity = Vector3.zero
+                    persistentRoot.AssemblyAngularVelocity = Vector3.zero
+                end)
+            end
+            return
+        end
+        persistentStopController(true)
+        return pcall(oldDestroyFarmFlightMovers)
+    end
+
+    -- O FarmFlyTo é trocado no fim da cadeia: todo deslocamento do Auto Farm
+    -- passa pelo controlador persistente.
+    FarmFlyTo = persistentFarmFlyTo
+
+    -- Recuperação permanente: se o Auto Farm estiver ligado e algum código antigo
+    -- houver limpado o movimento, reconstruímos o controlador sem exigir toggle.
+    task.spawn(function()
+        while Running do
+            task.wait(0.12)
+            if ENV.__MUP_FARM_WANTED == true and State.AutoFarm then
+                pcall(persistentStartController)
+                pcall(persistentEnsureMovers)
+            end
+        end
+    end)
+
+    -- Stop real do usuário: aqui sim devolvemos colisão e encerramos o voo.
+    task.spawn(function()
+        while Running do
+            task.wait(0.10)
+            if ENV.__MUP_FARM_WANTED ~= true then
+                pcall(persistentStopController, true)
+            end
+        end
+    end)
+
+    ENV.__MUP_V49_PERSISTENT_FLIGHT = true
+end)
