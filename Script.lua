@@ -1,5 +1,5 @@
 --============================================================--
--- MONTAR UM PET - MASTER v43 • UI V41 ESTÁVEL • PICKUP PORT BAC0N/IAMDUNGX
+-- MONTAR UM PET - MASTER v38 • UI V15 RESCUE • BASE v23.3 CONFIRMADA
 -- PlaceId: 124216119978534
 -- UI: Rayfield Gen2 oficial • estrutura preservada da v15
 -- Config: salvamento manual + persistência do Rayfield
@@ -254,7 +254,7 @@ local State = {
 
     -- Auto Farm engine
     FarmMoveMode = "Instant",      -- Instant or Tween
-    FarmPickupMode = "Auto",       -- Auto = Remote comprovado + Prompt/InputHold fallback
+    FarmPickupMode = "Remote",     -- Auto, Prompt, Remote
     FarmPickupRetries = 6,
     FarmPickupWait = 0.25,
     FarmPickupRadius = 12,
@@ -316,8 +316,6 @@ local State = {
     Flying = false,
     FlySpeed = 60,
 }
-
-ENV.__MUP_FARM_WANTED = false
 
 local Connections = {}
 local ESPObjects = {}
@@ -1866,81 +1864,29 @@ local function ConfirmFarmPickup(candidate, beforeBasket, timeout)
     return false
 end
 
-local function ResolvePickupUID(candidate)
-    if not candidate then return nil end
-
-    local direct = candidate.UID or candidate.ID
-    local activeFolder = GetActiveEggFolder()
-
-    -- Caminho comprovado pelo Bac0nH1ck/SixZensED: o UID real é o Name
-    -- do Configuration dentro de ReplicatedStorage.ServerData.ActiveEggs.
-    if activeFolder and direct then
-        local directObject = activeFolder:FindFirstChild(direct)
-        if directObject then
-            return directObject.Name
-        end
-    end
-
-    -- Fallback para RenderedEggs: casa por posição quando o registro visual
-    -- apareceu antes do ActiveEgg server-side.
-    local position = candidate.Position
-    if typeof(position) ~= "Vector3" then
-        position = GetEggPosition(candidate.Instance or candidate.Rendered)
-    end
-
-    if activeFolder and typeof(position) == "Vector3" then
-        local nearest, nearestDistance = nil, math.huge
-        for _, active in ipairs(activeFolder:GetChildren()) do
-            local activePosition = GetEggPosition(active)
-            local eggName = active:GetAttribute("Egg")
-            if activePosition and (not candidate.Name or eggName == candidate.Name) then
-                local distance = (activePosition - position).Magnitude
-                if distance < nearestDistance and distance <= 15 then
-                    nearest = active
-                    nearestDistance = distance
-                end
-            end
-        end
-        if nearest then
-            return nearest.Name
-        end
-    end
-
-    return direct
-end
-
 local function TryRemotePickup(candidate)
     local remote = GetEggPickupRemote()
+
     if not remote or not remote:IsA("RemoteEvent") then
         return false
     end
 
-    local uid = ResolvePickupUID(candidate)
+    local uid = candidate and (candidate.UID or candidate.ID)
     if not uid then
         return false
     end
 
     local beforeBasket = GetBasketCount()
 
-    -- Implementação portável do caminho comprovado: EggPickup(uid).
     local ok = pcall(function()
         remote:FireServer(uid)
     end)
+
     if not ok then
         return false
     end
 
-    -- Não considera só o desaparecimento do ovo um sucesso. A confirmação
-    -- principal é o Basket realmente aumentar, igual ao hub testado.
-    local deadline = os.clock() + 3
-    while FarmIsRunning() and os.clock() < deadline do
-        if GetBasketCount() > beforeBasket then
-            return true
-        end
-        task.wait(0.05)
-    end
-
-    return false
+    return ConfirmFarmPickup(candidate, beforeBasket, 2)
 end
 
 local function FindPromptOnEgg(candidate)
@@ -1953,6 +1899,10 @@ local function FindPromptOnEgg(candidate)
 end
 
 local function TryPromptPickup(candidate)
+    if type(fireproximityprompt) ~= "function" then
+        return false
+    end
+
     local prompt = FindPromptOnEgg(candidate)
     if not prompt then
         return false
@@ -1961,34 +1911,14 @@ local function TryPromptPickup(candidate)
     local beforeBasket = GetBasketCount()
 
     local ok = pcall(function()
-        -- Primeiro tenta a API do executor, quando disponível.
-        if type(fireproximityprompt) == "function" then
-            fireproximityprompt(prompt)
-            return
-        end
-
-        -- Fallback do Iamdungx: usar diretamente o ProximityPrompt,
-        -- sem depender de fireproximityprompt.
-        prompt.RequiresLineOfSight = false
-        prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 9999)
-        prompt:InputHoldBegin()
-        task.wait((tonumber(prompt.HoldDuration) or 0) + 0.12)
-        prompt:InputHoldEnd()
+        fireproximityprompt(prompt)
     end)
 
     if not ok then
         return false
     end
 
-    local deadline = os.clock() + 3
-    while FarmIsRunning() and os.clock() < deadline do
-        if GetBasketCount() > beforeBasket then
-            return true
-        end
-        task.wait(0.05)
-    end
-
-    return false
+    return ConfirmFarmPickup(candidate, beforeBasket, 2)
 end
 
 local function AttemptPickup(candidate)
@@ -3886,22 +3816,17 @@ TabFarm:CreateToggle({
     flag = "AutoFarm",
     value = State.AutoFarm,
     callback = function(value)
-        ENV.__MUP_FARM_WANTED = value == true
-        State.AutoFarm = ENV.__MUP_FARM_WANTED == true
+        State.AutoFarm = value
 
-        if ENV.__MUP_FARM_WANTED == true then
+        if value then
+            StartFarmNoclip()
             ClearFarmTarget()
             State.FarmPhase = "Starting"
             LastFarmStatus = "Starting Auto Farm"
-            pcall(StartFarmNoclip)
             task.spawn(function()
                 task.wait(0.05)
-                if Running and ENV.__MUP_FARM_WANTED == true then
-                    State.AutoFarm = true
-                    pcall(StartFarmNoclip)
-                    if not FarmBusy then
-                        pcall(FarmOnce)
-                    end
+                if Running and State.AutoFarm and not FarmBusy then
+                    FarmOnce()
                 end
             end)
         else
@@ -3910,7 +3835,7 @@ TabFarm:CreateToggle({
             StopFarmNoclip()
             ClearFarmTarget()
             State.FarmPhase = "Stopped"
-            -- Não força FarmBusy=false: deixa o ciclo atual terminar/recuperar.
+            FarmBusy = false
         end
     end,
 })
@@ -4253,13 +4178,11 @@ TabFarm:CreateButton({
 TabFarm:CreateButton({
     name = "Stop Farm agora",
     callback = function()
-        ENV.__MUP_FARM_WANTED = false
         State.AutoFarm = false
         State.AutoPickup = false
+        FarmBusy = false
         PickupBusy = false
         CancelGlide()
-        DestroyFarmFlightMovers()
-        StopFarmNoclip()
     end,
 })
 
@@ -4803,7 +4726,6 @@ TabConfig:CreateSection({name = "Sessão"})
 TabConfig:CreateButton({
     name = "Stop All",
     callback = function()
-        ENV.__MUP_FARM_WANTED = false
         State.AutoFarm = false
         State.AutoPickup = false
         State.SpeedEnabled = false
@@ -4842,1101 +4764,21 @@ TabConfig:CreateButton({
 })
 
 --============================================================--
--- AUTO FARM V42 • CAMADA PÓS-UI / CICLO COMPLETO
--- Regra: esta camada só é definida DEPOIS que a interface existe.
--- Se alguma parte falhar, a UI já está viva.
---============================================================--
-
-local AdvancedFarmReady = false
-
-task.defer(function()
-    -- defaults somente para campos que o v41 pode não ter
-    State.FarmBaseSideOffset = State.FarmBaseSideOffset or 26
-    State.FarmBaseSideHeight = State.FarmBaseSideHeight or 6
-    State.FarmBaseEntryInset = State.FarmBaseEntryInset or 14
-    State.FarmBaseSidePause = State.FarmBaseSidePause or 0.60
-    State.FarmBaseEntryPause = State.FarmBaseEntryPause or 0.80
-    State.FarmBaseEntrySpeed = State.FarmBaseEntrySpeed or 110
-    State.FarmNestApproachSpeed = State.FarmNestApproachSpeed or 100
-    State.FarmBaseConfirmTimeout = State.FarmBaseConfirmTimeout or 2.5
-    State.FarmNestWait = State.FarmNestWait or 8
-    State.FarmNestApproachHeight = State.FarmNestApproachHeight or 6
-    State.FarmNestPoll = State.FarmNestPoll or 0.25
-    State.FarmPickupMode = State.FarmPickupMode or "Auto"
-    LastFarmStatus = LastFarmStatus or "Pickup adapter: Remote + Prompt/InputHold"
-    State.FarmPickupRetries = State.FarmPickupRetries or 5
-    State.FarmPickupWait = State.FarmPickupWait or 0.25
-    State.FarmPendingEggs = State.FarmPendingEggs or {}
-    State.FarmCycleDelay = State.FarmCycleDelay or 0.75
-    State.FarmNoTargetDelay = State.FarmNoTargetDelay or 1.0
-    State.FarmEggHoverHeight = math.clamp(tonumber(State.FarmEggHoverHeight) or 0.9, 0.5, 2.0)
-    State.FarmBaseHoverHeight = State.FarmBaseHoverHeight or 55
-    State.FarmHoverHold = State.FarmHoverHold or 2.0
-    State.FarmCycleTimeout = State.FarmCycleTimeout or 35
-
-    local function advRunning()
-        return Running and State.AutoFarm
-    end
-
-    local function advSetPhase(text)
-        State.FarmPhase = tostring(text)
-        LastFarmStatus = tostring(text)
-    end
-
-    local function advBasketCount()
-        local basket = LocalPlayer:FindFirstChild("Basket")
-        return basket and #basket:GetChildren() or 0
-    end
-
-    local function advEggRemote(name)
-        local remotes = GetGameRemotes()
-        if remotes then
-            local direct = remotes:FindFirstChild(name)
-            if direct then
-                return direct
-            end
-        end
-
-        local root = ReplicatedStorage:FindFirstChild("Remotes")
-        if root then
-            for _, obj in ipairs(root:GetDescendants()) do
-                if obj.Name == name and (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction")) then
-                    return obj
-                end
-            end
-        end
-        return nil
-    end
-
-    local function advSnapshotTools()
-        local seen = {}
-        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-        local character = LocalPlayer.Character
-        for _, container in ipairs({backpack, character}) do
-            if container then
-                for _, obj in ipairs(container:GetChildren()) do
-                    if obj:IsA("Tool") then
-                        seen[obj] = true
-                    end
-                end
-            end
-        end
-        return seen
-    end
-
-    local function advEggTools()
-        local result = {}
-        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-        local character = LocalPlayer.Character
-        for _, container in ipairs({backpack, character}) do
-            if container then
-                for _, tool in ipairs(container:GetChildren()) do
-                    if tool:IsA("Tool") then
-                        local isEgg = EggData[tool.Name] ~= nil
-                            or type(tool:GetAttribute("Egg")) == "string"
-                            or tool:GetAttribute("IsEgg") == true
-                        if isEgg and not tool:GetAttribute("PetKey") then
-                            result[#result + 1] = tool
-                        end
-                    end
-                end
-            end
-        end
-        return result
-    end
-
-    local function advBasketEggs()
-        local basket = LocalPlayer:FindFirstChild("Basket")
-        local expected = {}
-        if not basket then
-            return expected
-        end
-        for _, obj in ipairs(basket:GetChildren()) do
-            local name = obj:GetAttribute("Egg")
-                or obj:GetAttribute("EggName")
-                or obj.Name
-            if type(name) == "string" and name ~= "" then
-                expected[name] = (expected[name] or 0) + 1
-            end
-        end
-        return expected
-    end
-
-    local function advFreeNests()
-        local plot = GetMyPlot()
-        local nestsFolder = plot and plot:FindFirstChild("Nests")
-        if not nestsFolder then
-            return {}
-        end
-
-        local result = {}
-        for _, nest in ipairs(nestsFolder:GetChildren()) do
-            local unlocked = nest:GetAttribute("Unlocked")
-            local occupied = nest:GetAttribute("Occupied")
-            if unlocked ~= false and occupied ~= true then
-                result[#result + 1] = nest
-            end
-        end
-
-        table.sort(result, function(a, b)
-            local an = tonumber(a.Name) or math.huge
-            local bn = tonumber(b.Name) or math.huge
-            if an == bn then
-                return tostring(a.Name) < tostring(b.Name)
-            end
-            return an < bn
-        end)
-        return result
-    end
-
-    local function advNestPosition(nest)
-        if not nest or not nest.Parent then
-            return nil
-        end
-        local ok, pivot = pcall(function()
-            return nest:GetPivot()
-        end)
-        if ok and pivot then
-            return pivot.Position
-        end
-        if nest:IsA("BasePart") then
-            return nest.Position
-        end
-        local part = nest:FindFirstChildWhichIsA("BasePart", true)
-        return part and part.Position or nil
-    end
-
-    local function advEquipTool(tool)
-        local character, humanoid = GetCharacter()
-        if not character or not humanoid or not tool or not tool.Parent then
-            return false
-        end
-        return pcall(function()
-            humanoid:EquipTool(tool)
-        end)
-    end
-
-    local function advFirePlaced(nest)
-        local remote = advEggRemote("EggPlaced")
-        if not remote or not remote:IsA("RemoteEvent") then
-            return false
-        end
-
-        local nestId = nest.Name
-        local ok = pcall(function()
-            remote:FireServer({NestId = tostring(nestId)})
-        end)
-        if ok then
-            return true
-        end
-
-        -- fallback para builds em que o argumento é o nome direto
-        return pcall(function()
-            remote:FireServer(tostring(nestId))
-        end)
-    end
-
-    local function advRestoreCollision(saved)
-        for part, value in pairs(saved) do
-            if part and part.Parent then
-                pcall(function()
-                    part.CanCollide = value
-                end)
-            end
-        end
-        table.clear(saved)
-    end
-
-    local function advFly(target, speed, descend)
-        local character, root = GetCharacter()
-        if not character or not root or typeof(target) ~= "Vector3" or not advRunning() then
-            return false
-        end
-
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if not humanoid then
-            return false
-        end
-
-        local saved = {}
-        for _, obj in ipairs(character:GetDescendants()) do
-            if obj:IsA("BasePart") then
-                saved[obj] = obj.CanCollide
-                obj.CanCollide = false
-            end
-        end
-
-        local oldStand = humanoid.PlatformStand
-        local oldRotate = humanoid.AutoRotate
-        humanoid.PlatformStand = true
-        humanoid.AutoRotate = false
-
-        local velocity = Instance.new("BodyVelocity")
-        velocity.Name = "MUP_V42_Flight"
-        velocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-        velocity.P = 30000
-        velocity.Parent = root
-
-        local gyro = Instance.new("BodyGyro")
-        gyro.Name = "MUP_V42_FlightGyro"
-        gyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-        gyro.P = 60000
-        gyro.D = 1800
-        gyro.Parent = root
-
-        local token = (MovementToken or 0) + 1
-        MovementToken = token
-
-        local flightSpeed = math.clamp(tonumber(speed) or State.FarmFlightSpeed or 300, 50, 400)
-        local arrive = math.clamp(tonumber(State.FarmFlightArriveRadius) or 4, 2, 10)
-        local started = os.clock()
-        local distance = (target - root.Position).Magnitude
-        local timeout = math.clamp(distance / flightSpeed * 3 + 3, 4, 35)
-        local ok = false
-
-        while advRunning() and token == MovementToken and root.Parent and os.clock() - started < timeout do
-            for part in pairs(saved) do
-                if part and part.Parent then
-                    part.CanCollide = false
-                end
-            end
-
-            local delta = target - root.Position
-            local remaining = delta.Magnitude
-            if remaining <= arrive then
-                ok = true
-                break
-            end
-
-            local direction = delta.Unit
-            local current = math.clamp(remaining * 5, 45, flightSpeed)
-            velocity.Velocity = direction * current
-            gyro.CFrame = CFrame.lookAt(root.Position, root.Position + direction)
-
-            pcall(function()
-                root.AssemblyLinearVelocity = direction * current
-            end)
-
-            RunService.Heartbeat:Wait()
-        end
-
-        pcall(function()
-            velocity.Velocity = Vector3.zero
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
-
-        pcall(function() velocity:Destroy() end)
-        pcall(function() gyro:Destroy() end)
-
-        -- A colisão volta NORMAL sempre que termina um trecho de voo.
-        advRestoreCollision(saved)
-        pcall(function()
-            humanoid.PlatformStand = oldStand
-            humanoid.AutoRotate = oldRotate
-        end)
-
-        if not ok or not advRunning() then
-            return false
-        end
-
-        if descend then
-            task.wait(math.clamp(tonumber(State.FarmArrivalPause) or 0.35, 0.10, 0.80))
-        end
-
-        return true
-    end
-
-    local function advBaseRoute()
-        local plot = GetMyPlot()
-        local baseplate = plot and plot:FindFirstChild("Baseplate")
-        local _, root = GetCharacter()
-        if not plot or not baseplate or not baseplate:IsA("BasePart") or not root then
-            return nil
-        end
-
-        local cf = baseplate.CFrame
-        local size = baseplate.Size
-        local halfX = math.max(4, size.X * 0.5)
-        local halfZ = math.max(4, size.Z * 0.5)
-        local topY = baseplate.Position.Y + size.Y * 0.5
-        local localRoot = cf:PointToObjectSpace(root.Position)
-        local useX = math.abs(localRoot.X) >= math.abs(localRoot.Z)
-        local sign = useX and (localRoot.X >= 0 and 1 or -1) or (localRoot.Z >= 0 and 1 or -1)
-        local axis = useX and halfX or halfZ
-
-        local sideOffset = math.clamp(tonumber(State.FarmBaseSideOffset) or 26, 8, 60)
-        local sideHeight = math.clamp(tonumber(State.FarmBaseSideHeight) or 6, 3, 15)
-        local inset = math.clamp(tonumber(State.FarmBaseEntryInset) or 14, 4, math.max(4, axis - 3))
-        local entryHeight = math.clamp(tonumber(State.FarmBaseEntryHeight) or 7, 3, 15)
-        local hoverHeight = math.clamp(tonumber(State.FarmHoverHeight) or 55, 20, 150)
-
-        local sideLocal, entryLocal
-        if useX then
-            sideLocal = Vector3.new(sign * (halfX + sideOffset), 0, 0)
-            entryLocal = Vector3.new(sign * math.max(0, halfX - inset), 0, 0)
-        else
-            sideLocal = Vector3.new(0, 0, sign * (halfZ + sideOffset))
-            entryLocal = Vector3.new(0, 0, sign * math.max(0, halfZ - inset))
-        end
-
-        local sideGround = cf:PointToWorldSpace(sideLocal + Vector3.new(0, topY - cf.Position.Y + sideHeight, 0))
-        local sideAir = Vector3.new(sideGround.X, topY + hoverHeight, sideGround.Z)
-        local entryPoint = cf:PointToWorldSpace(entryLocal + Vector3.new(0, topY - cf.Position.Y + entryHeight, 0))
-        local baseHover = Vector3.new(baseplate.Position.X, topY + hoverHeight, baseplate.Position.Z)
-
-        return {
-            Plot = plot,
-            Baseplate = baseplate,
-            SideAir = sideAir,
-            SideGround = sideGround,
-            EntryPoint = entryPoint,
-            BaseHover = baseHover,
-            BasePosition = baseplate.Position,
-        }
-    end
-
-    local function advInsidePlot(position)
-        local route = advBaseRoute()
-        if not route or typeof(position) ~= "Vector3" then
-            return false
-        end
-        local p = route.Baseplate.CFrame:PointToObjectSpace(position)
-        local margin = 2.5
-        return math.abs(p.X) <= route.Baseplate.Size.X * 0.5 - margin
-            and math.abs(p.Z) <= route.Baseplate.Size.Z * 0.5 - margin
-    end
-
-    local function advConfirmPlot(timeout)
-        local deadline = os.clock() + math.clamp(tonumber(timeout) or 2.5, 0.5, 5)
-        while advRunning() and os.clock() < deadline do
-            local _, root = GetCharacter()
-            if root and advInsidePlot(root.Position) then
-                return true
-            end
-            task.wait(0.08)
-        end
-        local _, root = GetCharacter()
-        return root and advInsidePlot(root.Position) or false
-    end
-
-    local function advWaitReturnedEggs(expected, beforeTools, timeout)
-        local deadline = os.clock() + math.clamp(tonumber(timeout) or 4, 2, 10)
-        while advRunning() and os.clock() < deadline do
-            local received = {}
-            for _, tool in ipairs(advEggTools()) do
-                if not beforeTools[tool] then
-                    received[tool.Name] = (received[tool.Name] or 0) + 1
-                end
-            end
-
-            local enough = advBasketCount() <= 0
-            if enough then
-                for name, count in pairs(expected) do
-                    if (received[name] or 0) < count then
-                        enough = false
-                        break
-                    end
-                end
-            end
-
-            if enough then
-                return true
-            end
-            task.wait(0.10)
-        end
-        return false
-    end
-
-    local function advPlaceEggs(expected, beforeTools)
-        local remaining = {}
-        for name, count in pairs(expected) do
-            remaining[name] = math.max(0, math.floor(tonumber(count) or 0))
-        end
-
-        local deadline = os.clock() + math.clamp(tonumber(State.FarmNestWait) or 8, 2, 20)
-        while advRunning() and os.clock() < deadline do
-            local complete = true
-            for _, count in pairs(remaining) do
-                if count > 0 then complete = false break end
-            end
-            if complete then
-                State.FarmPendingEggs = {}
-                return true
-            end
-
-            local nests = advFreeNests()
-            if #nests == 0 then
-                task.wait(math.clamp(tonumber(State.FarmNestPoll) or 0.25, 0.10, 0.75))
-                continue
-            end
-
-            local tools = advEggTools()
-            for _, nest in ipairs(nests) do
-                if not advRunning() then return false end
-
-                local tool = nil
-                for _, candidate in ipairs(tools) do
-                    if not beforeTools[candidate] and (remaining[candidate.Name] or 0) > 0 then
-                        tool = candidate
-                        break
-                    end
-                end
-                if not tool then break end
-
-                local nestPosition = advNestPosition(nest)
-                if not nestPosition then continue end
-
-                local safe = GetSafeDescentPosition(
-                    nestPosition,
-                    math.max(3, tonumber(State.FarmNestApproachHeight) or 6)
-                ) or nestPosition
-
-                advSetPhase("Voando até ninho " .. tostring(nest.Name))
-                if not advFly(safe, math.min(tonumber(State.FarmNestApproachSpeed) or 100, 180), true) then
-                    return false
-                end
-
-                if not advRunning() then return false end
-
-                -- Agora o personagem está parado e com colisão normal.
-                if not advEquipTool(tool) then
-                    return false
-                end
-                task.wait(0.15)
-
-                if not advFirePlaced(nest) then
-                    return false
-                end
-
-                local placed = false
-                local confirm = os.clock() + 4
-                while advRunning() and os.clock() < confirm do
-                    local occupied = nest:GetAttribute("Occupied") == true
-                    local stillThere = false
-                    for _, current in ipairs(advEggTools()) do
-                        if current == tool then stillThere = true break end
-                    end
-                    if occupied or not stillThere then
-                        placed = true
-                        break
-                    end
-                    task.wait(0.10)
-                end
-
-                if not placed then
-                    State.FarmPendingEggs = remaining
-                    advSetPhase("Depósito não confirmado")
-                    return false
-                end
-
-                remaining[tool.Name] = math.max(0, (remaining[tool.Name] or 1) - 1)
-                task.wait(math.clamp(tonumber(State.FarmBasePause) or 2.5, 0.5, 5))
-            end
-        end
-
-        State.FarmPendingEggs = remaining
-        for _, count in pairs(remaining) do
-            if count > 0 then return false end
-        end
-        return true
-    end
-
-    local function advMountBestPet()
-        if not State.AutoMountPet or IsRidingPet() then
-            return true
-        end
-
-        local remote = GetMountRemote()
-        local character = LocalPlayer.Character
-        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-        if not remote or not remote:IsA("RemoteEvent") or not character then
-            return false
-        end
-
-        local best = nil
-        local bestScore = -math.huge
-        for _, container in ipairs({backpack, character}) do
-            if container then
-                for _, tool in ipairs(container:GetChildren()) do
-                    if tool:IsA("Tool") and not tool:GetAttribute("Egg") then
-                        local petName = tool:GetAttribute("PetName")
-                        local petKey = tool:GetAttribute("PetKey")
-                        local weight = tonumber(tool:GetAttribute("Weight")) or 0
-                        local income = tonumber(tool:GetAttribute("Income"))
-                            or tonumber(tool:GetAttribute("CashPerSecond")) or 0
-                        if petName ~= nil or petKey ~= nil then
-                            local score = weight * 1000 + income
-                            if score > bestScore then
-                                bestScore = score
-                                best = tool
-                            end
-                        end
-                    end
-                end
-            end
-        end
-
-        if not best then
-            return false
-        end
-
-        local ok = pcall(function()
-            character.Humanoid:EquipTool(best)
-        end)
-        if not ok then
-            return false
-        end
-
-        task.wait(0.12)
-        pcall(function()
-            remote:FireServer()
-        end)
-
-        local deadline = os.clock() + 2
-        while advRunning() and os.clock() < deadline do
-            if IsRidingPet() then
-                return true
-            end
-            task.wait(0.05)
-        end
-        return IsRidingPet()
-    end
-
-    local function advResolveTarget()
-        -- Primeiro respeita o alvo já travado. Isso impede o Auto Farm de
-        -- trocar de ovo no meio do voo.
-        if State.FarmTargetUID then
-            local activeFolder = GetActiveEggFolder()
-            local active = activeFolder and activeFolder:FindFirstChild(State.FarmTargetUID)
-            if active then
-                local pos = GetEggPosition(active)
-                if pos then
-                    return {
-                        Instance = active,
-                        UID = active.Name,
-                        ID = active.Name,
-                        Name = active:GetAttribute("Egg") or State.FarmTargetName or active.Name,
-                        Position = pos,
-                        Distance = 0,
-                        Weight = GetEggWeight(active) or 0,
-                        Luck = GetEggLuck(active) or 0,
-                        Rarity = GetEggRarity(active:GetAttribute("Egg") or State.FarmTargetName or active.Name, active),
-                        RarityScore = RarityPriority[GetEggRarity(active:GetAttribute("Egg") or State.FarmTargetName or active.Name, active)] or 0,
-                        Mutation = GetEggMutation(active),
-                    }
-                end
-            end
-            ClearFarmTarget()
-        end
-
-        local candidates = GetCandidates()
-        if type(candidates) ~= "table" then
-            return nil
-        end
-
-        local target = nil
-        if type(SelectBestCandidate) == "function" then
-            target = SelectBestCandidate(candidates)
-        end
-        if not target then
-            target = SelectBestFarmCandidate(candidates)
-        end
-        if not target then
-            return nil
-        end
-
-        -- RenderedEggs pode aparecer antes do ActiveEggs; recupera o UID real.
-        if target.Synthetic or not target.UID then
-            local active = FindActiveEggNear(target.Position, 15)
-            if active then
-                target.Instance = active
-                target.UID = active.Name
-                target.ID = active.Name
-                target.Synthetic = false
-            end
-        end
-
-        return target
-    end
-
-    local function advFindRenderedForTarget(target)
-        if target and target.Rendered and target.Rendered.Parent then
-            return target.Rendered
-        end
-
-        local folder = GetRenderedEggFolder()
-        if not folder or not target or typeof(target.Position) ~= "Vector3" then
-            return nil
-        end
-
-        local best = nil
-        local bestDistance = 12
-        for _, obj in ipairs(folder:GetDescendants()) do
-            if obj:IsA("Model") then
-                local pos = GetEggPosition(obj)
-                if pos then
-                    local d = (pos - target.Position).Magnitude
-                    if d <= bestDistance then
-                        local name = GetRealRenderedEggName(obj)
-                        if not target.Name or name == target.Name or EggData[name] then
-                            best = obj
-                            bestDistance = d
-                        end
-                    end
-                end
-            end
-        end
-        return best
-    end
-
-    local function advEggHoverPoint(target)
-        local rendered = advFindRenderedForTarget(target)
-        if rendered then
-            local ok, cf, size = pcall(function()
-                local c, z = rendered:GetBoundingBox()
-                return c, z
-            end)
-            if ok and cf and size then
-                return Vector3.new(
-                    cf.Position.X,
-                    cf.Position.Y + (size.Y * 0.5) + math.max(2.0, tonumber(State.FarmEggHoverHeight) or 3),
-                    cf.Position.Z
-                ), rendered
-            end
-        end
-
-        if target and typeof(target.Position) == "Vector3" then
-            return target.Position + Vector3.new(0, math.max(2.0, tonumber(State.FarmEggHoverHeight) or 3), 0), rendered
-        end
-        return nil, rendered
-    end
-
-    local function advHoverAt(targetPosition, speed, holdSeconds, action)
-        local character, root = GetCharacter()
-        if not character or not root or typeof(targetPosition) ~= "Vector3" or not advRunning() then
-            return false
-        end
-
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if not humanoid then return false end
-
-        local saved = {}
-        for _, obj in ipairs(character:GetDescendants()) do
-            if obj:IsA("BasePart") then
-                saved[obj] = obj.CanCollide
-                obj.CanCollide = false
-            end
-        end
-
-        local oldStand = humanoid.PlatformStand
-        local oldRotate = humanoid.AutoRotate
-        humanoid.PlatformStand = true
-        humanoid.AutoRotate = false
-
-        local velocity = Instance.new("BodyVelocity")
-        velocity.Name = "MUP_V44_Hover"
-        velocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-        velocity.P = 30000
-        velocity.Velocity = Vector3.zero
-        velocity.Parent = root
-
-        local gyro = Instance.new("BodyGyro")
-        gyro.Name = "MUP_V44_HoverGyro"
-        gyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-        gyro.P = 60000
-        gyro.D = 1800
-        gyro.CFrame = root.CFrame
-        gyro.Parent = root
-
-        local token = (MovementToken or 0) + 1
-        MovementToken = token
-        local flightSpeed = math.clamp(tonumber(speed) or State.FarmFlightSpeed or 300, 50, 400)
-        local start = os.clock()
-        local travelTimeout = math.clamp(((targetPosition-root.Position).Magnitude / flightSpeed) * 3 + 3, 4, 30)
-        local arrived = false
-        local worked = true
-
-        while advRunning() and token == MovementToken and root.Parent and os.clock()-start < travelTimeout do
-            for part in pairs(saved) do
-                if part and part.Parent then part.CanCollide = false end
-            end
-            local delta = targetPosition - root.Position
-            local remaining = delta.Magnitude
-            if remaining <= math.clamp(tonumber(State.FarmFlightArriveRadius) or 4, 2, 8) then
-                arrived = true
-                break
-            end
-            local dir = delta.Unit
-            local current = math.clamp(remaining * 5, 35, flightSpeed)
-            velocity.Velocity = dir * current
-            gyro.CFrame = CFrame.lookAt(root.Position, root.Position + dir)
-            pcall(function() root.AssemblyLinearVelocity = dir * current end)
-            RunService.Heartbeat:Wait()
-        end
-
-        if arrived and advRunning() and token == MovementToken then
-            pcall(function()
-                velocity.Velocity = Vector3.zero
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            end)
-
-            if type(action) == "function" then
-                local okAction, result = pcall(action)
-                worked = okAction and result ~= false
-            end
-
-            local hold = math.clamp(tonumber(holdSeconds) or 1.5, 0.25, 5)
-            local holdUntil = os.clock() + hold
-            while advRunning() and token == MovementToken and root.Parent and os.clock() < holdUntil do
-                for part in pairs(saved) do
-                    if part and part.Parent then part.CanCollide = false end
-                end
-                velocity.Velocity = Vector3.zero
-                gyro.CFrame = CFrame.new(root.Position)
-                pcall(function()
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                end)
-                RunService.Heartbeat:Wait()
-            end
-        else
-            worked = false
-        end
-
-        pcall(function()
-            velocity.Velocity = Vector3.zero
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
-        pcall(function() velocity:Destroy() end)
-        pcall(function() gyro:Destroy() end)
-        advRestoreCollision(saved)
-        pcall(function()
-            humanoid.PlatformStand = oldStand
-            humanoid.AutoRotate = oldRotate
-        end)
-
-        return worked and arrived and advRunning()
-    end
-
-    local function advPickup(target)
-        if not target then return false end
-
-        local hoverPoint, rendered = advEggHoverPoint(target)
-        if not hoverPoint then return false end
-        target.Rendered = rendered or target.Rendered
-
-        local retries = math.clamp(math.floor(tonumber(State.FarmPickupRetries) or 6), 1, 10)
-
-        for attempt = 1, retries do
-            if not advRunning() then return false end
-
-            local before = advBasketCount()
-            local uid = ResolvePickupUID(target)
-            local prompt = target.Rendered and target.Rendered:FindFirstChildWhichIsA("ProximityPrompt", true) or nil
-
-            local actionOk = advHoverAt(hoverPoint, math.min(State.FarmFlightSpeed or 300, 220), 0.65, function()
-                -- Primeiro usa o remote confirmado; o prompt fica como fallback.
-                if uid then
-                    local remote = GetEggPickupRemote()
-                    if remote and remote:IsA("RemoteEvent") then
-                        pcall(function() remote:FireServer(uid) end)
-                    end
-                end
-
-                if prompt and prompt.Parent then
-                    pcall(function()
-                        prompt.RequiresLineOfSight = false
-                        prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 20)
-                        if type(fireproximityprompt) == "function" then
-                            fireproximityprompt(prompt)
-                        else
-                            prompt:InputHoldBegin()
-                            task.wait((tonumber(prompt.HoldDuration) or 0) + 0.12)
-                            prompt:InputHoldEnd()
-                        end
-                    end)
-                end
-                return true
-            end)
-
-            if actionOk then
-                local deadline = os.clock() + 1.75
-                while advRunning() and os.clock() < deadline do
-                    if advBasketCount() > before then
-                        return true
-                    end
-                    task.wait(0.05)
-                end
-            end
-
-            -- Re-resolve o RenderedEgg e o UID porque o objeto pode ter
-            -- sido recriado pelo servidor durante a tentativa.
-            local refreshed = advResolveTarget() or target
-            target = refreshed
-            hoverPoint, rendered = advEggHoverPoint(target)
-            target.Rendered = rendered or target.Rendered
-
-            if not hoverPoint then break end
-            task.wait(math.max(0.08, tonumber(State.FarmPickupWait) or 0.25))
-
-            if attempt >= 3 and advBasketCount() > before then
-                return true
-            end
-        end
-
-        return false
-    end
-
-    local function advFarmDeposit()
-        if not advRunning() then return false end
-        local route = advBaseRoute()
-        if not route then
-            advSetPhase("Base não encontrada")
-            return false
-        end
-
-        local expected = advBasketEggs()
-        if next(expected) == nil and next(State.FarmPendingEggs or {}) ~= nil then
-            expected = State.FarmPendingEggs
-        end
-        if next(expected) == nil then
-            return advBasketCount() <= 0
-        end
-
-        local beforeTools = advSnapshotTools()
-        local baseHover = Vector3.new(
-            route.BasePosition.X,
-            route.Baseplate.Position.Y + route.Baseplate.Size.Y * 0.5 + math.clamp(tonumber(State.FarmBaseHoverHeight) or 55, 20, 120),
-            route.BasePosition.Z
-        )
-
-        advSetPhase("Voltando para base • voo alto")
-        if not advFly(route.SideAir, State.FarmFlightSpeed or 300, false) then return false end
-        if not advFly(baseHover, State.FarmFlightSpeed or 300, false) then return false end
-
-        -- Fica voando exatamente sobre a base. Não desce para o chão.
-        -- Ao entrar nesta coluna, consideramos o plot encontrado pelo X/Z.
-        advSetPhase("Sobre a base • confirmando entrega")
-
-        local confirmed = false
-        local holdUntil = os.clock() + math.clamp(tonumber(State.FarmDepositWait) or 5, 2, 12)
-        while advRunning() and os.clock() < holdUntil do
-            local _, root = GetCharacter()
-            if root and advInsidePlot(root.Position) then
-                confirmed = true
-                break
-            end
-            task.wait(0.08)
-        end
-
-        if not confirmed then
-            return false
-        end
-
-        -- Enquanto o jogo converte Basket em Egg Tool, mantemos o personagem
-        -- suspenso sobre a base para não cair nem perder a interação.
-        local _, render = advEggHoverPoint({Position = route.BasePosition})
-        local hoverKeep = math.clamp(tonumber(State.FarmHoverHold) or 2, 0.5, 4)
-        advHoverAt(baseHover, 160, hoverKeep, function()
-            advSetPhase("Sobre a base • aguardando Basket → Tool")
-            return true
-        end)
-
-        local gotTools = advWaitReturnedEggs(expected, beforeTools, math.clamp(tonumber(State.FarmDepositWait) or 5, 2, 12))
-        if not gotTools and advBasketCount() > 0 then
-            -- Ainda está no Basket: permanece no alto e continua tentando no
-            -- próximo ciclo, em vez de desligar o Auto Farm.
-            State.FarmPendingEggs = expected
-            advSetPhase("Basket ainda carregado • tentando novamente")
-            return false
-        end
-
-        -- Se os Eggs viraram Tools, tenta placement. O placement pode falhar
-        -- sem parar o farm: o pending fica salvo para o próximo worker.
-        if advBasketCount() <= 0 then
-            local placed = advPlaceEggs(expected, beforeTools)
-            if placed then
-                State.FarmPendingEggs = {}
-                advSetPhase("Entregue • próximo ovo")
-                return true
-            end
-
-            State.FarmPendingEggs = expected
-            advSetPhase("Tool recebida • placement pendente")
-            return true
-        end
-
-        return false
-    end
-
-    local function advFarmOnce()
-        if not advRunning() or FarmBusy then return false end
-        FarmBusy = true
-        local ok, result = pcall(function()
-            -- Primeiro resolve o que já foi coletado; isso evita o "volta para
-            -- base e para" quando existe Egg Tool/pending placement.
-            if advBasketCount() > 0 or next(State.FarmPendingEggs or {}) ~= nil then
-                return advFarmDeposit()
-            end
-
-            if State.AutoMountPet and not IsRidingPet() then
-                advSetPhase("Preparando melhor pet")
-                local mounted = advMountBestPet()
-                if not mounted and State.FarmRequireMountedPet then
-                    return false
-                end
-            end
-
-            local target = advResolveTarget()
-            if not target then
-                advSetPhase("Sem alvo • aguardando scanner")
-                task.wait(math.clamp(tonumber(State.FarmNoTargetDelay) or 1, 0.25, 5))
-                return false
-            end
-
-            State.FarmTargetUID = target.UID or target.ID
-            State.FarmTargetName = target.Name
-            State.FarmTargetPosition = target.Position
-            State.FarmTargetRetries = 0
-
-            if State.VolcanicSupport and string.find(string.lower(tostring(target.Name)), "volcan") then
-                if not IsInVolcano() and type(EnterVolcano) == "function" then
-                    advSetPhase("Entrando no vulcão")
-                    if not EnterVolcano() then
-                        ClearFarmTarget()
-                        return false
-                    end
-                    return false
-                end
-            elseif IsInVolcano() and type(ReturnFromVolcanoToPlot) == "function" then
-                advSetPhase("Saindo do vulcão")
-                ReturnFromVolcanoToPlot()
-                return false
-            end
-
-            local pickupRadius = math.clamp(tonumber(State.FarmPickupRadius) or 12, 6, 30)
-            local _, root = GetCharacter()
-            if not root then return false end
-
-            local hoverPoint = select(1, advEggHoverPoint(target)) or target.Position
-            local distance = (hoverPoint - root.Position).Magnitude
-            if distance > pickupRadius + 5 then
-                advSetPhase("Voando até " .. tostring(target.Name))
-                if not advFly(hoverPoint, State.FarmFlightSpeed or 300, true) then
-                    State.FarmTargetRetries = State.FarmTargetRetries + 1
-                    if State.FarmTargetRetries >= 3 then
-                        FailedFarmTargets[target.UID or target.ID] = os.clock() + 4
-                        ClearFarmTarget()
-                    end
-                    return false
-                end
-            end
-
-            if not advRunning() then return false end
-
-            target = advResolveTarget() or target
-            advSetPhase("Em cima do ovo • coletando " .. tostring(target.Name))
-
-            if not advPickup(target) then
-                State.FarmTargetRetries = (State.FarmTargetRetries or 0) + 1
-                if State.FarmTargetRetries >= 3 then
-                    FailedFarmTargets[target.UID or target.ID] = os.clock() + 5
-                    ClearFarmTarget()
-                end
-                return false
-            end
-
-            if advBasketCount() <= 0 then
-                ClearFarmTarget()
-                return false
-            end
-
-            FailedFarmTargets[target.UID or target.ID] = nil
-            ClearFarmTarget()
-            advSetPhase("Ovo pego • voltando para base")
-            return advFarmDeposit()
-        end)
-
-        FarmBusy = false
-
-        if not ok and advRunning() then
-            ClearFarmTarget()
-            DestroyFarmFlightMovers()
-            pcall(StartFarmNoclip)
-            advSetPhase("Farm recuperado de erro")
-            task.wait(math.max(0.15, tonumber(State.FarmRetryDelay) or 0.30))
-        end
-
-        return ok and result == true
-    end
-
-    -- Substituições feitas SOMENTE depois da UI estar pronta.
-    FarmFlyTo = advFly
-    FarmDeposit = advFarmDeposit
-    FarmOnce = advFarmOnce
-    AdvancedFarmReady = true
-
-    -- O watchdog apenas limpa estado físico; não cria um segundo worker.
-    task.spawn(function()
-        local lastPhase = State.FarmPhase
-        local phaseStarted = os.clock()
-        while Running do
-            task.wait(0.50)
-            if not State.AutoFarm then
-                phaseStarted = os.clock()
-                lastPhase = State.FarmPhase
-                continue
-            end
-
-            if State.FarmPhase ~= lastPhase then
-                lastPhase = State.FarmPhase
-                phaseStarted = os.clock()
-            end
-
-            if FarmBusy and os.clock() - phaseStarted > math.clamp(tonumber(State.FarmCycleTimeout) or 35, 20, 60) then
-                -- Cancela o movimento para permitir que FarmOnce saia do estado preso.
-                MovementToken = (MovementToken or 0) + 1
-                CancelGlide()
-                DestroyFarmFlightMovers()
-                pcall(StartFarmNoclip)
-                FailedFarmTargets[State.FarmTargetUID or "__none"] = os.clock() + 3
-                ClearFarmTarget()
-                advSetPhase("Watchdog: ciclo travado • recuperando")
-            end
-        end
-    end)
-end)
-
---============================================================--
 -- LOOPS CENTRALIZADOS
 --============================================================--
 
 local FarmLoop = task.spawn(function()
-    local idleWait = 0.10
     while Running do
-        if not State.AutoFarm or not AdvancedFarmReady then
-            task.wait(0.20)
-        elseif not FarmBusy then
-            local started = os.clock()
-            local ok = pcall(function()
-                FarmOnce()
-            end)
+        task.wait(
+            math.clamp(
+                tonumber(State.FarmLoopDelay) or 0.10,
+                0.05,
+                0.50
+            )
+        )
 
-            -- Nunca desliga o Auto Farm por resultado falso. Cada ciclo é
-            -- independente e o worker sempre tenta o próximo.
-            if Running and State.AutoFarm then
-                local delay = ok and tonumber(State.FarmCycleDelay) or tonumber(State.FarmRetryDelay) or 0.30
-                task.wait(math.clamp(delay, 0.10, 3.0))
-            end
-
-            if os.clock() - started < idleWait then
-                task.wait(idleWait)
-            end
-        else
-            task.wait(idleWait)
+        if Running and State.AutoFarm and not FarmBusy then
+            FarmOnce()
         end
     end
 end)
@@ -5964,7 +4806,6 @@ StopHandler = function()
     DestroyFarmFlightMovers()
     ClearFarmTarget()
     Running = false
-    ENV.__MUP_FARM_WANTED = false
 
     State.AutoFarm = false
     State.AutoPickup = false
@@ -6088,2221 +4929,143 @@ task.defer(function()
     end)
 end)
 
---============================================================--
--- v45 MAX AUTO FARM OVERRIDE
--- Base: v44 com UI v41 confirmada
--- Pesquisa aplicada: SixZensED (EggPickup + ActiveEggs + Basket),
--- Iamdungx (RenderedEggs + ProximityPrompt/InputHold) e VintHub
--- (glide linear + colisão desligada apenas durante voo).
--- Objetivo: voo contínuo sem engasgo, hover no ovo, pickup confirmado,
--- retorno automático à base em hover e continuação infinita do ciclo.
---============================================================--
 
+--============================================================--
+-- v50 BACON CORE AUTOFARM
+-- Base de funcionamento escolhida após comparação pública 2026.
+-- Referência funcional: Bac0nH1ckOff / rideapet.lua.
+-- Regra: a UI v41 fica intocada; somente o motor de Auto Farm é substituído.
+-- Fluxo: selecionar -> voar com noclip -> confirmar Basket -> voltar ->
+--       esperar Egg Tool -> colocar no ninho -> próximo ciclo.
+--============================================================--
 task.defer(function()
-    if not Running then
-        return
-    end
+    if not Running then return end
 
-    -- Defaults novos sem tocar na UI.
-    State.FarmFlightSpeed = math.clamp(tonumber(State.FarmFlightSpeed) or 300, 80, 600)
-    State.FarmFlightHeight = math.clamp(tonumber(State.FarmFlightHeight) or 90, 25, 320)
-    State.FarmEggHoverHeight = math.clamp(tonumber(State.FarmEggHoverHeight) or 6, 3, 14)
-    State.FarmBaseHoverHeight = math.clamp(tonumber(State.FarmBaseHoverHeight) or 55, 20, 140)
-    State.FarmFlightArriveRadius = math.clamp(tonumber(State.FarmFlightArriveRadius) or 3.5, 2, 9)
-    State.FarmPickupRetries = math.clamp(math.floor(tonumber(State.FarmPickupRetries) or 7), 1, 12)
-    State.FarmPickupWait = math.clamp(tonumber(State.FarmPickupWait) or 0.22, 0.08, 1.0)
-    State.FarmCycleDelay = math.clamp(tonumber(State.FarmCycleDelay) or 1.0, 0.10, 3.0)
-    State.FarmRetryDelay = math.clamp(tonumber(State.FarmRetryDelay) or 0.30, 0.10, 2.0)
+    local B = {
+        speed = math.clamp(tonumber(State.FarmFlightSpeed) or 300, 40, 350),
+        arriveRadius = 8,
+        pickupTimeout = 3,
+        deliveryTimeout = 5,
+        failedCooldown = 15,
+        hoverHeight = 6,
+        moving = false,
+        tween = nil,
+        flightConnection = nil,
+        token = 0,
+    }
 
-    local function maxRunning()
+    local function active()
         return Running and State.AutoFarm
     end
 
-    local function maxPhase(message)
-        State.FarmPhase = tostring(message)
-        LastFarmStatus = tostring(message)
+    local function phase(text)
+        State.FarmPhase = tostring(text)
+        LastFarmStatus = tostring(text)
     end
 
-    local function maxBasketCount()
+    local function basketCount()
         local basket = LocalPlayer:FindFirstChild("Basket")
         return basket and #basket:GetChildren() or 0
     end
 
-    local function maxSaveCollision(character)
-        local saved = {}
-        if character then
-            for _, obj in ipairs(character:GetDescendants()) do
-                if obj:IsA("BasePart") then
-                    saved[obj] = obj.CanCollide
-                    obj.CanCollide = false
-                end
-            end
-        end
-        return saved
+    local function myPlot()
+        return GetMyPlot()
     end
 
-    local function maxRestoreCollision(saved)
-        for part, value in pairs(saved or {}) do
-            if part and part.Parent then
-                pcall(function()
-                    part.CanCollide = value
-                end)
-            end
-        end
-    end
-
-    local function maxSetNoCollision(saved)
-        for part in pairs(saved or {}) do
-            if part and part.Parent then
-                part.CanCollide = false
-            end
-        end
-    end
-
-    local function maxHoverPointForEgg(target)
-        if not target then
-            return nil, nil
-        end
-
-        local rendered = target.Rendered
-        if not rendered and target.Position then
-            local folder = GetRenderedEggFolder()
-            if folder then
-                local best, bestDistance = nil, 15
-                for _, model in ipairs(folder:GetChildren()) do
-                    if model:IsA("Model") then
-                        local p = GetEggPosition(model)
-                        if p then
-                            local d = (p - target.Position).Magnitude
-                            if d <= bestDistance then
-                                best = model
-                                bestDistance = d
-                            end
-                        end
-                    end
-                end
-                rendered = best
-            end
-        end
-
-        if rendered and rendered.Parent then
-            local ok, cf, size = pcall(function()
-                return rendered:GetBoundingBox()
-            end)
-            if ok and cf and size then
-                local y = cf.Position.Y + size.Y * 0.5 + State.FarmEggHoverHeight
-                local safe = GetSafeDescentPosition(Vector3.new(cf.Position.X, y, cf.Position.Z), State.FarmEggHoverHeight)
-                if safe then
-                    return safe, rendered
-                end
-                return Vector3.new(cf.Position.X, y, cf.Position.Z), rendered
-            end
-        end
-
-        if typeof(target.Position) == "Vector3" then
-            local p = GetSafeDescentPosition(target.Position, State.FarmEggHoverHeight)
-            if p then
-                return p, rendered
-            end
-            return target.Position + Vector3.new(0, State.FarmEggHoverHeight, 0), rendered
-        end
-
-        return nil, rendered
-    end
-
-    -- Um voo completo, sem restaurar colisão entre subir/cruzar/descer.
-    -- Isso elimina o engasgo em paredes entre segmentos sucessivos.
-    local function maxFlyTo(targetPosition, speed, holdSeconds)
-        local character, root = GetCharacter()
-        if not character or not root or typeof(targetPosition) ~= "Vector3" or not maxRunning() then
-            return false
-        end
-
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if not humanoid then
-            return false
-        end
-
-        local savedCollision = maxSaveCollision(character)
-        local oldStand = humanoid.PlatformStand
-        local oldRotate = humanoid.AutoRotate
-        humanoid.PlatformStand = true
-        humanoid.AutoRotate = false
-
-        local velocity = Instance.new("BodyVelocity")
-        velocity.Name = "MUP_V45_MaxFlight"
-        velocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-        velocity.P = 35000
-        velocity.Velocity = Vector3.zero
-        velocity.Parent = root
-
-        local gyro = Instance.new("BodyGyro")
-        gyro.Name = "MUP_V45_MaxFlightGyro"
-        gyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-        gyro.P = 70000
-        gyro.D = 2200
-        gyro.CFrame = root.CFrame
-        gyro.Parent = root
-
-        local token = (MovementToken or 0) + 1
-        MovementToken = token
-
-        local cruiseHeight = math.max(root.Position.Y, targetPosition.Y) + State.FarmFlightHeight
-        local points = {
-            Vector3.new(root.Position.X, cruiseHeight, root.Position.Z),
-            Vector3.new(targetPosition.X, cruiseHeight, targetPosition.Z),
-            targetPosition,
-        }
-
-        local maxSpeed = math.clamp(tonumber(speed) or State.FarmFlightSpeed, 80, 700)
-        local arrive = math.clamp(State.FarmFlightArriveRadius, 2, 9)
-        local started = os.clock()
-        local totalDistance = (targetPosition - root.Position).Magnitude + cruiseHeight * 0.3
-        local timeout = math.clamp(totalDistance / maxSpeed * 3.5 + 3, 5, 45)
-        local success = true
-
-        maxPhase("Voando")
-
-        for _, point in ipairs(points) do
-            while maxRunning()
-                and token == MovementToken
-                and root.Parent
-                and os.clock() - started < timeout do
-
-                maxSetNoCollision(savedCollision)
-
-                local delta = point - root.Position
-                local remaining = delta.Magnitude
-
-                if remaining <= arrive then
-                    break
-                end
-
-                local direction = delta.Unit
-                local currentSpeed
-                if remaining < 20 then
-                    currentSpeed = math.clamp(remaining * 4.5, 40, math.min(maxSpeed, 150))
-                else
-                    currentSpeed = math.clamp(remaining * 5.0, 70, maxSpeed)
-                end
-
-                pcall(function()
-                    velocity.Velocity = direction * currentSpeed
-                    gyro.CFrame = CFrame.lookAt(root.Position, root.Position + direction)
-                    root.AssemblyLinearVelocity = direction * currentSpeed
-                    root.AssemblyAngularVelocity = Vector3.zero
-                end)
-
-                RunService.Heartbeat:Wait()
-            end
-
-            if not maxRunning()
-                or token ~= MovementToken
-                or not root.Parent
-                or os.clock() - started >= timeout then
-                success = false
-                break
-            end
-        end
-
-        -- Hover estável. BodyVelocity em zero mantém o personagem no ar.
-        if success and maxRunning() and (holdSeconds or 0) > 0 then
-            local holdUntil = os.clock() + math.clamp(tonumber(holdSeconds) or 0.6, 0.1, 8)
-            while maxRunning()
-                and token == MovementToken
-                and root.Parent
-                and os.clock() < holdUntil do
-
-                maxSetNoCollision(savedCollision)
-                pcall(function()
-                    velocity.Velocity = Vector3.zero
-                    gyro.CFrame = CFrame.new(root.Position)
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                end)
-                RunService.Heartbeat:Wait()
-            end
-        end
-
-        pcall(function()
-            velocity.Velocity = Vector3.zero
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
-        pcall(function() velocity:Destroy() end)
-        pcall(function() gyro:Destroy() end)
-
-        maxRestoreCollision(savedCollision)
-        pcall(function()
-            humanoid.PlatformStand = oldStand
-            humanoid.AutoRotate = oldRotate
-        end)
-
-        return success and maxRunning() and token == MovementToken
-    end
-
-    local function maxPromptPickup(target, prompt)
-        if not prompt or not prompt.Parent then
-            return false
-        end
-
-        local before = maxBasketCount()
-        local ok = pcall(function()
-            prompt.RequiresLineOfSight = false
-            prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 9999)
-            if type(fireproximityprompt) == "function" then
-                fireproximityprompt(prompt)
-            else
-                prompt:InputHoldBegin()
-                task.wait((tonumber(prompt.HoldDuration) or 0) + 0.10)
-                prompt:InputHoldEnd()
-            end
-        end)
-
-        if not ok then
-            return false
-        end
-
-        local deadline = os.clock() + 2.0
-        while maxRunning() and os.clock() < deadline do
-            if maxBasketCount() > before then
-                return true
-            end
-            task.wait(0.05)
-        end
-        return false
-    end
-
-    local function maxPickup(target)
-        if not target then
-            return false
-        end
-
-        local hoverPoint, rendered = maxHoverPointForEgg(target)
-        target.Rendered = rendered or target.Rendered
-        if not hoverPoint then
-            return false
-        end
-
-        local retries = math.clamp(math.floor(tonumber(State.FarmPickupRetries) or 7), 1, 12)
-
-        for attempt = 1, retries do
-            if not maxRunning() then
-                return false
-            end
-
-            maxPhase("Sobre o ovo • tentativa " .. tostring(attempt))
-            if not maxFlyTo(hoverPoint, math.min(State.FarmFlightSpeed, 380), 0.20) then
-                return false
-            end
-
-            -- Mantém uma pequena janela de voo/hover antes da interação.
-            -- O ciclo pode entrar novamente neste ponto sem precisar reativar o Farm.
-            local before = maxBasketCount()
-            local uid = ResolvePickupUID(target)
-            local remote = GetEggPickupRemote()
-            local remoteSent = false
-
-            if remote and remote:IsA("RemoteEvent") and uid then
-                pcall(function()
-                    remote:FireServer(uid)
-                    remoteSent = true
-                end)
-
-                local deadline = os.clock() + 1.4
-                while maxRunning() and os.clock() < deadline do
-                    if maxBasketCount() > before then
-                        return true
-                    end
-                    task.wait(0.05)
-                end
-            end
-
-            if not target.Rendered or not target.Rendered.Parent then
-                local _, refreshedRendered = maxHoverPointForEgg(target)
-                target.Rendered = refreshedRendered or target.Rendered
-            end
-
-            local prompt = target.Rendered and target.Rendered:FindFirstChildWhichIsA("ProximityPrompt", true) or nil
-            if prompt and maxPromptPickup(target, prompt) then
-                return true
-            end
-
-            local after = maxBasketCount()
-            if after > before then
-                return true
-            end
-
-            -- Atualiza o UID pela posição antes da próxima tentativa.
-            local active = FindActiveEggNear(hoverPoint, 15)
-            if active then
-                target.Instance = active
-                target.UID = active.Name
-                target.ID = active.Name
-            end
-
-            task.wait(math.max(0.08, tonumber(State.FarmPickupWait) or 0.22))
-        end
-
-        return false
-    end
-
-    local function maxResolveTarget()
-        if State.FarmTargetUID then
-            local activeFolder = GetActiveEggFolder()
-            local active = activeFolder and activeFolder:FindFirstChild(State.FarmTargetUID)
-            if active then
-                local pos = GetEggPosition(active)
-                if pos then
-                    local name = active:GetAttribute("Egg") or State.FarmTargetName or active.Name
-                    return {
-                        Instance = active,
-                        UID = active.Name,
-                        ID = active.Name,
-                        Name = name,
-                        Position = pos,
-                        Distance = 0,
-                        Weight = GetEggWeight(active) or 0,
-                        Luck = GetEggLuck(active) or 0,
-                        Rarity = GetEggRarity(name, active),
-                        RarityScore = RarityPriority[GetEggRarity(name, active)] or 0,
-                        Mutation = GetEggMutation(active),
-                    }
-                end
-            end
-        end
-
-        local candidates = GetCandidates()
-        if type(candidates) ~= "table" or #candidates == 0 then
-            return nil
-        end
-
-        local best = nil
-        if type(SelectBestCandidate) == "function" then
-            pcall(function()
-                best = SelectBestCandidate(candidates)
-            end)
-        end
-        if not best and type(SelectBestFarmCandidate) == "function" then
-            best = SelectBestFarmCandidate(candidates)
-        end
-        if not best then
-            best = candidates[1]
-        end
-
-        if best and (not best.UID and not best.ID) and best.Position then
-            local active = FindActiveEggNear(best.Position, 15)
-            if active then
-                best.Instance = active
-                best.UID = active.Name
-                best.ID = active.Name
-            end
-        end
-
-        return best
-    end
-
-    local function maxFarmOnce()
-        if not maxRunning() or FarmBusy then
-            return false
-        end
-
-        FarmBusy = true
-        local ok, result = pcall(function()
-            -- Primeiro termina qualquer entrega pendente.
-            if maxBasketCount() > 0 or next(State.FarmPendingEggs or {}) ~= nil then
-                maxPhase("Entrega pendente • voltando para base")
-                return FarmDeposit()
-            end
-
-            if State.AutoMountPet and not IsRidingPet() and type(GetMountRemote) == "function" then
-                -- Usa a rotina já validada do v44; erro no pet não quebra o farm.
-                pcall(function()
-                    if type(advMountBestPet) == "function" then
-                        advMountBestPet()
-                    elseif type(MountBestPet) == "function" then
-                        MountBestPet()
-                    end
-                end)
-            end
-
-            local target = maxResolveTarget()
-            if not target then
-                maxPhase("Procurando ovos")
-                task.wait(math.clamp(tonumber(State.FarmNoTargetDelay) or 1, 0.25, 4))
-                return false
-            end
-
-            local nextUID = target.UID or target.ID
-            if State.FarmTargetUID ~= nextUID then
-                State.FarmTargetRetries = 0
-            end
-            State.FarmTargetUID = nextUID
-            State.FarmTargetName = target.Name
-            State.FarmTargetPosition = target.Position
-
-            local hoverPoint = select(1, maxHoverPointForEgg(target)) or target.Position
-            maxPhase("Voando para " .. tostring(target.Name))
-
-            if not maxFlyTo(hoverPoint, State.FarmFlightSpeed, 0) then
-                State.FarmTargetRetries = State.FarmTargetRetries + 1
-                return false
-            end
-
-            -- Revalidação imediatamente antes da coleta.
-            target = maxResolveTarget() or target
-            hoverPoint = select(1, maxHoverPointForEgg(target)) or hoverPoint
-
-            -- Mantém o personagem no ponto de coleta e tenta o Remote/Prompt.
-            if not maxPickup(target) then
-                State.FarmTargetRetries = State.FarmTargetRetries + 1
-                if State.FarmTargetRetries >= 3 and target.UID then
-                    FailedFarmTargets[target.UID] = os.clock() + 5
-                    ClearFarmTarget()
-                end
-                return false
-            end
-
-            if maxBasketCount() <= 0 then
-                return false
-            end
-
-            if target.UID then
-                FailedFarmTargets[target.UID] = nil
-            end
-            ClearFarmTarget()
-
-            maxPhase("Ovo coletado • retornando automaticamente")
-            local deposited = FarmDeposit()
-            if not deposited and maxBasketCount() <= 0 and next(State.FarmPendingEggs or {}) == nil then
-                -- O servidor pode levar um pouco mais para converter o Basket.
-                task.wait(math.clamp(tonumber(State.FarmDepositWait) or 3, 1, 8))
-            end
-            return deposited
-        end)
-
-        FarmBusy = false
-
-        if not ok and maxRunning() then
-            CancelGlide()
-            DestroyFarmFlightMovers()
-            pcall(StartFarmNoclip)
-            ClearFarmTarget()
-            maxPhase("Recuperando Auto Farm")
-            task.wait(math.max(0.15, tonumber(State.FarmRetryDelay) or 0.30))
-        end
-
-        return ok and result == true
-    end
-
-    -- Sobrescreve apenas o backend do Auto Farm. A UI fica intocada.
-    FarmOnce = maxFarmOnce
-    AdvancedFarmReady = true
-
-    -- Watchdog adicional de movimento: se estiver em voo e a posição não
-    -- mudar por muito tempo, o próximo ciclo recupera sozinho.
-    task.spawn(function()
-        local lastPosition = nil
-        local stuckFor = 0
-        while Running do
-            task.wait(0.30)
-            if not maxRunning() or not FarmBusy then
-                lastPosition = nil
-                stuckFor = 0
-                continue
-            end
-
-            local _, root = GetCharacter()
-            if root then
-                if lastPosition then
-                    local moved = (root.Position - lastPosition).Magnitude
-                    if moved < 0.20 and (State.FarmPhase == "Voando" or string.find(tostring(State.FarmPhase), "Voando") or string.find(tostring(State.FarmPhase), "Voltando")) then
-                        stuckFor = stuckFor + 0.30
-                    else
-                        stuckFor = 0
-                    end
-                end
-                lastPosition = root.Position
-
-                if stuckFor >= 1.20 then
-                    MovementToken = (MovementToken or 0) + 1
-                    CancelGlide()
-                    DestroyFarmFlightMovers()
-                    pcall(StartFarmNoclip)
-                    stuckFor = 0
-                    maxPhase("Voo desengasgado • retomando")
-                end
-            end
-        end
-    end)
-end)
-
---============================================================--
--- v46 PRECISION PICKUP + AUTONOMOUS LOOP
--- Base: v45 (UI v41 intact)
--- Pesquisa aplicada:
---   * Iamdungx: RenderedEggs + ProximityPrompt/InputHold em loop
---   * SixZensED: ActiveEggs + EggPickup(uid) + confirmação por Basket
---   * Akaz: Prompt Grab + Auto Noclip During Fly + Auto Return + Auto Place
--- Objetivo desta camada:
---   1) ficar realmente colado/acima do ovo;
---   2) tentar pickup sem intervenção manual;
---   3) confirmar Basket antes de sair;
---   4) voltar automaticamente;
---   5) nunca exigir religar o Auto Farm entre ciclos.
---============================================================--
-
-task.defer(function()
-    if not Running then
-        return
-    end
-
-    State.FarmEggHoverHeight = math.clamp(tonumber(State.FarmEggHoverHeight) or 1.75, 1.0, 5.0)
-    State.FarmPickupRetries = math.clamp(math.floor(tonumber(State.FarmPickupRetries) or 8), 1, 15)
-    State.FarmPickupWait = math.clamp(tonumber(State.FarmPickupWait) or 0.18, 0.05, 0.8)
-    State.FarmCycleDelay = math.clamp(tonumber(State.FarmCycleDelay) or 0.8, 0.10, 3.0)
-    State.FarmRetryDelay = math.clamp(tonumber(State.FarmRetryDelay) or 0.25, 0.08, 2.0)
-
-    local function pRunning()
-        return Running and State.AutoFarm
-    end
-
-    local function pPhase(message)
-        State.FarmPhase = tostring(message)
-        LastFarmStatus = tostring(message)
-    end
-
-    local function pBasketCount()
-        local basket = LocalPlayer:FindFirstChild("Basket")
-        return basket and #basket:GetChildren() or 0
-    end
-
-    -- Localiza um ProximityPrompt pelo próprio ovo e, quando necessário,
-    -- procura pelo prompt mais próximo do alvo em RenderedEggs/EggSpawns.
-    local function pFindPrompt(target)
-        if not target then
-            return nil, nil
-        end
-
-        local bestPrompt, bestModel = nil, nil
-        local bestDistance = 12
-
-        local function inspectModel(model)
-            if not model or not model.Parent then
-                return
-            end
-
-            local part = nil
-            if model:IsA("BasePart") then
-                part = model
-            elseif model:IsA("Model") then
-                local ok, pivot = pcall(function()
-                    return model:GetPivot()
-                end)
-                if ok and pivot then
-                    local d = target.Position and (pivot.Position - target.Position).Magnitude or math.huge
-                    if d <= bestDistance then
-                        local prompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
-                        if prompt then
-                            bestDistance = d
-                            bestPrompt = prompt
-                            bestModel = model
-                        end
-                    end
-                    return
-                end
-                part = model:FindFirstChildWhichIsA("BasePart", true)
-            end
-
-            if part and target.Position then
-                local d = (part.Position - target.Position).Magnitude
-                if d <= bestDistance then
-                    local prompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
-                    if prompt then
-                        bestDistance = d
-                        bestPrompt = prompt
-                        bestModel = model
-                    end
-                end
-            end
-        end
-
-        if target.Rendered and target.Rendered.Parent then
-            local prompt = target.Rendered:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if prompt then
-                return prompt, target.Rendered
-            end
-        end
-
-        for _, folderName in ipairs({"RenderedEggs", "EggSpawns"}) do
-            local folder = workspace:FindFirstChild(folderName, true)
-            if folder then
-                for _, obj in ipairs(folder:GetDescendants()) do
-                    if obj:IsA("Model") then
-                        inspectModel(obj)
-                    end
-                end
-            end
-        end
-
-        return bestPrompt, bestModel
-    end
-
-    local function pPromptWorldPosition(prompt, model)
-        if not prompt then
-            return nil
-        end
-
-        local parent = prompt.Parent
-        if parent then
-            if parent:IsA("Attachment") then
-                return parent.WorldPosition
-            elseif parent:IsA("BasePart") then
-                return parent.Position
-            end
-        end
-
-        if model then
-            local ok, pivot = pcall(function()
-                return model:GetPivot()
-            end)
-            if ok and pivot then
-                return pivot.Position
-            end
-        end
-
-        return nil
-    end
-
-    local function pExactHoverPoint(target, prompt, model)
-        local targetPosition = target and target.Position
-        if typeof(targetPosition) ~= "Vector3" then
-            return nil
-        end
-
-        -- Preferimos o ponto real do prompt para a interação.
-        local promptPosition = pPromptWorldPosition(prompt, model)
-        if promptPosition then
-            local p = promptPosition + Vector3.new(0, State.FarmEggHoverHeight, 0)
-            return p
-        end
-
-        -- Depois usamos o topo geométrico do ovo, deixando apenas uma folga pequena.
-        if model and model.Parent then
-            local ok, cf, size = pcall(function()
-                return model:GetBoundingBox()
-            end)
-            if ok and cf and size then
-                return Vector3.new(
-                    cf.Position.X,
-                    cf.Position.Y + size.Y * 0.5 + State.FarmEggHoverHeight,
-                    cf.Position.Z
-                )
-            end
-        end
-
-        return targetPosition + Vector3.new(0, State.FarmEggHoverHeight, 0)
-    end
-
-    local function pNoclipFly(targetPosition, speed, hold)
-        local character, root = GetCharacter()
-        if not character or not root or typeof(targetPosition) ~= "Vector3" or not pRunning() then
-            return false
-        end
-
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if not humanoid then
-            return false
-        end
-
-        local savedCollision = {}
-        for _, obj in ipairs(character:GetDescendants()) do
-            if obj:IsA("BasePart") then
-                savedCollision[obj] = obj.CanCollide
-                obj.CanCollide = false
-            end
-        end
-
-        local oldStand = humanoid.PlatformStand
-        local oldRotate = humanoid.AutoRotate
-        humanoid.PlatformStand = true
-        humanoid.AutoRotate = false
-
-        local velocity = Instance.new("BodyVelocity")
-        velocity.Name = "MUP_V46_PrecisionVelocity"
-        velocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-        velocity.P = 40000
-        velocity.Velocity = Vector3.zero
-        velocity.Parent = root
-
-        local gyro = Instance.new("BodyGyro")
-        gyro.Name = "MUP_V46_PrecisionGyro"
-        gyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-        gyro.P = 80000
-        gyro.D = 2500
-        gyro.CFrame = root.CFrame
-        gyro.Parent = root
-
-        local token = (MovementToken or 0) + 1
-        MovementToken = token
-
-        local maxSpeed = math.clamp(tonumber(speed) or State.FarmFlightSpeed or 300, 80, 700)
-        local arrive = math.clamp(tonumber(State.FarmFlightArriveRadius) or 2.25, 1.2, 6)
-        local started = os.clock()
-        local distance = (targetPosition - root.Position).Magnitude
-        local timeout = math.clamp(distance / maxSpeed * 3.5 + 3, 4, 45)
-        local stalled = 0
-        local lastPosition = root.Position
-        local lastClock = os.clock()
-        local success = false
-
-        while pRunning()
-            and token == MovementToken
-            and root.Parent
-            and os.clock() - started < timeout do
-
-            for part in pairs(savedCollision) do
-                if part and part.Parent then
-                    part.CanCollide = false
-                end
-            end
-
-            local delta = targetPosition - root.Position
-            local remaining = delta.Magnitude
-
-            if remaining <= arrive then
-                success = true
-                break
-            end
-
-            local direction = delta.Unit
-            local currentSpeed
-            if remaining <= 8 then
-                currentSpeed = math.clamp(remaining * 5.0, 18, math.min(maxSpeed, 100))
-            else
-                currentSpeed = math.clamp(remaining * 4.5, 65, maxSpeed)
-            end
-
-            pcall(function()
-                velocity.Velocity = direction * currentSpeed
-                gyro.CFrame = CFrame.lookAt(root.Position, root.Position + direction)
-                root.AssemblyLinearVelocity = direction * currentSpeed
-                root.AssemblyAngularVelocity = Vector3.zero
-            end)
-
-            local now = os.clock()
-            if now - lastClock >= 0.35 then
-                local moved = (root.Position - lastPosition).Magnitude
-                if moved < 0.35 and remaining > arrive + 1 then
-                    stalled = stalled + (now - lastClock)
-                else
-                    stalled = 0
-                end
-                lastClock = now
-                lastPosition = root.Position
-
-                if stalled >= 0.70 then
-                    -- Reaplica o vetor com pequeno impulso vertical para escapar
-                    -- de uma borda/parede. O Noclip continua ligado.
-                    pcall(function()
-                        root.AssemblyLinearVelocity = direction * math.max(currentSpeed, 110) + Vector3.new(0, 18, 0)
-                        velocity.Velocity = direction * math.max(currentSpeed, 110) + Vector3.new(0, 18, 0)
-                    end)
-                    stalled = 0
-                end
-            end
-
-            RunService.Heartbeat:Wait()
-        end
-
-        if success and pRunning() and (hold or 0) > 0 then
-            local holdUntil = os.clock() + math.clamp(tonumber(hold) or 0.5, 0.05, 6)
-            while pRunning() and token == MovementToken and root.Parent and os.clock() < holdUntil do
-                for part in pairs(savedCollision) do
-                    if part and part.Parent then
-                        part.CanCollide = false
-                    end
-                end
-                pcall(function()
-                    velocity.Velocity = Vector3.zero
-                    gyro.CFrame = CFrame.new(root.Position)
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                end)
-                RunService.Heartbeat:Wait()
-            end
-        end
-
-        pcall(function()
-            velocity.Velocity = Vector3.zero
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
-        pcall(function() velocity:Destroy() end)
-        pcall(function() gyro:Destroy() end)
-
-        -- Aqui o voo acabou: colisão volta ao normal.
-        for part, value in pairs(savedCollision) do
-            if part and part.Parent then
-                pcall(function()
-                    part.CanCollide = value
-                end)
-            end
-        end
-
-        pcall(function()
-            humanoid.PlatformStand = oldStand
-            humanoid.AutoRotate = oldRotate
-        end)
-
-        return success and pRunning() and token == MovementToken
-    end
-
-    local function pActivatePrompt(prompt)
-        if not prompt or not prompt.Parent then
-            return false
-        end
-
-        local before = pBasketCount()
-        local ok = pcall(function()
-            prompt.Enabled = true
-            prompt.RequiresLineOfSight = false
-            prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 9999)
-
-            if type(fireproximityprompt) == "function" then
-                fireproximityprompt(prompt)
-            else
-                prompt:InputHoldBegin()
-                task.wait(math.max(0.05, tonumber(prompt.HoldDuration) or 0) + 0.12)
-                prompt:InputHoldEnd()
-            end
-        end)
-
-        if not ok then
-            return false
-        end
-
-        local deadline = os.clock() + 2.2
-        while pRunning() and os.clock() < deadline do
-            if pBasketCount() > before then
-                return true
-            end
-            task.wait(0.05)
-        end
-
-        return false
-    end
-
-    local function pRemotePickup(target)
-        local remote = GetEggPickupRemote()
-        if not remote or not remote:IsA("RemoteEvent") then
-            return false
-        end
-
-        local uid = ResolvePickupUID(target)
-        if not uid then
-            return false
-        end
-
-        local before = pBasketCount()
-        local sent = pcall(function()
-            remote:FireServer(uid)
-        end)
-
-        if not sent then
-            return false
-        end
-
-        local deadline = os.clock() + 2.2
-        while pRunning() and os.clock() < deadline do
-            if pBasketCount() > before then
-                return true
-            end
-            task.wait(0.05)
-        end
-
-        return false
-    end
-
-    local function pPrecisionPickup(target)
-        if not target then
-            return false
-        end
-
-        local prompt, model = pFindPrompt(target)
-        local hover = pExactHoverPoint(target, prompt, model)
-        if not hover then
-            return false
-        end
-
-        target.Rendered = model or target.Rendered
-        pPhase("Indo colado no ovo")
-
-        if not pNoclipFly(hover, math.min(State.FarmFlightSpeed or 300, 360), 0.35) then
-            return false
-        end
-
-        -- Mantém o personagem preso sobre o ovo durante TODA a confirmação.
-        local character, root = GetCharacter()
-        if not character or not root then
-            return false
-        end
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if not humanoid then
-            return false
-        end
-
-        local holdCollision = {}
-        for _, obj in ipairs(character:GetDescendants()) do
-            if obj:IsA("BasePart") then
-                holdCollision[obj] = obj.CanCollide
-                obj.CanCollide = false
-            end
-        end
-
-        local oldStand = humanoid.PlatformStand
-        local oldRotate = humanoid.AutoRotate
-        humanoid.PlatformStand = true
-        humanoid.AutoRotate = false
-
-        local holdVelocity = Instance.new("BodyVelocity")
-        holdVelocity.Name = "MUP_V46_PickupHold"
-        holdVelocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-        holdVelocity.P = 50000
-        holdVelocity.Velocity = Vector3.zero
-        holdVelocity.Parent = root
-
-        local holdGyro = Instance.new("BodyGyro")
-        holdGyro.Name = "MUP_V46_PickupHoldGyro"
-        holdGyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-        holdGyro.P = 90000
-        holdGyro.D = 3000
-        holdGyro.CFrame = CFrame.new(root.Position)
-        holdGyro.Parent = root
-
-        local function restorePickupHold()
-            pcall(function()
-                holdVelocity.Velocity = Vector3.zero
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            end)
-            pcall(function() holdVelocity:Destroy() end)
-            pcall(function() holdGyro:Destroy() end)
-            for part, value in pairs(holdCollision) do
-                if part and part.Parent then
-                    pcall(function()
-                        part.CanCollide = value
-                    end)
-                end
-            end
-            pcall(function()
-                humanoid.PlatformStand = oldStand
-                humanoid.AutoRotate = oldRotate
-            end)
-        end
-
-        local tries = math.clamp(math.floor(State.FarmPickupRetries or 8), 1, 15)
-        local success = false
-
-        for attempt = 1, tries do
-            if not pRunning() then
-                break
-            end
-
-            -- Se a física desviou alguns studs, volta ao ponto exato sem desligar o noclip.
-            local currentDistance = (root.Position - hover).Magnitude
-            if currentDistance > 3.0 then
-                pcall(function()
-                    local correction = (hover - root.Position)
-                    if correction.Magnitude > 0 then
-                        holdVelocity.Velocity = correction.Unit * math.min(120, correction.Magnitude * 12)
-                    end
-                end)
-            end
-
-            for part in pairs(holdCollision) do
-                if part and part.Parent then
-                    part.CanCollide = false
-                end
-            end
-            pcall(function()
-                holdVelocity.Velocity = Vector3.zero
-                holdGyro.CFrame = CFrame.new(hover)
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            end)
-
-            pPhase("Colado no ovo • coletando " .. tostring(target.Name) .. " • " .. tostring(attempt) .. "/" .. tostring(tries))
-
-            -- Remote primeiro: caminho server-side comprovado.
-            if pRemotePickup(target) then
-                success = true
-                break
-            end
-
-            -- Prompt depois: caminho público do Iamdungx.
-            prompt, model = pFindPrompt(target)
-            target.Rendered = model or target.Rendered
-            if pActivatePrompt(prompt) then
-                success = true
-                break
-            end
-
-            -- Re-resolve o UID/posição antes da próxima tentativa.
-            local active = FindActiveEggNear(root.Position, 18)
-            if active then
-                target.Instance = active
-                target.UID = active.Name
-                target.ID = active.Name
-                target.Position = GetEggPosition(active) or target.Position
-                prompt, model = pFindPrompt(target)
-                target.Rendered = model or target.Rendered
-                hover = pExactHoverPoint(target, prompt, model) or hover
-            end
-
-            task.wait(math.max(0.06, State.FarmPickupWait or 0.18))
-        end
-
-        restorePickupHold()
-        return success
-    end
-
-    local function pMaxFarmOnce()
-        if not pRunning() or FarmBusy then
-            return false
-        end
-
-        FarmBusy = true
-        local ok, result = pcall(function()
-            -- Se já existe Basket/pending, não procura outro ovo: entrega primeiro.
-            if pBasketCount() > 0 or next(State.FarmPendingEggs or {}) ~= nil then
-                pPhase("Entrega pendente • voltando para base")
-                return FarmDeposit()
-            end
-
-            -- Montar pet é auxiliar. Nunca bloqueia o ciclo, salvo se o usuário
-            -- tiver marcado explicitamente FarmRequireMountedPet.
-            if State.AutoMountPet and not IsRidingPet() and type(MountBestPet) == "function" then
-                pcall(MountBestPet)
-            end
-
-            local target = nil
-            if type(GetCandidates) == "function" then
-                local candidates = GetCandidates()
-                if type(SelectBestCandidate) == "function" then
-                    pcall(function() target = SelectBestCandidate(candidates) end)
-                end
-                if not target and type(SelectBestFarmCandidate) == "function" then
-                    pcall(function() target = SelectBestFarmCandidate(candidates) end)
-                end
-                if not target and type(candidates) == "table" then
-                    target = candidates[1]
-                end
-            end
-
-            if not target then
-                pPhase("Procurando ovo")
-                task.wait(math.clamp(State.FarmNoTargetDelay or 1, 0.20, 4))
-                return false
-            end
-
-            State.FarmTargetUID = target.UID or target.ID
-            State.FarmTargetName = target.Name
-            State.FarmTargetPosition = target.Position
-            State.FarmTargetRetries = 0
-
-            if not pPrecisionPickup(target) then
-                State.FarmTargetRetries = (State.FarmTargetRetries or 0) + 1
-                if State.FarmTargetRetries >= 3 and target.UID then
-                    FailedFarmTargets[target.UID] = os.clock() + 5
-                    ClearFarmTarget()
-                end
-                return false
-            end
-
-            -- Confirmação explícita do Basket. Não sai do ovo antes disto.
-            local confirmDeadline = os.clock() + 2.5
-            while pRunning() and os.clock() < confirmDeadline and pBasketCount() <= 0 do
-                task.wait(0.05)
-            end
-
-            if pBasketCount() <= 0 then
-                pPhase("Pickup não confirmado • tentando novamente")
-                return false
-            end
-
-            if target.UID then
-                FailedFarmTargets[target.UID] = nil
-            end
-            ClearFarmTarget()
-
-            pPhase("Ovo confirmado • voltando para base")
-            local deposited = FarmDeposit()
-
-            if not deposited then
-                -- Nunca desliga o Auto Farm aqui. O próximo ciclo volta a tentar
-                -- resolver o Basket/pending e continua sozinho.
-                if pBasketCount() > 0 or next(State.FarmPendingEggs or {}) ~= nil then
-                    pPhase("Base alcançada • entrega pendente")
-                else
-                    pPhase("Base alcançada • aguardando confirmação")
-                end
-            end
-
-            return true
-        end)
-
-        FarmBusy = false
-
-        if not ok and pRunning() then
-            CancelGlide()
-            DestroyFarmFlightMovers()
-            pcall(StartFarmNoclip)
-            ClearFarmTarget()
-            pPhase("Recuperando Auto Farm")
-            task.wait(math.max(0.10, State.FarmRetryDelay or 0.25))
-        end
-
-        return ok and result == true
-    end
-
-    -- Último override: UI permanece intacta; somente o motor do Auto Farm é trocado.
-    FarmOnce = pMaxFarmOnce
-    AdvancedFarmReady = true
-    ENV.__MUP_V46_PRECISION_PICKUP = true
-end)
-
-
---============================================================--
--- v47 CONTINUOUS FARM LATCH / RECOVERY
--- Objetivo: enquanto o usuário não mandar PARAR, o Auto Farm não se desliga
--- internamente e a camada de voo/noclip é restaurada automaticamente.
--- Também mantém o personagem colado ao ovo durante pickup e pairado sobre a base.
---============================================================--
-task.defer(function()
-    pcall(function()
-        State.FarmEggHoverHeight = math.clamp(tonumber(State.FarmEggHoverHeight) or 0.9, 0.5, 2.0)
-        State.FarmCycleDelay = math.clamp(tonumber(State.FarmCycleDelay) or 0.65, 0.20, 2.50)
-        State.FarmRetryDelay = math.clamp(tonumber(State.FarmRetryDelay) or 0.20, 0.10, 1.50)
-    end)
-
-    task.spawn(function()
-        while Running do
-            task.wait(0.12)
-
-            if ENV.__MUP_FARM_WANTED == true and Running then
-                -- Latch: nenhuma rotina interna pode desligar o farm.
-                State.AutoFarm = true
-                pcall(StartFarmNoclip)
-
-                if AdvancedFarmReady and not FarmBusy then
-                    pcall(FarmOnce)
-                end
-            end
-        end
-    end)
-
-    -- Watchdog extra: se o personagem deixar de avançar, recomeça apenas o
-    -- trecho físico, sem desligar o Auto Farm.
-    task.spawn(function()
-        local lastPos = nil
-        local stuck = 0
-
-        while Running do
-            task.wait(0.35)
-
-            if ENV.__MUP_FARM_WANTED ~= true or not State.AutoFarm or not FarmBusy then
-                lastPos = nil
-                stuck = 0
-                continue
-            end
-
-            local _, root = GetCharacter()
-            if not root then
-                continue
-            end
-
-            if lastPos then
-                local moved = (root.Position - lastPos).Magnitude
-                local phase = tostring(State.FarmPhase or "")
-                local flying = phase:find("Voando", 1, true)
-                    or phase:find("Voltando", 1, true)
-                    or phase:find("Subindo", 1, true)
-                    or phase:find("ovo", 1, true)
-
-                if flying and moved < 0.15 then
-                    stuck = stuck + 0.35
-                else
-                    stuck = 0
-                end
-            end
-
-            lastPos = root.Position
-
-            if stuck >= 1.4 then
-                MovementToken = (MovementToken or 0) + 1
-                pcall(CancelGlide)
-                pcall(DestroyFarmFlightMovers)
-                pcall(StartFarmNoclip)
-                stuck = 0
-                State.FarmPhase = "Voo recuperado automaticamente"
-                LastFarmStatus = State.FarmPhase
-            end
-        end
-    end)
-end)
-
---============================================================--
--- v48 BREAK TIMER + RETURN SYNC OVERRIDE
--- Base: v47 (UI v41 intact)
--- Objetivo:
---   1) detectar o contador "Egg Will Break" no HUD;
---   2) nunca iniciar o retorno antes de confirmar o Basket;
---   3) reduzir o tempo de retorno adaptando a velocidade ao timer;
---   4) manter o personagem pairando sobre a base;
---   5) esperar Basket -> Egg Tool antes do placement;
---   6) nunca desligar Auto Farm por uma falha normal de sincronização.
---============================================================--
-
-task.defer(function()
-    if not Running then
-        return
-    end
-
-    State.FarmReturnSpeedNormal = State.FarmReturnSpeedNormal or 330
-    State.FarmReturnSpeedUrgent = State.FarmReturnSpeedUrgent or 480
-    State.FarmReturnSpeedCritical = State.FarmReturnSpeedCritical or 600
-    State.FarmPickupSyncWait = State.FarmPickupSyncWait or 0.18
-    State.FarmBreakTimerUrgent = State.FarmBreakTimerUrgent or 12
-    State.FarmBreakTimerCritical = State.FarmBreakTimerCritical or 7
-    State.FarmBaseToolWait = State.FarmBaseToolWait or 6
-    State.FarmBaseHoverHeight = State.FarmBaseHoverHeight or 48
-
-    local function bRunning()
-        return Running and State.AutoFarm
-    end
-
-    local function bBasketCount()
-        local basket = LocalPlayer:FindFirstChild("Basket")
-        return basket and #basket:GetChildren() or 0
-    end
-
-    local function bPhase(msg)
-        State.FarmPhase = tostring(msg)
-        LastFarmStatus = tostring(msg)
-    end
-
-    -- O jogo mostra um contador vivo. Não assumimos um número fixo: lemos o HUD.
-    local function bBreakTimer()
-        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-        if not playerGui then
-            return nil
-        end
-
-        local best = nil
-        pcall(function()
-            for _, obj in ipairs(playerGui:GetDescendants()) do
-                if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
-                    local text = tostring(obj.Text or "")
-                    local lower = string.lower(text)
-                    if string.find(lower, "egg will break", 1, true) then
-                        for numberText in string.gmatch(text, "%d+%.?%d*") do
-                            local number = tonumber(numberText)
-                            if number then
-                                if not best or number < best then
-                                    best = number
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end)
-
-        return best
-    end
-
-    local function bReturnSpeed()
-        local remaining = bBreakTimer()
-        if remaining then
-            if remaining <= State.FarmBreakTimerCritical then
-                return math.clamp(State.FarmReturnSpeedCritical, 300, 700), remaining
-            elseif remaining <= State.FarmBreakTimerUrgent then
-                return math.clamp(State.FarmReturnSpeedUrgent, 280, 650), remaining
-            end
-        end
-        return math.clamp(State.FarmReturnSpeedNormal, 250, 550), remaining
-    end
-
-    local function bEggToolsSnapshot()
+    local function tools()
         local result = {}
         local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
         local character = LocalPlayer.Character
-
         for _, container in ipairs({backpack, character}) do
             if container then
                 for _, obj in ipairs(container:GetChildren()) do
                     if obj:IsA("Tool") then
-                        local isEgg = EggData[obj.Name] ~= nil
-                            or type(obj:GetAttribute("Egg")) == "string"
-                            or type(obj:GetAttribute("EggName")) == "string"
-                            or obj:GetAttribute("IsEgg") == true
-                        if isEgg and not obj:GetAttribute("PetKey") then
-                            result[obj] = true
-                        end
+                        result[#result + 1] = obj
                     end
                 end
             end
         end
-
         return result
     end
 
-    local function bEggTools()
+    local function eggTools()
         local result = {}
-        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-        local character = LocalPlayer.Character
-
-        for _, container in ipairs({backpack, character}) do
-            if container then
-                for _, obj in ipairs(container:GetChildren()) do
-                    if obj:IsA("Tool") then
-                        local isEgg = EggData[obj.Name] ~= nil
-                            or type(obj:GetAttribute("Egg")) == "string"
-                            or type(obj:GetAttribute("EggName")) == "string"
-                            or obj:GetAttribute("IsEgg") == true
-                        if isEgg and not obj:GetAttribute("PetKey") then
-                            result[#result + 1] = obj
-                        end
-                    end
-                end
+        for _, tool in ipairs(tools()) do
+            local isEgg = EggData[tool.Name] ~= nil
+                or type(tool:GetAttribute("Egg")) == "string"
+                or type(tool:GetAttribute("EggName")) == "string"
+                or tool:GetAttribute("IsEgg") == true
+            if isEgg and not tool:GetAttribute("PetKey") then
+                result[#result + 1] = tool
             end
         end
-
         return result
     end
 
-    local function bToolEggName(tool)
-        if not tool then
-            return nil
-        end
-        return tool:GetAttribute("Egg")
-            or tool:GetAttribute("EggName")
-            or tool.Name
-    end
-
-    local function bGetPlotBase()
-        local plot = GetMyPlot()
-        if not plot then
-            return nil
-        end
-
-        local baseplate = plot:FindFirstChild("Baseplate")
-        if not baseplate or not baseplate:IsA("BasePart") then
-            return nil
-        end
-
-        return plot, baseplate
-    end
-
-    local function bBaseHoverPoint()
-        local plot, baseplate = bGetPlotBase()
-        if not plot or not baseplate then
-            return nil
-        end
-
-        local height = math.clamp(tonumber(State.FarmBaseHoverHeight) or 48, 20, 100)
-        return Vector3.new(
-            baseplate.Position.X,
-            baseplate.Position.Y + baseplate.Size.Y * 0.5 + height,
-            baseplate.Position.Z
-        )
-    end
-
-    local function bInsidePlot(pos)
-        local plot, baseplate = bGetPlotBase()
-        if not plot or not baseplate or typeof(pos) ~= "Vector3" then
-            return false
-        end
-
-        local localPos = baseplate.CFrame:PointToObjectSpace(pos)
-        local margin = 3
-        return math.abs(localPos.X) <= baseplate.Size.X * 0.5 - margin
-            and math.abs(localPos.Z) <= baseplate.Size.Z * 0.5 - margin
-    end
-
-    local function bFreeNests()
-        local plot = GetMyPlot()
+    local function freeNests()
+        local plot = myPlot()
         local nests = plot and plot:FindFirstChild("Nests")
-        if not nests then
-            return {}
-        end
-
+        if not nests then return {} end
         local result = {}
         for _, nest in ipairs(nests:GetChildren()) do
-            if nest:GetAttribute("Unlocked") ~= false
-                and nest:GetAttribute("Occupied") ~= true then
+            if nest:GetAttribute("Unlocked") ~= false and nest:GetAttribute("Occupied") ~= true then
                 result[#result + 1] = nest
             end
         end
-
-        table.sort(result, function(a, b)
-            return tostring(a.Name) < tostring(b.Name)
+        table.sort(result, function(a,b)
+            return (tonumber(a.Name) or math.huge) < (tonumber(b.Name) or math.huge)
         end)
-
         return result
     end
 
-    local function bNestPosition(nest)
-        if not nest or not nest.Parent then
-            return nil
-        end
-
-        if nest:IsA("BasePart") then
-            return nest.Position
-        end
-
-        local ok, pivot = pcall(function()
-            return nest:GetPivot()
-        end)
-        if ok and pivot then
-            return pivot.Position
-        end
-
+    local function nestPosition(nest)
+        if not nest or not nest.Parent then return nil end
+        if nest:IsA("BasePart") then return nest.Position end
+        local ok, pivot = pcall(function() return nest:GetPivot() end)
+        if ok and pivot then return pivot.Position end
         local part = nest:FindFirstChildWhichIsA("BasePart", true)
         return part and part.Position or nil
     end
 
-    local function bFireEggPlaced(nest)
+    local function fireGame(name, ...)
         local remotes = GetGameRemotes()
-        local remote = remotes and remotes:FindFirstChild("EggPlaced")
-
-        if not remote then
-            local root = ReplicatedStorage:FindFirstChild("Remotes")
-            if root then
-                remote = root:FindFirstChild("EggPlaced", true)
-            end
-        end
-
-        if not remote or not remote:IsA("RemoteEvent") then
-            return false
-        end
-
-        local nestId = tostring(nest.Name)
-        local ok = pcall(function()
-            remote:FireServer({NestId = nestId})
-        end)
-        if ok then
-            return true
-        end
-
+        local remote = remotes and remotes:FindFirstChild(name)
+        if not remote or not remote:IsA("RemoteEvent") then return false end
+        local args = table.pack(...)
         return pcall(function()
-            remote:FireServer(nestId)
+            remote:FireServer(table.unpack(args,1,args.n))
         end)
     end
 
-    local function bWaitBasketConfirmation(before)
-        local deadline = os.clock() + 2.8
-        while bRunning() and os.clock() < deadline do
-            local current = bBasketCount()
-            if current > before then
-                return true
-            end
-            task.wait(0.05)
+    local function waitFor(predicate, seconds)
+        local deadline = os.clock() + (seconds or 3)
+        while active() and os.clock() < deadline do
+            local ok, value = pcall(predicate)
+            if ok and value then return true end
+            task.wait(0.08)
         end
-        return bBasketCount() > before
+        return false
     end
 
-    local function bHoldBaseHover(position, seconds)
-        local character, root = GetCharacter()
-        if not character or not root or typeof(position) ~= "Vector3" or not bRunning() then
-            return false
+    local function stopMove()
+        B.token = B.token + 1
+        if B.flightConnection then
+            pcall(function() B.flightConnection:Disconnect() end)
+            B.flightConnection = nil
         end
-
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if not humanoid then
-            return false
+        if B.tween then
+            pcall(function() B.tween:Cancel() end)
+            pcall(function() B.tween:Destroy() end)
+            B.tween = nil
         end
-
-        local saved = {}
-        for _, obj in ipairs(character:GetDescendants()) do
-            if obj:IsA("BasePart") then
-                saved[obj] = obj.CanCollide
-                obj.CanCollide = false
-            end
-        end
-
-        local oldStand = humanoid.PlatformStand
-        local oldRotate = humanoid.AutoRotate
-        humanoid.PlatformStand = true
-        humanoid.AutoRotate = false
-
-        local velocity = Instance.new("BodyVelocity")
-        velocity.Name = "MUP_V48_BaseHover"
-        velocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-        velocity.P = 50000
-        velocity.Velocity = Vector3.zero
-        velocity.Parent = root
-
-        local gyro = Instance.new("BodyGyro")
-        gyro.Name = "MUP_V48_BaseHoverGyro"
-        gyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-        gyro.P = 90000
-        gyro.D = 3000
-        gyro.CFrame = CFrame.new(position)
-        gyro.Parent = root
-
-        local hold = math.clamp(tonumber(seconds) or 1, 0.1, 12)
-        local deadline = os.clock() + hold
-
-        while bRunning() and root.Parent and os.clock() < deadline do
-            for part in pairs(saved) do
-                if part and part.Parent then
-                    part.CanCollide = false
-                end
-            end
-
-            local delta = position - root.Position
-            if delta.Magnitude > 2 then
-                velocity.Velocity = delta.Unit * math.clamp(delta.Magnitude * 8, 35, 160)
-                gyro.CFrame = CFrame.lookAt(root.Position, root.Position + delta.Unit)
-            else
-                velocity.Velocity = Vector3.zero
-                gyro.CFrame = CFrame.new(position)
-            end
-
+        B.moving = false
+        local character, humanoid, root = GetCharacter()
+        if root then
             pcall(function()
-                root.AssemblyLinearVelocity = velocity.Velocity
+                root.AssemblyLinearVelocity = Vector3.zero
                 root.AssemblyAngularVelocity = Vector3.zero
             end)
-            RunService.Heartbeat:Wait()
         end
-
-        pcall(function()
-            velocity.Velocity = Vector3.zero
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-            velocity:Destroy()
-            gyro:Destroy()
-        end)
-
-        for part, value in pairs(saved) do
-            if part and part.Parent then
-                pcall(function() part.CanCollide = value end)
-            end
-        end
-
-        pcall(function()
-            humanoid.PlatformStand = oldStand
-            humanoid.AutoRotate = oldRotate
-        end)
-
-        return bRunning()
-    end
-
-    local function bWaitNewEggTool(beforeTools, timeout)
-        local deadline = os.clock() + math.clamp(tonumber(timeout) or 6, 2, 12)
-
-        while bRunning() and os.clock() < deadline do
-            local current = bEggTools()
-            for _, tool in ipairs(current) do
-                if not beforeTools[tool] then
-                    return tool
-                end
-            end
-            task.wait(0.10)
-        end
-
-        return nil
-    end
-
-    local function bPlaceEggTools(beforeTools, expectedNames)
-        local deadline = os.clock() + 10
-
-        while bRunning() and os.clock() < deadline do
-            local nests = bFreeNests()
-            local tools = bEggTools()
-
-            if #nests > 0 and #tools > 0 then
-                for _, nest in ipairs(nests) do
-                    local nestPos = bNestPosition(nest)
-                    if nestPos then
-                        local tool = nil
-
-                        for _, candidate in ipairs(tools) do
-                            if not beforeTools[candidate] then
-                                local name = bToolEggName(candidate)
-                                if not expectedNames or not expectedNames[name] or expectedNames[name] > 0 then
-                                    tool = candidate
-                                    break
-                                end
-                            end
-                        end
-
-                        if tool then
-                            bPhase("Colocando ovo no ninho " .. tostring(nest.Name))
-
-                            -- Mantém o voo ligado até a aproximação final.
-                            local safe = GetSafeDescentPosition(
-                                nestPos,
-                                math.max(4, tonumber(State.FarmNestApproachHeight) or 6)
-                            ) or nestPos
-
-                            if not FarmFlyTo(
-                                safe,
-                                math.min(tonumber(State.FarmNestApproachSpeed) or 120, 180),
-                                true
-                            ) then
-                                return false
-                            end
-
-                            local character = LocalPlayer.Character
-                            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-                            if not humanoid then
-                                local char = GetCharacter()
-                                humanoid = char and char:FindFirstChildOfClass("Humanoid")
-                            end
-                            if not humanoid then
-                                return false
-                            end
-
-                            local equipped = pcall(function()
-                                humanoid:EquipTool(tool)
-                            end)
-                            if not equipped then
-                                return false
-                            end
-
-                            task.wait(0.15)
-
-                            if not bFireEggPlaced(nest) then
-                                return false
-                            end
-
-                            local confirmUntil = os.clock() + 4
-                            while bRunning() and os.clock() < confirmUntil do
-                                if nest:GetAttribute("Occupied") == true then
-                                    if expectedNames then
-                                        local name = bToolEggName(tool)
-                                        if expectedNames[name] then
-                                            expectedNames[name] = math.max(0, expectedNames[name] - 1)
-                                        end
-                                    end
-                                    return true
-                                end
-
-                                local stillThere = false
-                                for _, current in ipairs(bEggTools()) do
-                                    if current == tool then
-                                        stillThere = true
-                                        break
-                                    end
-                                end
-
-                                if not stillThere then
-                                    if expectedNames then
-                                        local name = bToolEggName(tool)
-                                        if expectedNames[name] then
-                                            expectedNames[name] = math.max(0, expectedNames[name] - 1)
-                                        end
-                                    end
-                                    return true
-                                end
-
-                                task.wait(0.10)
-                            end
-                        end
-                    end
-                end
-            end
-
-            task.wait(0.20)
-        end
-
-        return false
-    end
-
-    local function bReturnAndPlace()
-        local plot, baseplate = bGetPlotBase()
-        if not plot or not baseplate then
-            bPhase("Base indisponível")
-            return false
-        end
-
-        local beforeTools = bEggToolsSnapshot()
-        local expectedNames = {}
-        for _, obj in ipairs(LocalPlayer:FindFirstChild("Basket") and LocalPlayer.Basket:GetChildren() or {}) do
-            local name = obj:GetAttribute("Egg") or obj:GetAttribute("EggName") or obj.Name
-            if type(name) == "string" and name ~= "" then
-                expectedNames[name] = (expectedNames[name] or 0) + 1
-            end
-        end
-
-        local hover = bBaseHoverPoint()
-        if not hover then
-            return false
-        end
-
-        -- O ovo acabou de entrar no Basket; antes de sair, dá uma janela curta
-        -- para o estado do servidor replicar. Isso evita o erro de "ovo não confirmado".
-        bPhase("Sincronizando ovo no Basket")
-        local syncUntil = os.clock() + math.clamp(tonumber(State.FarmPickupSyncWait) or 0.18, 0.05, 0.8)
-        while bRunning() and os.clock() < syncUntil do
-            if bBasketCount() <= 0 then
-                return false
-            end
-            task.wait(0.04)
-        end
-
-        -- O retorno usa o contador real do HUD para escolher velocidade.
-        local returnSpeed, remaining = bReturnSpeed()
-        if remaining then
-            bPhase(string.format("Voltando • Egg Will Break %.1fs • %.0f speed", remaining, returnSpeed))
-        else
-            bPhase(string.format("Voltando para base • %.0f speed", returnSpeed))
-        end
-
-        -- Um único voo direto para cima da base: sem paradas intermediárias.
-        -- Noclip fica ativo durante todo o voo via FarmFlyTo.
-        if not FarmFlyTo(hover, returnSpeed, false) then
-            return false
-        end
-
-        -- Não desce. Fica suspenso exatamente na coluna da base.
-        bPhase("Sobre a base • confirmando chegada")
-        local _, firstRoot = GetCharacter()
-        if firstRoot and (firstRoot.Position - hover).Magnitude > 6 then
-            if not FarmFlyTo(hover, math.min(returnSpeed, 300), 0.15) then
-                return false
-            end
-        end
-
-        -- Mantém a personagem suspensa sobre a base enquanto o servidor
-        -- confirma que o ovo chegou e transforma Basket em Tool.
-        local _, hoverRoot = GetCharacter()
-        if not hoverRoot or not bInsidePlot(hoverRoot.Position) then
-            -- A confirmação física pode levar alguns frames; não considera
-            -- falha imediatamente.
-            if not FarmFlyTo(hover, math.min(returnSpeed, 300), 0.20) then
-                return false
-            end
-        end
-
-        bPhase("Sobre a base • aguardando Basket → Tool")
-        local newTool = bWaitNewEggTool(beforeTools, State.FarmBaseToolWait)
-
-        if not newTool and bBasketCount() > 0 then
-            bPhase("Ovo confirmado no Basket • aguardando conversão")
-            task.wait(0.20)
-            newTool = bWaitNewEggTool(beforeTools, 2.5)
-        end
-
-        if newTool then
-            bPhase("Egg Tool confirmado • colocando no ninho")
-            local placed = bPlaceEggTools(beforeTools, expectedNames)
-            if placed then
-                State.FarmPendingEggs = {}
-                bPhase("Entregue • próximo ovo")
-                return true
-            end
-        end
-
-        -- Se o Basket ainda está cheio, NÃO desligamos e NÃO buscamos outro ovo.
-        if bBasketCount() > 0 then
-            State.FarmPendingEggs = expectedNames
-            bPhase("Basket ainda carregado • aguardando próximo sync")
-            return false
-        end
-
-        -- Basket vazio mas o Tool pode ter sido consumido pelo servidor; damos uma
-        -- janela curta de confirmação antes do próximo alvo.
-        task.wait(0.25)
-        if bBasketCount() <= 0 then
-            State.FarmPendingEggs = {}
-            bPhase("Base confirmada • próximo ovo")
-            return true
-        end
-
-        return false
-    end
-
-    local function bResolveTarget()
-        if State.FarmTargetUID then
-            local activeFolder = GetActiveEggFolder()
-            local active = activeFolder and activeFolder:FindFirstChild(State.FarmTargetUID)
-            if active then
-                local pos = GetEggPosition(active)
-                if pos then
-                    local name = active:GetAttribute("Egg") or State.FarmTargetName or active.Name
-                    return {
-                        Instance = active,
-                        UID = active.Name,
-                        ID = active.Name,
-                        Name = name,
-                        Position = pos,
-                        Distance = 0,
-                        Weight = GetEggWeight(active) or 0,
-                        Luck = GetEggLuck(active) or 0,
-                        Rarity = GetEggRarity(name, active),
-                        RarityScore = RarityPriority[GetEggRarity(name, active)] or 0,
-                        Mutation = GetEggMutation(active),
-                    }
-                end
-            end
-        end
-
-        local candidates = GetCandidates()
-        if type(candidates) ~= "table" or #candidates == 0 then
-            return nil
-        end
-
-        local target = nil
-        if type(SelectBestCandidate) == "function" then
-            pcall(function() target = SelectBestCandidate(candidates) end)
-        end
-        if not target and type(SelectBestFarmCandidate) == "function" then
-            pcall(function() target = SelectBestFarmCandidate(candidates) end)
-        end
-        if not target then
-            target = candidates[1]
-        end
-
-        if target and (not target.UID and not target.ID) and target.Position then
-            local active = FindActiveEggNear(target.Position, 15)
-            if active then
-                target.Instance = active
-                target.UID = active.Name
-                target.ID = active.Name
-            end
-        end
-
-        return target
-    end
-
-    local function bFarmOnce()
-        if not bRunning() or FarmBusy then
-            return false
-        end
-
-        FarmBusy = true
-        local ok, result = pcall(function()
-            -- Entrega sempre tem prioridade sobre procurar outro ovo.
-            if bBasketCount() > 0 or next(State.FarmPendingEggs or {}) ~= nil then
-                return bReturnAndPlace()
-            end
-
-            local target = bResolveTarget()
-            if not target then
-                bPhase("Procurando ovo")
-                task.wait(math.clamp(tonumber(State.FarmNoTargetDelay) or 0.6, 0.20, 3))
-                return false
-            end
-
-            State.FarmTargetUID = target.UID or target.ID
-            State.FarmTargetName = target.Name
-            State.FarmTargetPosition = target.Position
-            State.FarmTargetRetries = 0
-
-            -- O hover de coleta usa o ponto do modelo/prompt se possível.
-            local hover = target.Position + Vector3.new(0, 1.75, 0)
-            local rendered = target.Rendered
-            if rendered and rendered.Parent then
-                local okBox, cf, size = pcall(function()
-                    return rendered:GetBoundingBox()
-                end)
-                if okBox and cf and size then
-                    hover = Vector3.new(
-                        cf.Position.X,
-                        cf.Position.Y + size.Y * 0.5 + 1.25,
-                        cf.Position.Z
-                    )
-                end
-            end
-
-            bPhase("Voando até " .. tostring(target.Name))
-            if not FarmFlyTo(hover, State.FarmFlightSpeed or 300, 0.15) then
-                State.FarmTargetRetries = State.FarmTargetRetries + 1
-                return false
-            end
-
-            -- Só continua quando o personagem realmente chegou perto.
-            local arrivedDeadline = os.clock() + 1.0
-            while bRunning() and os.clock() < arrivedDeadline do
-                local _, root = GetCharacter()
-                if root and (root.Position - hover).Magnitude <= 3.5 then
-                    break
-                end
-                task.wait(0.05)
-            end
-
-            -- Pickup usa a versão já corrigida do v47/v46.
-            bPhase("Colado no ovo • coletando")
-            local picked = false
-            if type(ResolvePickupUID) == "function" and type(GetEggPickupRemote) == "function" then
-                local before = bBasketCount()
-                local uid = ResolvePickupUID(target)
-                local remote = GetEggPickupRemote()
-                if remote and remote:IsA("RemoteEvent") and uid then
-                    pcall(function() remote:FireServer(uid) end)
-                    local deadline = os.clock() + 1.8
-                    while bRunning() and os.clock() < deadline do
-                        if bBasketCount() > before then
-                            picked = true
-                            break
-                        end
-                        task.wait(0.05)
-                    end
-                end
-            end
-
-            if not picked then
-                rendered = target.Rendered
-                if not rendered or not rendered.Parent then
-                    local folder = GetRenderedEggFolder()
-                    if folder then
-                        local nearest, bestDistance = nil, 12
-                        for _, model in ipairs(folder:GetChildren()) do
-                            local pos = GetEggPosition(model)
-                            if pos then
-                                local d = (pos - target.Position).Magnitude
-                                if d <= bestDistance then
-                                    nearest = model
-                                    bestDistance = d
-                                end
-                            end
-                        end
-                        rendered = nearest
-                        target.Rendered = rendered
-                    end
-                end
-
-                local prompt = rendered and rendered:FindFirstChildWhichIsA("ProximityPrompt", true) or nil
-                if prompt then
-                    local before = bBasketCount()
-                    pcall(function()
-                        prompt.Enabled = true
-                        prompt.RequiresLineOfSight = false
-                        prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 9999)
-                        if type(fireproximityprompt) == "function" then
-                            fireproximityprompt(prompt)
-                        else
-                            prompt:InputHoldBegin()
-                            task.wait(math.max(0.05, tonumber(prompt.HoldDuration) or 0) + 0.12)
-                            prompt:InputHoldEnd()
-                        end
-                    end)
-
-                    local deadline = os.clock() + 2.0
-                    while bRunning() and os.clock() < deadline do
-                        if bBasketCount() > before then
-                            picked = true
-                            break
-                        end
-                        task.wait(0.05)
-                    end
-                end
-            end
-
-            if not picked or bBasketCount() <= 0 then
-                State.FarmTargetRetries = State.FarmTargetRetries + 1
-                bPhase("Pickup não confirmado • tentando novamente")
-                if State.FarmTargetRetries >= 3 and target.UID then
-                    FailedFarmTargets[target.UID] = os.clock() + 5
-                    ClearFarmTarget()
-                end
-                return false
-            end
-
-            -- Este pequeno sync é proposital: o timer começa no pickup e o servidor
-            -- precisa registrar a Basket antes de iniciar o retorno.
-            local sync = math.clamp(tonumber(State.FarmPickupSyncWait) or 0.18, 0.05, 0.8)
-            local syncUntil = os.clock() + sync
-            while bRunning() and os.clock() < syncUntil do
-                if bBasketCount() <= 0 then
-                    return false
-                end
-                task.wait(0.04)
-            end
-
-            FailedFarmTargets[target.UID or target.ID] = nil
-            ClearFarmTarget()
-
-            -- Retorno imediato/adaptativo. Não espera um delay grande aqui porque o
-            -- Egg Will Break já está correndo.
-            return bReturnAndPlace()
-        end)
-
-        FarmBusy = false
-
-        if not ok and bRunning() then
-            -- Recupera o físico, mas mantém AutoFarm ligado.
-            CancelGlide()
-            DestroyFarmFlightMovers()
-            pcall(StartFarmNoclip)
-            bPhase("Recuperando ciclo automaticamente")
-            task.wait(math.max(0.10, tonumber(State.FarmRetryDelay) or 0.25))
-        end
-
-        return ok and result == true
-    end
-
-    -- Override final: UI intocada; este é o worker de timing adaptativo.
-    FarmDeposit = bReturnAndPlace
-    FarmOnce = bFarmOnce
-    AdvancedFarmReady = true
-    ENV.__MUP_V48_BREAK_TIMER_SYNC = true
-end)
-
-
---============================================================--
--- v49 PERSISTENT FLIGHT / NEVER DROP WHILE AUTOFARM IS ACTIVE
--- Correção final:
---   * Auto Farm ligado mantém o controlador de voo vivo entre fases.
---   * Noclip permanece ativo durante todo o ciclo enquanto o usuário não para.
---   * Ao chegar no ovo, fica pairado no ponto de coleta.
---   * Após a coleta, retorna sem desligar o controlador.
---   * Ao chegar na base, fica pairado sobre a base aguardando Basket -> Tool.
---   * O controlador só é destruído quando Auto Farm é realmente desligado
---     ou o script é encerrado.
---============================================================--
-
-task.defer(function()
-    if not Running then
-        return
-    end
-
-    State.FarmPersistentFlight = true
-    State.FarmPersistentArriveRadius = math.clamp(tonumber(State.FarmPersistentArriveRadius) or 1.35, 0.8, 3)
-    State.FarmPersistentEggOffset = math.clamp(tonumber(State.FarmPersistentEggOffset) or 0.85, 0.35, 1.50)
-    State.FarmPersistentHoverCorrection = math.clamp(tonumber(State.FarmPersistentHoverCorrection) or 10, 4, 25)
-
-    local persistentVelocity = nil
-    local persistentGyro = nil
-    local persistentRoot = nil
-    local persistentHumanoid = nil
-    local persistentCollision = {}
-    local persistentMode = "idle"
-    local persistentTarget = nil
-    local persistentConnection = nil
-    local persistentMoving = false
-
-    local oldStopFarmNoclip = StopFarmNoclip
-    local oldDestroyFarmFlightMovers = DestroyFarmFlightMovers
-    local oldFarmFlyTo = FarmFlyTo
-
-    local function persistentRunning()
-        return Running and State.AutoFarm and ENV.__MUP_FARM_WANTED == true
-    end
-
-    local function persistentSaveCharacterCollision(character)
-        if not character then
-            return
-        end
-        for _, obj in ipairs(character:GetDescendants()) do
-            if obj:IsA("BasePart") then
-                if persistentCollision[obj] == nil then
-                    persistentCollision[obj] = obj.CanCollide
-                end
-                obj.CanCollide = false
-            end
-        end
-    end
-
-    local function persistentRestoreCollision()
-        for part, value in pairs(persistentCollision) do
-            if part and part.Parent then
-                pcall(function()
-                    part.CanCollide = value
-                end)
-            end
-        end
-        table.clear(persistentCollision)
-    end
-
-    local function persistentDestroyMovers()
-        if persistentVelocity then
-            pcall(function() persistentVelocity:Destroy() end)
-            persistentVelocity = nil
-        end
-        if persistentGyro then
-            pcall(function() persistentGyro:Destroy() end)
-            persistentGyro = nil
-        end
-        persistentRoot = nil
-        persistentHumanoid = nil
-        persistentTarget = nil
-        persistentMode = "idle"
-        persistentMoving = false
-    end
-
-    local function persistentEnsureMovers()
-        local character, root = GetCharacter()
-        if not character or not root then
-            return false
-        end
-
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if not humanoid then
-            return false
-        end
-
-        if persistentRoot ~= root
-            or not persistentVelocity
-            or persistentVelocity.Parent ~= root
-            or not persistentGyro
-            or persistentGyro.Parent ~= root then
-
-            persistentDestroyMovers()
-            persistentRoot = root
-            persistentHumanoid = humanoid
-
-            local ok = pcall(function()
-                local velocity = Instance.new("BodyVelocity")
-                velocity.Name = "MUP_V49_PersistentFlight"
-                velocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-                velocity.P = 70000
-                velocity.Velocity = Vector3.zero
-                velocity.Parent = root
-
-                local gyro = Instance.new("BodyGyro")
-                gyro.Name = "MUP_V49_PersistentFlightGyro"
-                gyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-                gyro.P = 100000
-                gyro.D = 3500
-                gyro.CFrame = root.CFrame
-                gyro.Parent = root
-
-                persistentVelocity = velocity
-                persistentGyro = gyro
-            end)
-
-            if not ok or not persistentVelocity or not persistentGyro then
-                persistentDestroyMovers()
-                return false
-            end
-        end
-
-        persistentSaveCharacterCollision(character)
-        humanoid.PlatformStand = true
-        humanoid.AutoRotate = false
-        return true
-    end
-
-    local function persistentStopController(force)
-        if not force and persistentRunning() then
-            return
-        end
-
-        if persistentConnection then
-            pcall(function() persistentConnection:Disconnect() end)
-            persistentConnection = nil
-        end
-
-        persistentDestroyMovers()
-        persistentRestoreCollision()
-
-        local character = LocalPlayer.Character
-        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
         if humanoid then
             pcall(function()
                 humanoid.PlatformStand = false
@@ -8311,250 +5074,337 @@ task.defer(function()
         end
     end
 
-    local function persistentStartController()
-        if persistentConnection then
-            return
-        end
-
-        persistentConnection = RunService.Heartbeat:Connect(function()
-            if not Running then
-                persistentStopController(true)
-                return
-            end
-
-            if ENV.__MUP_FARM_WANTED ~= true or not State.AutoFarm then
-                persistentStopController(true)
-                return
-            end
-
-            local character, root = GetCharacter()
-            if not character or not root then
-                return
-            end
-
-            if persistentRoot ~= root then
-                persistentDestroyMovers()
-                persistentEnsureMovers()
-            end
-
-            if not persistentVelocity or not persistentGyro then
-                persistentEnsureMovers()
-            end
-
-            persistentSaveCharacterCollision(character)
-
-            local humanoid = character:FindFirstChildOfClass("Humanoid")
-            if humanoid then
-                humanoid.PlatformStand = true
-                humanoid.AutoRotate = false
-            end
-
-            if persistentMode == "hover" and persistentTarget and persistentVelocity and root.Parent then
-                local delta = persistentTarget - root.Position
-                local distance = delta.Magnitude
-                if distance > 0.75 then
-                    local speed = math.clamp(distance * (tonumber(State.FarmPersistentHoverCorrection) or 10), 25, 180)
-                    persistentVelocity.Velocity = delta.Unit * speed
-                    persistentGyro.CFrame = CFrame.lookAt(root.Position, root.Position + delta.Unit)
-                else
-                    -- BodyVelocity com força grande mantém a personagem suspensa,
-                    -- inclusive contra a gravidade, sem deixar cair sobre a base.
-                    persistentVelocity.Velocity = Vector3.zero
-                    persistentGyro.CFrame = CFrame.new(persistentTarget)
-                end
-
-                pcall(function()
-                    root.AssemblyAngularVelocity = Vector3.zero
-                end)
-            end
-        end)
-    end
-
-    local function persistentEggTarget(targetPosition)
-        if typeof(targetPosition) ~= "Vector3" then
-            return targetPosition
-        end
-
-        local phase = tostring(State.FarmPhase or "")
-        if phase:find("Voando até", 1, true)
-            or phase:find("Colado no ovo", 1, true)
-            or phase:find("coletando", 1, true) then
-
-            -- Mantém o RootPart praticamente encostado no ovo, mas não dentro dele.
-            return targetPosition + Vector3.new(0, tonumber(State.FarmPersistentEggOffset) or 0.85, 0)
-        end
-
-        return targetPosition
-    end
-
-    local function persistentFarmFlyTo(targetPosition, speed, hold)
-        if not persistentRunning() then
+    local function moveTo(position, radius)
+        local character, humanoid, root = GetCharacter()
+        if not character or not humanoid or not root or typeof(position) ~= "Vector3" then
             return false
         end
+        if not active() then return false end
 
-        local character, root = GetCharacter()
-        if not character or not root or typeof(targetPosition) ~= "Vector3" then
-            return false
-        end
+        stopMove()
+        B.moving = true
+        B.token = B.token + 1
+        local myToken = B.token
 
-        if not persistentEnsureMovers() then
-            return false
-        end
-
-        persistentStartController()
-        persistentMode = "moving"
-        persistentMoving = true
-
-        local finalTarget = persistentEggTarget(targetPosition)
-        persistentTarget = finalTarget
-
-        local flightSpeed = math.clamp(tonumber(speed) or State.FarmFlightSpeed or 300, 100, 700)
-        local arrive = math.clamp(tonumber(State.FarmPersistentArriveRadius) or 1.35, 0.8, 3)
-        local started = os.clock()
-        local distance = (finalTarget - root.Position).Magnitude
-        local timeout = math.clamp(distance / flightSpeed * 3.0 + 3, 3, 45)
-        local lastPosition = root.Position
-        local lastSample = os.clock()
-        local stuck = 0
-
-        while persistentRunning() and root.Parent and os.clock() - started < timeout do
-            persistentSaveCharacterCollision(character)
-
-            local delta = finalTarget - root.Position
-            local remaining = delta.Magnitude
-            if remaining <= arrive then
-                break
+        pcall(function() humanoid:UnequipTools() end)
+        local oldStand = humanoid.PlatformStand
+        local oldRotate = humanoid.AutoRotate
+        local collisions = {}
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                collisions[part] = part.CanCollide
+                part.CanCollide = false
             end
+        end
 
-            local direction = delta.Unit
-            local currentSpeed
-            if remaining <= 7 then
-                currentSpeed = math.clamp(remaining * 7, 22, math.min(flightSpeed, 120))
-            else
-                currentSpeed = math.clamp(remaining * 5, 70, flightSpeed)
+        humanoid.PlatformStand = true
+        humanoid.AutoRotate = false
+
+        local height = math.max(3, (tonumber(humanoid.HipHeight) or 2) + root.Size.Y * 0.5)
+        local target = position + Vector3.new(0, height, 0)
+        B.speed = math.clamp(tonumber(State.FarmFlightSpeed) or B.speed or 300, 40, 350)
+        local duration = math.max(0.10, (root.Position - target).Magnitude / B.speed)
+        local tween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = CFrame.new(target) * root.CFrame.Rotation})
+        B.tween = tween
+
+        B.flightConnection = RunService.Stepped:Connect(function()
+            if not active() or myToken ~= B.token or not root.Parent or humanoid.Health <= 0 then return end
+            for part in pairs(collisions) do
+                if part and part.Parent then part.CanCollide = false end
             end
-
-            pcall(function()
-                persistentVelocity.Velocity = direction * currentSpeed
-                persistentGyro.CFrame = CFrame.lookAt(root.Position, root.Position + direction)
-                root.AssemblyLinearVelocity = direction * currentSpeed
-                root.AssemblyAngularVelocity = Vector3.zero
-            end)
-
-            local now = os.clock()
-            if now - lastSample >= 0.30 then
-                local moved = (root.Position - lastPosition).Magnitude
-                if moved < 0.25 and remaining > arrive + 0.8 then
-                    stuck = stuck + (now - lastSample)
-                else
-                    stuck = 0
-                end
-
-                lastPosition = root.Position
-                lastSample = now
-
-                if stuck >= 0.75 then
-                    -- Reforça o movimento; colisão continua desligada.
-                    pcall(function()
-                        persistentVelocity.Velocity = direction * math.max(currentSpeed, 130) + Vector3.new(0, 22, 0)
-                        root.AssemblyLinearVelocity = persistentVelocity.Velocity
-                    end)
-                    stuck = 0
-                end
-            end
-
-            RunService.Heartbeat:Wait()
-        end
-
-        if not persistentRunning() then
-            return false
-        end
-
-        if (finalTarget - root.Position).Magnitude > math.max(arrive + 0.5, 2.5) then
-            return false
-        end
-
-        persistentTarget = finalTarget
-        persistentMode = "hover"
-        persistentMoving = false
-
-        -- Não destrói BodyVelocity/Gyro e não restaura colisão.
-        -- O próximo trecho reutiliza os mesmos movers.
-        pcall(function()
-            persistentVelocity.Velocity = Vector3.zero
-            persistentGyro.CFrame = CFrame.new(finalTarget)
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
         end)
 
-        if tonumber(hold) and tonumber(hold) > 0 then
-            local deadline = os.clock() + math.clamp(tonumber(hold), 0.05, 8)
-            while persistentRunning() and os.clock() < deadline do
-                if persistentTarget ~= finalTarget then
-                    break
-                end
-                task.wait(0.05)
-            end
+        tween:Play()
+        local deadline = os.clock() + duration + 3
+        while active() and myToken == B.token and root.Parent and humanoid.Health > 0
+            and os.clock() < deadline and tween.PlaybackState == Enum.PlaybackState.Playing do
+            phase("Voando | " .. math.floor((root.Position - target).Magnitude) .. " studs")
+            task.wait(0.05)
         end
 
+        local completed = tween.PlaybackState == Enum.PlaybackState.Completed
+        if not active() then completed = false end
+
+        if B.flightConnection then
+            pcall(function() B.flightConnection:Disconnect() end)
+            B.flightConnection = nil
+        end
+        if B.tween == tween then B.tween = nil end
+        pcall(function() tween:Destroy() end)
+
+        for part, original in pairs(collisions) do
+            if part and part.Parent then
+                pcall(function() part.CanCollide = original end)
+            end
+        end
+        pcall(function()
+            humanoid.PlatformStand = oldStand
+            humanoid.AutoRotate = oldRotate
+        end)
+        B.moving = false
+
+        if not completed or not active() then return false end
+        task.wait(0.20)
+        local _, _, currentRoot = GetCharacter()
+        if currentRoot ~= root or (root.Position - target).Magnitude > math.max(radius or B.arriveRadius, 12) then
+            phase("Movimento não confirmado; tentando novamente")
+            return false
+        end
         return true
     end
 
-    -- Enquanto o Auto Farm estiver ligado, comandos internos de limpeza não podem
-    -- derrubar o controlador de voo. O clique de desligar continua funcionando.
-    StopFarmNoclip = function()
-        if persistentRunning() then
-            persistentStartController()
-            persistentEnsureMovers()
+    local function holdHover(position, seconds)
+        local character, humanoid, root = GetCharacter()
+        if not character or not humanoid or not root or not active() then return false end
+        local saved = {}
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                saved[part] = part.CanCollide
+                part.CanCollide = false
+            end
+        end
+        local oldStand, oldRotate = humanoid.PlatformStand, humanoid.AutoRotate
+        humanoid.PlatformStand, humanoid.AutoRotate = true, false
+        local bv = Instance.new("BodyVelocity")
+        bv.MaxForce = Vector3.new(1e9,1e9,1e9)
+        bv.P = 50000
+        bv.Velocity = Vector3.zero
+        bv.Parent = root
+        local bg = Instance.new("BodyGyro")
+        bg.MaxTorque = Vector3.new(1e9,1e9,1e9)
+        bg.P = 70000
+        bg.D = 2500
+        bg.CFrame = CFrame.new(position)
+        bg.Parent = root
+        local untilTime = os.clock() + math.clamp(tonumber(seconds) or 1,0.2,10)
+        while active() and root.Parent and os.clock() < untilTime do
+            local delta = position - root.Position
+            if delta.Magnitude > 1.2 then
+                bv.Velocity = delta.Unit * math.clamp(delta.Magnitude * 8, 25, 150)
+                bg.CFrame = CFrame.lookAt(root.Position, root.Position + delta.Unit)
+            else
+                bv.Velocity = Vector3.zero
+                bg.CFrame = CFrame.new(position)
+            end
+            for part in pairs(saved) do
+                if part and part.Parent then part.CanCollide = false end
+            end
+            pcall(function()
+                root.AssemblyLinearVelocity = bv.Velocity
+                root.AssemblyAngularVelocity = Vector3.zero
+            end)
+            RunService.Heartbeat:Wait()
+        end
+        pcall(function() bv:Destroy() end)
+        pcall(function() bg:Destroy() end)
+        for part, original in pairs(saved) do
+            if part and part.Parent then pcall(function() part.CanCollide = original end) end
+        end
+        pcall(function()
+            humanoid.PlatformStand = oldStand
+            humanoid.AutoRotate = oldRotate
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+        return active()
+    end
+
+    local function targetList()
+        local list = GetCandidates()
+        if type(list) ~= "table" then return {} end
+        local chosen = {}
+        for _, egg in ipairs(list) do
+            if egg.UID == nil then egg.UID = egg.ID end
+            if egg.ID then chosen[#chosen+1] = egg end
+        end
+        return chosen
+    end
+
+    local function chooseEgg()
+        local candidates = targetList()
+        if #candidates == 0 then return nil end
+        local selected
+        pcall(function() selected = SelectBestCandidate(candidates) end)
+        if not selected then
+            pcall(function() selected = SelectBestFarmCandidate(candidates) end)
+        end
+        return selected or candidates[1]
+    end
+
+    local function returnWithEggs()
+        local plot = myPlot()
+        if not plot then phase("Aguardando base") return false end
+        if basketCount() <= 0 then return true end
+
+        local expected = {}
+        for _, item in ipairs(LocalPlayer.Basket:GetChildren()) do
+            local name = item:GetAttribute("Egg") or item:GetAttribute("EggName") or item.Name
+            if type(name) == "string" and name ~= "" then expected[name] = (expected[name] or 0) + 1 end
+        end
+        if not next(expected) then return false end
+
+        local before = {}
+        for _, tool in ipairs(eggTools()) do before[tool] = true end
+        local base = plot:FindFirstChild("Baseplate")
+        if not base then return false end
+        local hover = base.Position + Vector3.new(0, math.clamp(tonumber(State.FarmHoverHeight) or B.hoverHeight, 4, 50), 0)
+
+        phase("Voltando para a base")
+        if not moveTo(hover, 12) then return false end
+        phase("Sobre a base • esperando confirmação")
+        holdHover(hover, 0.9)
+
+        local converted = waitFor(function()
+            if basketCount() > 0 then return false end
+            local got = {}
+            for _, tool in ipairs(eggTools()) do
+                if not before[tool] then got[tool.Name] = (got[tool.Name] or 0) + 1 end
+            end
+            for name, count in pairs(expected) do
+                if (got[name] or 0) < count then return false end
+            end
+            return true
+        end, 5)
+
+        if not converted then
+            phase("Entrega não confirmada • mantendo Auto Farm")
+            return false
+        end
+
+        local nests = freeNests()
+        if #nests == 0 then
+            phase("Base confirmada • aguardando ninho livre")
             return true
         end
-        persistentStopController(true)
-        return pcall(oldStopFarmNoclip)
-    end
 
-    DestroyFarmFlightMovers = function()
-        if persistentRunning() then
-            -- Não destrói durante o ciclo; apenas estabiliza. O controller mantém voo.
-            if persistentVelocity then
-                pcall(function() persistentVelocity.Velocity = Vector3.zero end)
+        for _, nest in ipairs(nests) do
+            if not active() then return false end
+            local tool
+            for _, candidate in ipairs(eggTools()) do
+                if not before[candidate] then tool = candidate break end
             end
-            if persistentRoot then
-                pcall(function()
-                    persistentRoot.AssemblyLinearVelocity = Vector3.zero
-                    persistentRoot.AssemblyAngularVelocity = Vector3.zero
-                end)
+            if not tool then break end
+            local pos = nestPosition(nest)
+            if not pos then continue end
+            phase("Colocando ovo no ninho " .. tostring(nest.Name))
+            if not moveTo(pos, 12) then return false end
+            local _, humanoid = GetCharacter()
+            if not humanoid then return false end
+            if not pcall(function() humanoid:EquipTool(tool) end) then return false end
+            task.wait(0.15)
+            if not fireGame("EggPlaced", {NestId = tostring(nest.Name)}) then return false end
+            local placed = waitFor(function()
+                if nest:GetAttribute("Occupied") == true then return true end
+                for _, current in ipairs(eggTools()) do if current == tool then return false end end
+                return true
+            end, 4)
+            if not placed then
+                phase("Placement não confirmado • próximo ciclo tentará novamente")
+                return false
             end
-            return
         end
-        persistentStopController(true)
-        return pcall(oldDestroyFarmFlightMovers)
+
+        phase("Entregue • procurando próximo ovo")
+        return true
     end
 
-    -- O FarmFlyTo é trocado no fim da cadeia: todo deslocamento do Auto Farm
-    -- passa pelo controlador persistente.
-    FarmFlyTo = persistentFarmFlyTo
+    local function collectEgg(egg)
+        if not egg or not active() then return false end
+        local uid = egg.UID or egg.ID
+        if not uid then return false end
+        local activeFolder = GetActiveEggFolder()
+        local instance = activeFolder and activeFolder:FindFirstChild(uid)
+        if not instance or instance.Parent ~= activeFolder then
+            return false
+        end
+        local pos = egg.Position or GetEggPosition(instance)
+        if not pos then return false end
 
-    -- Recuperação permanente: se o Auto Farm estiver ligado e algum código antigo
-    -- houver limpado o movimento, reconstruímos o controlador sem exigir toggle.
+        phase("Indo até " .. tostring(egg.Name))
+        if not moveTo(pos, 9) then
+            FailedFarmTargets[uid] = os.clock() + B.failedCooldown
+            return false
+        end
+
+        if not active() then return false end
+        instance = activeFolder:FindFirstChild(uid)
+        if not instance then
+            FailedFarmTargets[uid] = os.clock() + B.failedCooldown
+            return false
+        end
+
+        local before = basketCount()
+        phase("Coletando " .. tostring(egg.Name))
+        if not fireGame("EggPickup", uid) then
+            FailedFarmTargets[uid] = os.clock() + B.failedCooldown
+            return false
+        end
+
+        local picked = waitFor(function() return basketCount() > before end, B.pickupTimeout)
+        if not picked then
+            FailedFarmTargets[uid] = os.clock() + B.failedCooldown
+            phase("Pickup não confirmado; trocando de ovo")
+            return false
+        end
+
+        FailedFarmTargets[uid] = nil
+        phase("Ovo confirmado • retornando")
+        return returnWithEggs()
+    end
+
+    -- Substitui apenas o ciclo do Auto Farm. O loop/UI v41 continuam existentes.
+    FarmOnce = function()
+        if not active() or FarmBusy then return false end
+        FarmBusy = true
+        local ok, result = pcall(function()
+            if basketCount() > 0 then
+                return returnWithEggs()
+            end
+
+            if State.AutoMountPet and not IsRidingPet() and type(MountBestPet) == "function" then
+                pcall(MountBestPet)
+            end
+
+            local egg = chooseEgg()
+            if not egg then
+                phase("Aguardando ovos")
+                task.wait(math.clamp(tonumber(State.FarmNoTargetDelay) or 0.5,0.2,2))
+                return false
+            end
+
+            State.FarmTargetUID = egg.UID or egg.ID
+            State.FarmTargetName = egg.Name
+            State.FarmTargetPosition = egg.Position
+            State.FarmTargetRetries = 0
+
+            local worked = collectEgg(egg)
+            ClearFarmTarget()
+            return worked
+        end)
+        FarmBusy = false
+        if not ok and active() then
+            stopMove()
+            phase("Auto Farm recuperado")
+            task.wait(math.max(0.15, tonumber(State.FarmRetryDelay) or 0.25))
+        end
+        return ok and result == true
+    end
+
+    -- Os controles da UI continuam os mesmos; somente o motor interno muda.
+    State.FarmFlightSpeed = math.clamp(tonumber(State.FarmFlightSpeed) or 300, 40, 350)
+    B.speed = State.FarmFlightSpeed
+    AdvancedFarmReady = true
+    ENV.__MUP_BACON_CORE = true
+
+    -- Guarda o movimento do núcleo quando o Auto Farm for desligado.
     task.spawn(function()
         while Running do
-            task.wait(0.12)
-            if ENV.__MUP_FARM_WANTED == true and State.AutoFarm then
-                pcall(persistentStartController)
-                pcall(persistentEnsureMovers)
+            task.wait(0.15)
+            if not State.AutoFarm and B.moving then
+                stopMove()
             end
         end
     end)
-
-    -- Stop real do usuário: aqui sim devolvemos colisão e encerramos o voo.
-    task.spawn(function()
-        while Running do
-            task.wait(0.10)
-            if ENV.__MUP_FARM_WANTED ~= true then
-                pcall(persistentStopController, true)
-            end
-        end
-    end)
-
-    ENV.__MUP_V49_PERSISTENT_FLIGHT = true
 end)
